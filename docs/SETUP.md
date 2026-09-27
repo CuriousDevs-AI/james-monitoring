@@ -71,6 +71,10 @@ decision and report is then pushed as it happens. `git pull` it anywhere to read
 
 ## Changing the team later
 
+The easiest way is `jm ui`. It opens a page on your machine (localhost only, protected by a key in the link).
+Drop in persona files (several at once), paste bot tokens, and watch the ✓ checks. The whole skill package is
+stored in `team/<id>/skill/`, so the original files can be deleted afterwards.
+
 ```bash
 jm add-member                 # verified flow for one new person
 jm remove-member <id>         # take someone off; their files stay in git history

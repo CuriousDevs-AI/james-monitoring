@@ -59,7 +59,17 @@ jm doctor --ping    # model, every bot, group membership, privacy mode
 jm run              # the team is live
 ```
 
-Growing or shrinking the team later:
+**Adding people from a web page (easiest):**
+
+```bash
+jm ui     # opens a local page: drop in all the .skill / SKILL.md files at once → names and roles fill in →
+          # paste each bot token → live ✓ "in the group" and "DM works" → Save. Remove people with a button.
+```
+
+Each person's whole skill package is copied into the team repo (`team/<id>/skill/`), so you can delete or
+move the original files afterwards.
+
+From the terminal instead:
 
 ```bash
 jm add-member                   # the same verified flow, for one person

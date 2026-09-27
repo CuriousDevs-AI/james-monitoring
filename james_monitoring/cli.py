@@ -140,6 +140,12 @@ def cmd_work(args) -> None:
     print(asyncio.run(rt.run_work_session()) or "Nobody has open todo/doing tasks.")
 
 
+def cmd_ui(args) -> None:
+    from .ui import serve
+    cfg = _cfg(args)
+    serve(cfg.path, host=args.host, port=args.port, open_browser=not args.no_browser)
+
+
 def cmd_doctor(args) -> None:
     cfg = _cfg(args)
     ok = True
@@ -255,6 +261,12 @@ def main(argv: list[str] | None = None) -> None:
 
     s = sub.add_parser("work", help="run one work session now (everyone moves their top task)")
     s.set_defaults(fn=cmd_work)
+
+    s = sub.add_parser("ui", help="web page to add/remove people, drop in .skill files, connect bots")
+    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--no-browser", action="store_true")
+    s.set_defaults(fn=cmd_ui)
 
     s = sub.add_parser("doctor", help="check the setup")
     s.add_argument("--ping", action="store_true", help="also call the model and Telegram")

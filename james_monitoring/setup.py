@@ -86,49 +86,19 @@ def strip_frontmatter(text: str) -> str:
     return (m.group(1) if m else text).strip() + "\n"
 
 
-class PersonaError(ValueError):
-    pass
+from .skills import ImportedSkill, SkillError
+from . import skills as skillmod
+
+PersonaError = SkillError
 
 
-def _read_text(data: bytes, where: str) -> str:
-    enc = "utf-16" if data[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
-    try:
-        text = data.decode(enc)
-    except UnicodeDecodeError:
-        raise PersonaError(f"{where} is not a text file (use SKILL.md, a folder, or a .skill/.zip)") from None
-    if "\x00" in text:
-        raise PersonaError(f"{where} is not a text file")
-    return text
-
-
-def _from_archive(p: Path) -> str:
-    """A packaged skill (.skill / .zip): use the SKILL.md inside (shallowest one wins)."""
-    import zipfile
-    with zipfile.ZipFile(p) as z:
-        names = [n for n in z.namelist() if not n.endswith("/") and "__MACOSX" not in n]
-        for wanted in ("skill.md", "persona.md"):
-            hits = sorted((n for n in names if n.rsplit("/", 1)[-1].lower() == wanted), key=lambda n: n.count("/"))
-            if hits:
-                return strip_frontmatter(_read_text(z.read(hits[0]), f"{p.name}:{hits[0]}"))
-    raise PersonaError(f"{p.name} is an archive but has no SKILL.md or persona.md inside")
+def load_skill(path: str) -> ImportedSkill:
+    """A persona file, a SKILL.md, a folder containing one, or a packaged .skill / .zip."""
+    return skillmod.from_path(path)
 
 
 def load_persona(path: str) -> str:
-    """A persona file, a SKILL.md, a folder containing one, or a packaged .skill / .zip."""
-    import zipfile
-    p = Path(path.strip().strip("'\"")).expanduser()
-    if p.is_dir():
-        for name in ("SKILL.md", "persona.md", "README.md"):
-            if (p / name).exists():
-                p = p / name
-                break
-        else:
-            raise FileNotFoundError(f"no SKILL.md or persona.md in {p}")
-    if not p.is_file():
-        raise FileNotFoundError(f"{p} not found")
-    if zipfile.is_zipfile(p):
-        return _from_archive(p)
-    return strip_frontmatter(_read_text(p.read_bytes(), p.name))
+    return load_skill(path).persona
 
 
 def default_persona(member: dict, owner: str) -> str:
@@ -154,7 +124,7 @@ def _append_env(env_path: Path, pairs: dict[str, str]) -> None:
 
 def scaffold(raw: dict, *, personas: dict[str, str] | None = None, goals: list[str] | None = None,
              tokens: dict[str, str] | None = None, api_key: str = "", base_dir: Path = Path.cwd(),
-             clone_url: str = "") -> Config:
+             clone_url: str = "", skills: dict[str, ImportedSkill] | None = None) -> Config:
     """Write config.yaml + .env and create/refresh the git workspace. Re-runnable: never overwrites
     existing personas, memory or charter."""
     base_dir = Path(base_dir).resolve()
@@ -184,9 +154,13 @@ def scaffold(raw: dict, *, personas: dict[str, str] | None = None, goals: list[s
     if not (ws.root / "decisions/OPEN.md").exists():
         ws.write("decisions/OPEN.md", f"# Open decisions for {cfg.owner_name}\n\n"
                                       "Numbered items here appear in every report until you remove them.\n")
+    for mid, sk in (skills or {}).items():
+        skillmod.store(ws.root, mid, sk)            # whole package → team/<id>/skill/, body → persona.md
     for m in raw.get("team", []):
         mid = str(m.get("id")).lower()
         rel = f"team/{mid}/persona.md"
+        if mid in (skills or {}):
+            continue
         given = (personas or {}).get(mid)
         if given:
             ws.write(rel, given)                                   # explicitly provided → use it
@@ -229,18 +203,18 @@ async def _wait(io: IO, what: str, coro_factory, timeout: float) -> bool:
             return False
 
 
-async def setup_manager(io: IO, *, company: str, api_base: str = "", timeout: float = 300) -> tuple[dict, str, str, int, int]:
+async def setup_manager(io: IO, *, company: str, api_base: str = "", timeout: float = 300) -> tuple[dict, ImportedSkill | None, str, int, int]:
     """The manager's bot also discovers the owner's Telegram id and the team group."""
     from .telegram_setup import TelegramProbe
     io.say("\nThe manager watches everyone, routes messages and reports to you.")
     name = io.ask("  Manager's name", "James")
     role = io.ask("  Manager's role", "Delivery manager and chief of staff")
-    persona = ""
+    persona = None
     ppath = io.ask("  Persona / SKILL.md path for the manager (blank = built-in)", "")
     while ppath:
         try:
-            persona = load_persona(ppath)
-            io.say(f"  ✅ Persona loaded ({len(persona.splitlines())} lines)")
+            persona = load_skill(ppath)
+            io.say(f"  ✅ Persona loaded ({len(persona.persona.splitlines())} lines, {len(persona.files)} file(s) kept)")
             break
         except (FileNotFoundError, PersonaError, OSError) as e:
             ppath = io.ask(f"  ❌ {e}. Path again (blank = built-in)", "")
@@ -288,7 +262,7 @@ async def _reads(p) -> bool:
 
 
 async def setup_member(io: IO, cfg: Config, *, projects: dict, api_base: str = "", timeout: float = 300,
-                       taken: set[str] | None = None) -> tuple[dict, str, str]:
+                       taken: set[str] | None = None) -> tuple[dict, ImportedSkill | None, str]:
     """name → role → persona/SKILL.md → projects → bot → in the group ✓ → DM works ✓ → intro in the group."""
     from .telegram_setup import TelegramProbe
     taken = taken or {m.id for m in cfg.team}
@@ -300,14 +274,14 @@ async def setup_member(io: IO, cfg: Config, *, projects: dict, api_base: str = "
             continue
         break
     role = io.ask(f"  {name}'s role", required=True)
-    persona = ""
+    persona = None
     while True:
-        ppath = io.ask(f"  Persona / SKILL.md path for {name} (file or folder; blank = generate one)", "")
+        ppath = io.ask(f"  Persona / SKILL.md path for {name} (file, folder or .skill; blank = generate one)", "")
         if not ppath:
             break
         try:
-            persona = load_persona(ppath)
-            io.say(f"  ✅ Persona loaded ({len(persona.splitlines())} lines)")
+            persona = load_skill(ppath)
+            io.say(f"  ✅ Persona loaded ({len(persona.persona.splitlines())} lines, {len(persona.files)} file(s) kept)")
             break
         except (FileNotFoundError, PersonaError, OSError) as e:
             io.say(f"  ❌ {e}")
@@ -389,15 +363,17 @@ async def wizard(base_dir: Path, io: IO | None = None, *, api_base: str = "", ti
         "projects": {},
         "team": [manager],
     }
-    cfg = scaffold(raw, personas={manager["id"]: m_persona} if m_persona else None, goals=goals,
+    cfg = scaffold(raw, skills={manager["id"]: m_persona} if m_persona else None, goals=goals,
                    tokens={manager["id"]: m_token}, api_key=api_key, base_dir=base_dir, clone_url=clone)
 
     io.say("\nStep 5/6 — Your team. For each person: name → persona/SKILL.md → bot → group ✓ → DM ✓")
+    io.say("  Tip: answer n here and run `jm ui` afterwards to add everyone from a web page (drop in all the\n"
+           "  .skill files at once, paste tokens, watch the ✓ ticks).")
     while io.confirm("\n  Add a team member?", True):
         member, persona, token = await setup_member(io, cfg, projects=raw["projects"], api_base=api_base,
                                                     timeout=timeout)
         raw["team"].append(member)
-        cfg = scaffold(raw, personas={member["id"]: persona} if persona else None, tokens={member["id"]: token},
+        cfg = scaffold(raw, skills={member["id"]: persona} if persona else None, tokens={member["id"]: token},
                        base_dir=base_dir)
         io.say(f"  ✅ {member['name']} added ({len(raw['team'])} people on the team)")
 
@@ -426,7 +402,7 @@ async def add_member_interactive(cfg_path: Path, io: IO | None = None, *, timeou
     member, persona, token = await setup_member(io, cfg, projects=raw["projects"], api_base=cfg.telegram_api_base,
                                                 timeout=timeout)
     raw.setdefault("team", []).append(member)
-    scaffold(raw, personas={member["id"]: persona} if persona else None, tokens={member["id"]: token},
+    scaffold(raw, skills={member["id"]: persona} if persona else None, tokens={member["id"]: token},
              base_dir=Path(cfg_path).parent)
     io.say(f"✅ {member['name']} added. Restart `jm run` to bring them online.")
     return member["id"]
@@ -445,8 +421,8 @@ def add_member(cfg_path: Path, *, name: str, role: str, projects: list[str], per
     raw.setdefault("team", []).append(member)
     for p in projects:
         raw.setdefault("projects", {}).setdefault(p, {"repo": "", "main_branch": "main"})
-    personas = {mid: load_persona(persona_file)} if persona_file else None
-    scaffold(raw, personas=personas, tokens={mid: token} if token else None, base_dir=Path(cfg_path).parent)
+    sk = {mid: load_skill(persona_file)} if persona_file else None
+    scaffold(raw, skills=sk, tokens={mid: token} if token else None, base_dir=Path(cfg_path).parent)
     return mid
 
 
