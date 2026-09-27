@@ -116,6 +116,12 @@ def cmd_report(args) -> None:
         print(build_report(cfg, rt.ws, rt.tasks, rt.asks))
 
 
+def cmd_work(args) -> None:
+    from .runtime import ConsoleBus
+    rt = _runtime(_cfg(args), bus=ConsoleBus())
+    print(asyncio.run(rt.run_work_session()) or "Nobody has open todo/doing tasks.")
+
+
 def cmd_doctor(args) -> None:
     cfg = _cfg(args)
     ok = True
@@ -206,6 +212,9 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("report", help="print the status report")
     s.add_argument("--write", action="store_true", help="also save to reports/ and commit")
     s.set_defaults(fn=cmd_report)
+
+    s = sub.add_parser("work", help="run one work session now (everyone moves their top task)")
+    s.set_defaults(fn=cmd_work)
 
     s = sub.add_parser("doctor", help="check the setup")
     s.add_argument("--ping", action="store_true", help="also call the model and Telegram")

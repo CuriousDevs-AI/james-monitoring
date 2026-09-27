@@ -24,6 +24,10 @@ from .workspace import Workspace
 
 log = logging.getLogger("jm.runtime")
 
+MAX_READ_ROUNDS = 2
+MAX_FILE_CHARS = 60_000
+READABLE_DIRS = ("docs", "tasks", "reports", "team", "asks", "decisions")
+
 
 # -- transport interface --------------------------------------------------------
 class Bus(Protocol):
@@ -145,6 +149,56 @@ class Runtime:
         while self._bg:
             await asyncio.gather(*list(self._bg), return_exceptions=True)
 
+    # -- conversation history (survives restarts; .jm/ is not committed) ---------
+    def _load_history(self, key: str) -> deque:
+        if key not in self._history:
+            d: deque = deque(maxlen=12)
+            p = self.ws.root / ".jm" / "history" / f"{key.replace(':', '__')}.json"
+            if p.exists():
+                try:
+                    d.extend(json.loads(p.read_text()))
+                except json.JSONDecodeError:
+                    pass
+            self._history[key] = d
+        return self._history[key]
+
+    def _save_history(self, key: str, hist: deque) -> None:
+        p = self.ws.root / ".jm" / "history" / f"{key.replace(':', '__')}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(list(hist)))
+
+    # -- documents agents write and read (docs/ in the workspace) -----------------
+    def _doc_path(self, rel: str):
+        rel = (rel or "").strip().lstrip("/")
+        if not rel.startswith("docs/"):
+            rel = "docs/" + rel
+        p = (self.ws.root / rel).resolve()
+        docs = (self.ws.root / "docs").resolve()
+        if docs not in p.parents:
+            raise ValueError("files must stay inside docs/")
+        return p, str(p.relative_to(self.ws.root))
+
+    def _read_files(self, reads: list[dict]) -> str:
+        root = self.ws.root.resolve()
+        out = []
+        for a in reads[:5]:
+            rel = str(a.get("path", "")).strip().lstrip("/")
+            p = (root / rel).resolve()
+            ok = (root in p.parents and rel.split("/")[0] in READABLE_DIRS and ".jm" not in p.parts
+                  and p.is_file())
+            if ok:
+                out.append(f"=== {rel} ===\n{p.read_text(errors='replace')[:MAX_FILE_CHARS]}")
+            else:
+                out.append(f"=== {rel} === (cannot read: only existing files under {', '.join(READABLE_DIRS)})")
+        return "Files you asked for:\n\n" + "\n\n".join(out) + "\n\nNow give your final JSON answer."
+
+    def list_docs(self, limit: int = 40) -> str:
+        docs = self.ws.root / "docs"
+        if not docs.exists():
+            return ""
+        files = sorted(p for p in docs.rglob("*") if p.is_file())
+        return "\n".join(f"- {p.relative_to(self.ws.root)}" for p in files[-limit:])
+
     # -- context -----------------------------------------------------------------
     def roster(self) -> str:
         lines = [f"- {self.owner_id}: {self.cfg.owner_name} — founder (the owner)"]
@@ -187,6 +241,9 @@ class Runtime:
             projects = ", ".join(f"{pid}{' (repo)' if p.repo else ''}" for pid, p in self.cfg.projects.items())
             if projects:
                 parts.append(f"## Projects\n{projects}")
+        docs = self.list_docs()
+        if docs:
+            parts.append("## Team documents (read with read_file)\n" + docs)
         recent = self.ws.tail_log(m.id, 10)
         if recent:
             parts.append("## Your recent activity log\n" + recent)
@@ -225,24 +282,35 @@ class Runtime:
                 member_name=m.name, member_role=m.role, roster=self.roster(), context=self.context_for(m),
                 owner_name=self.cfg.owner_name, can_run_code=self.executor.enabled and not m.monitor,
                 channel=channel)
-            hist = self._history[f"{m.id}:{ev.source}"]
+            hkey = f"{m.id}:{ev.source}"
+            hist = self._load_history(hkey)
             who = self.cfg.owner_name if ev.sender == self.owner_id else ev.sender
             user_msg = f"[{ev.source} from {who}] {ev.text}"
             messages = [*hist, {"role": "user", "content": user_msg}]
-            try:
-                res = await asyncio.to_thread(self.llm.complete, system, messages)
-            except LLMError as e:
-                log.exception("llm failed for %s", m.id)
-                self._heartbeat(m.id, error=str(e)[:200])
-                return f"⚠️ {m.name} couldn't think right now (model error). James has flagged it."
-            self._heartbeat(m.id)
-            used = self._add_usage(m.id, res.total_tokens)
-            if cap and used >= 0.8 * cap and used - res.total_tokens < 0.8 * cap:
-                await self.bus.send_owner(self.cfg.monitor.id, f"💸 {m.name} used 80% of today's token budget.")
-
-            reply, actions = parse_model_output(res.text)
+            reply, actions, raw = "", [], ""
+            for _round in range(MAX_READ_ROUNDS + 1):
+                try:
+                    res = await asyncio.to_thread(self.llm.complete, system, messages)
+                except LLMError as e:
+                    log.exception("llm failed for %s", m.id)
+                    self._heartbeat(m.id, error=str(e)[:200])
+                    return f"⚠️ {m.name} couldn't think right now (model error). James has flagged it."
+                self._heartbeat(m.id)
+                used = self._add_usage(m.id, res.total_tokens)
+                if cap and used >= 0.8 * cap and used - res.total_tokens < 0.8 * cap:
+                    await self.bus.send_owner(self.cfg.monitor.id, f"💸 {m.name} used 80% of today's token budget.")
+                raw = res.text
+                reply, actions = parse_model_output(raw)
+                reads = [a for a in actions if a.get("type") == "read_file"]
+                if not reads or _round == MAX_READ_ROUNDS:
+                    actions = [a for a in actions if a.get("type") != "read_file"]
+                    break
+                # Give the model the files it asked for, then let it answer for real.
+                messages = [*messages, {"role": "assistant", "content": raw},
+                            {"role": "user", "content": self._read_files(reads)}]
             hist.append({"role": "user", "content": user_msg})
-            hist.append({"role": "assistant", "content": res.text})
+            hist.append({"role": "assistant", "content": raw})
+            self._save_history(hkey, hist)
             notes = []
             for a in actions:
                 try:
@@ -327,6 +395,17 @@ class Runtime:
         if t == "post_group":
             await self.bus.post_group(m.id, a.get("text", ""))
             return ""
+        if t == "write_file":
+            content = str(a.get("content", ""))
+            if len(content) > MAX_FILE_CHARS:
+                raise ValueError(f"file too large (max {MAX_FILE_CHARS} chars)")
+            p, rel = self._doc_path(str(a.get("path", "")))
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content.rstrip("\n") + "\n")
+            if a.get("task"):
+                self.tasks.set_output(a["task"], m.id, rel)
+            self.ws.log(m.id, f"wrote {rel}")
+            return f"📄 saved {rel}"
         if t == "run_code":
             if m.monitor:
                 raise ValueError("James coordinates; he does not write code")
@@ -494,6 +573,28 @@ class Runtime:
             await self.bus.send_owner(self.cfg.monitor.id, alert.text, urgent=alert.incident)
             if alert.incident:
                 await self.bus.post_group(self.cfg.monitor.id, f"🚨 INCIDENT — {alert.text}")
+
+    async def run_work_session(self) -> str:
+        """Each member with open work gets a work session — the team moves without being asked.
+        Returns a one-line-per-person digest (for the owner, sent silently)."""
+        lines = []
+
+        async def one(m: Member) -> None:
+            if m.monitor or self.paused(m.id):
+                return
+            ready = [t for t in self.tasks.for_owner(m.id) if t.status in ("todo", "doing")]
+            if not ready:
+                return
+            top = sorted(ready, key=lambda t: (t.priority, t.status != "doing", t.id))[0]
+            reply = await self.dispatch(m.id, Event(
+                "system", f"Work session. Make real progress on {top.id} ({top.title}) now: write the actual "
+                          f"output with write_file (or run_code), update the task (status/log/output). If you "
+                          f"can't proceed, set it to blocked and name who you need. Reply in one line: what you "
+                          f"did and what's next.", sender="system", task=top.id))
+            lines.append(f"• {m.name} ({top.id}): {reply.splitlines()[0][:200] if reply else '-'}")
+        await asyncio.gather(*(one(m) for m in self.cfg.team))
+        await self.drain()
+        return "\n".join(sorted(lines))
 
     def onboarding_messages(self) -> list[tuple[str, str]]:
         """(member_id, text) — the day-one 'we are one team' intros. Deterministic, no model call."""

@@ -15,6 +15,9 @@ Actions you can take (only use what the situation needs):
    "log":"<one-line progress note>","output":"<link/path/commit of the result>","priority":"P1","due":"YYYY-MM-DD"}
 - {"type":"ask_permission","summary":"<one line>","details":"<why, cost, risk>","level":"yellow|red",
    "task":"T-001","default":"wait|approve|reject","hours":24,"recommendation":"approve|reject|..."}
+- {"type":"write_file","path":"docs/<project>/<name>.md","content":"<full markdown>","task":"T-001"}
+  Saves your actual work (notes, specs, research, drafts) in the team repo. This is how work becomes real.
+- {"type":"read_file","path":"docs/... | tasks/... | reports/..."}  You will get the file, then answer again.
 - {"type":"remember","note":"<durable fact or correction to keep for next time>"}
 - {"type":"message_agent","to":"<member id>","text":"<exact request or handoff>","task":"T-001"}
 - {"type":"notify_owner","text":"<only for something the owner must know now>"}

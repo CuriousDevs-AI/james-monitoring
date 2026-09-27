@@ -144,6 +144,8 @@ def wizard(base_dir: Path) -> Config:
     print("\nStep 6/6 — Monitoring")
     report = _ask("  Daily report time (HH:MM)", "18:54")
     cap = _ask("  Daily token budget per agent", "300000")
+    sessions = [x.strip() for x in _ask("  Work sessions (agents work on their own; blank = only when asked)",
+                                        "10:00,15:00").split(",") if x.strip()]
     executor = _ask("  Coding CLI for code tasks: claude | codex | none", "none")
     exe_cmd = {"claude": ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits"],
                "codex": ["codex", "exec", "--full-auto", "{prompt}"]}.get(executor, [])
@@ -154,7 +156,7 @@ def wizard(base_dir: Path) -> Config:
         "llm": {"provider": provider, "model": model, "base_url": base_url, "api_key_env": key_env, "max_tokens": 2000},
         "workspace": {"path": ws, "push": push},
         "telegram": {"group_chat_id": int(group_id or 0), "quiet_hours": ["22:00", "08:00"]},
-        "monitor": {"daily_report": report, "check_every_minutes": 60, "stale_days": 7,
+        "monitor": {"daily_report": report, "check_every_minutes": 60, "work_sessions": sessions, "stale_days": 7,
                     "blocked_escalate_days": 2, "ask_default_hours": 24},
         "budget": {"daily_tokens_per_agent": int(cap)},
         "executor": {"command": exe_cmd, "timeout_minutes": 30},

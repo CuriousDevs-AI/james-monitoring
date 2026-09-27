@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters, Update
 from telegram.constants import ChatAction, ChatType
 from telegram.error import TelegramError
-from telegram.ext import (Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes,
+from telegram.ext import (Application, ApplicationBuilder, CallbackQueryHandler, ContextTypes,
                           MessageHandler, filters)
 
 from .asks import Ask, AskError
@@ -187,6 +187,14 @@ class TelegramGateway:
         except Exception:
             log.exception("daily report failed")
 
+    async def _job_work(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        try:
+            digest = await self.rt.run_work_session()
+            if digest:
+                await self.send_owner(self.cfg.monitor.id, "🛠 Work session:\n" + digest)
+        except Exception:
+            log.exception("work session failed")
+
     async def _job_checks(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await self.rt.run_checks()
@@ -228,6 +236,10 @@ class TelegramGateway:
         tz = ZoneInfo(self.cfg.timezone)
         rep = parse_hhmm(self.cfg.daily_report)
         jq.run_daily(self._job_report, time=dtime(rep.hour, rep.minute, tzinfo=tz), name="daily-report")
+        for hhmm in self.cfg.work_sessions:
+            t = parse_hhmm(hhmm)
+            jq.run_daily(self._job_work, time=dtime(t.hour, t.minute, tzinfo=tz), days=(1, 2, 3, 4, 5, 6),  # PTB: 0=Sunday → Mon–Sat
+                         name=f"work-{hhmm}")
         jq.run_repeating(self._job_checks, interval=self.cfg.check_every_minutes * 60, first=60, name="checks")
         log.info("james-monitoring running: %d bot(s), daily report %s %s", len(self.apps),
                  self.cfg.daily_report, self.cfg.timezone)

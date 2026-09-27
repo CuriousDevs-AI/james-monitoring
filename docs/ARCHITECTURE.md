@@ -24,6 +24,7 @@
 | `prompts.py` | System prompt = charter + persona + memory + roster + context + action protocol |
 | `runtime.py` | Dispatch, model call, action application, agent inbox with hop limit, budget, heartbeat, decisions |
 | `executor.py` | Coding CLI in a git worktree on `jm/<task>`, merge after approval |
+| `runtime.run_work_session` | Scheduled work: each member with todo/doing tasks moves the top one; digest to the owner |
 | `monitor.py` | Deterministic report and checks (overdue, blocked too long, asks past deadline, failures) |
 | `router.py` | Group routing: `@all`, `@name`, `@bot_username`, default James |
 | `gateway.py` | Telegram: one bot per member, James reads the group, approval buttons, scheduled jobs |
@@ -36,7 +37,7 @@
 Every model reply is one JSON object: `{"reply": "...", "actions": [...]}`. The runtime checks and applies
 each action:
 
-`create_task` · `update_task` · `ask_permission` · `remember` · `message_agent` · `notify_owner` · `post_group` · `run_code`
+`create_task` · `update_task` · `write_file` (docs/ only) · `read_file` (docs, tasks, reports, team, asks, decisions; up to 2 read rounds) · `ask_permission` · `remember` · `message_agent` · `notify_owner` · `post_group` · `run_code`
 
 Actions that break a rule are refused, and the reason is shown in the reply (⚠️). A bad action never crashes
 the run. A reply that isn't JSON is sent as plain text.

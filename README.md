@@ -21,10 +21,11 @@ You (Telegram)
  ├── rules .......... 1 P0/person · WIP ≤ 2 · "Done means" before start · only reviewer marks done
  ├── permissions .... 🟢 do · 🟡 do & tell · 🔴 ask first (Approve/Reject buttons, deadline, default)
  ├── James .......... hourly checks · overdue/blocked/stale alerts · daily report · loop & budget guards
+ ├── work sessions .. scheduled: every member moves their top task and saves real output to docs/
  └── model adapter .. anthropic | openai-compatible (OpenAI, Codex, Ollama, OpenRouter, vLLM)
         │
         ▼
- git workspace: team/charter.md · team/<id>/{persona,memory,log}.md · tasks/ · asks/ · reports/
+ git workspace: team/charter.md · team/<id>/{persona,memory,log}.md · tasks/ · asks/ · docs/ · reports/
 ```
 
 ## What it does
@@ -38,6 +39,7 @@ You (Telegram)
 | DM Sofia: *"T-012 not like this — use brand blue"* | The correction is saved to T-012's Feedback **and** to Sofia's memory, so she won't make that mistake again. |
 | Alex needs ₹45k for a Jetson | Alex sends you a 🔴 card with the cost, the reason and James's recommendation. A 🔴 request never auto-approves. |
 | `/pause all` in the group | Everyone stops. `/resume all` starts them again. |
+| Mon–Sat at 10:00 and 15:00 (`work_sessions`) | Everyone with an open task moves it forward without being asked: they write the real output to `docs/`, update the task, and flag blockers. You get a one-line-per-person digest. |
 | Every day at 18:54 | James posts the status report in the group and commits it to `reports/`. |
 
 ## Quick start
@@ -68,6 +70,7 @@ jm chat james "what's blocked?"
 jm chat sofia                       # interactive; /commands work too
 jm chat james '/assign sofia "Hero section" P1 due:10-03'
 jm status && jm report
+jm work                             # one work session: everyone moves their top task
 ```
 
 ## Commands
@@ -83,6 +86,7 @@ jm status && jm report
 | `/asks`, `/approve ASK-3 [note]`, `/reject ASK-3 [note]` | anywhere | Permission requests (buttons also work) |
 | `/pause`, `/resume` | a member's DM | That member only |
 | `/pause all`, `/resume all` (`/stop all`, `/start all`) | group / James DM | Everyone |
+| `/work` | James DM / group | Run a work session now |
 | `/log alex` · `/budget` · `/report` · `/onboard` | anywhere | Activity · token use · report now · intros |
 | `/whoami` · `/groupid` | anywhere | IDs you need during setup |
 

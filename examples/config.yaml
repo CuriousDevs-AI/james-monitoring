@@ -27,6 +27,7 @@ telegram:
 monitor:
   daily_report: "18:54"
   check_every_minutes: 60
+  work_sessions: ["10:00", "15:00"]   # Mon–Sat: every member with open work moves their top task (costs tokens)
   stale_days: 7
   blocked_escalate_days: 2
   ask_default_hours: 24

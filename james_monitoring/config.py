@@ -64,6 +64,7 @@ class Config:
     quiet_hours: tuple[str, str] | None
     daily_report: str
     check_every_minutes: int
+    work_sessions: list[str]
     stale_days: int
     blocked_escalate_days: int
     ask_default_hours: int
@@ -191,6 +192,7 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         quiet_hours=(str(qh[0]), str(qh[1])) if qh and len(qh) == 2 else None,
         daily_report=str(_get(raw, "monitor.daily_report", "18:54")),
         check_every_minutes=int(_get(raw, "monitor.check_every_minutes", 60)),
+        work_sessions=[str(x) for x in (_get(raw, "monitor.work_sessions", []) or [])],
         stale_days=int(_get(raw, "monitor.stale_days", 7)),
         blocked_escalate_days=int(_get(raw, "monitor.blocked_escalate_days", 2)),
         ask_default_hours=int(_get(raw, "monitor.ask_default_hours", 24)),

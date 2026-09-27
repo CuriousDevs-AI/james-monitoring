@@ -18,6 +18,7 @@ HELP = [
     ("log", "Activity log: /log alex"),
     ("budget", "Token use today"),
     ("report", "Generate and post the status report now"),
+    ("work", "Start a work session now: everyone moves their top task"),
     ("onboard", "Post team intros in the group"),
     ("whoami", "Show your Telegram user id"),
     ("groupid", "Show this chat's id"),
@@ -85,6 +86,9 @@ async def run_command(rt: Runtime, cmd: str, args: str, member_id: str, private:
     if cmd == "report":
         rel = await rt.run_daily_report()
         return f"Report posted to the group and saved as {rel}"
+    if cmd == "work":
+        digest = await rt.run_work_session()
+        return ("🛠 Work session done:\n" + digest) if digest else "Nobody has open todo/doing tasks."
     if cmd == "onboard":
         for mid, text in rt.onboarding_messages():
             await rt.bus.post_group(mid, text)
