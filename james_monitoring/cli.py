@@ -161,7 +161,8 @@ def cmd_doctor(args) -> None:
                 if not m.bot_token:
                     continue
                 try:
-                    me = await Bot(m.bot_token).get_me()
+                    kw = {"base_url": f"{cfg.telegram_api_base}/bot"} if cfg.telegram_api_base else {}
+                    me = await Bot(m.bot_token, **kw).get_me()
                     check(True, f"{m.name} → @{me.username}", "")
                 except Exception as e:  # noqa: BLE001
                     check(False, "", f"{m.name}: {e}")

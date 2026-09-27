@@ -61,6 +61,7 @@ class Config:
     workspace_path: Path
     workspace_push: bool
     group_chat_id: int
+    telegram_api_base: str
     quiet_hours: tuple[str, str] | None
     daily_report: str
     check_every_minutes: int
@@ -189,6 +190,7 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         workspace_path=ws,
         workspace_push=bool(_get(raw, "workspace.push", False)),
         group_chat_id=int(_get(raw, "telegram.group_chat_id", 0) or 0),
+        telegram_api_base=str(_get(raw, "telegram.api_base_url", "") or "").rstrip("/"),
         quiet_hours=(str(qh[0]), str(qh[1])) if qh and len(qh) == 2 else None,
         daily_report=str(_get(raw, "monitor.daily_report", "18:54")),
         check_every_minutes=int(_get(raw, "monitor.check_every_minutes", 60)),

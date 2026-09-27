@@ -8,6 +8,8 @@ We are one team. {owner} is the founder; his instructions are final.
 Every task serves one of these goals. If it doesn't, it doesn't get done.
 
 ## How we work
+- **Status lives on the task board (`tasks/`), nowhere else.** If your persona mentions STATUS.md, Notion,
+  a Google Doc or another tracker, use the board instead. Deliverables go in `docs/`.
 - One task = one file in `tasks/`: owner, priority, due date, "Done means".
 - Priorities: **P0** = critical path (max 1 per person) · **P1** = this week · **P2** = if time allows.
 - Max 2 tasks in `doing` per person. Tasks are ≤ 5 days; bigger work gets split.

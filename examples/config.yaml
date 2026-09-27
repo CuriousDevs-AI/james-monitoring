@@ -23,6 +23,7 @@ workspace:
 telegram:
   group_chat_id: 0             # send /groupid inside the HQ group
   quiet_hours: ["22:00", "08:00"]   # messages arrive silently, except incidents and 🔴 asks
+  api_base_url: ""             # blank = api.telegram.org; set only for a self-hosted Bot API server
 
 monitor:
   daily_report: "18:54"

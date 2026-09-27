@@ -42,6 +42,11 @@ class TelegramGateway:
         self.rt: Runtime | None = None
         self.apps: dict[str, Application] = {}
         self.usernames: dict[str, str] = {}
+        self._stop: asyncio.Event | None = None
+
+    def stop(self) -> None:
+        if self._stop:
+            self._stop.set()
 
     # -- Bus implementation -------------------------------------------------------
     def _bot(self, member_id: str):
@@ -208,7 +213,11 @@ class TelegramGateway:
             if not token:
                 log.warning("no bot token for %s (env %s) — %s will be offline", m.id, m.bot_token_env, m.name)
                 continue
-            app = ApplicationBuilder().token(token).concurrent_updates(True).build()
+            builder = ApplicationBuilder().token(token).concurrent_updates(True)
+            if self.cfg.telegram_api_base:      # self-hosted Bot API server (or a test server)
+                builder = builder.base_url(f"{self.cfg.telegram_api_base}/bot").base_file_url(
+                    f"{self.cfg.telegram_api_base}/file/bot")
+            app = builder.build()
             app.add_handler(CallbackQueryHandler(self._on_callback, pattern=r"^ask\|"))
             app.add_handler(MessageHandler(filters.COMMAND, self._make_command_handler(m.id)))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._make_text_handler(m.id)))
@@ -244,7 +253,7 @@ class TelegramGateway:
         log.info("james-monitoring running: %d bot(s), daily report %s %s", len(self.apps),
                  self.cfg.daily_report, self.cfg.timezone)
 
-        stop = asyncio.Event()
+        stop = self._stop = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
