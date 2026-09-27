@@ -1,0 +1,10 @@
+services:
+  james-monitoring:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped            # the team never stops: restarts on crash and on reboot
+    volumes:
+      - ./data:/data                   # config.yaml, .env, team-workspace/
+    environment:
+      TZ: Asia/Kolkata

@@ -1,0 +1,16 @@
+# systemd unit — copy to /etc/systemd/system/, then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now james-monitoring
+[Unit]
+Description=james-monitoring (AI team on Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=jm
+WorkingDirectory=/opt/james-monitoring/data
+ExecStart=/opt/james-monitoring/.venv/bin/jm -c /opt/james-monitoring/data/config.yaml run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
