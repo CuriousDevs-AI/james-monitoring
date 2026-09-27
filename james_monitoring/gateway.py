@@ -2,7 +2,7 @@
 
 Telegram rule that shapes this design: bots never receive messages sent by other bots.
 So agents talk to each other through the runtime (git + inbox), never through Telegram.
-The monitor bot (James) is the only one that reads the group (privacy mode OFF for it);
+The monitor bot (the manager, e.g. James) is the only one that reads the group (privacy mode OFF for it);
 the other bots only *post* there and read their own DMs.
 """
 from __future__ import annotations
@@ -61,7 +61,7 @@ class TelegramGateway:
             return
         bot = self._bot(from_id)
         silent = in_quiet_hours(self.cfg.timezone, self.cfg.quiet_hours) and not urgent
-        body = ask.card() if ask else text
+        body = ask.card(self.cfg.monitor.name) if ask else text
         markup = None
         if ask:
             markup = InlineKeyboardMarkup([[
@@ -127,7 +127,7 @@ class TelegramGateway:
                 await self._reply(update, member_id, reply)
                 return
             if not is_monitor or not self._in_our_group(update):
-                return   # only James reads the group, so each message is handled exactly once
+                return   # only the manager's bot reads the group, so each message is handled exactly once
             is_all, targets = group_targets(msg.text, self.cfg, self.usernames)
             if is_all and is_status_request(msg.text):
                 for m in self.cfg.team:
@@ -151,7 +151,7 @@ class TelegramGateway:
             if not msg or not msg.text:
                 return
             if chat.type != ChatType.PRIVATE and not is_monitor:
-                return   # in the group only James answers commands
+                return   # in the group only the manager's bot answers commands
             cmd, _, args = msg.text.partition(" ")
             cmd = cmd.lstrip("/").split("@")[0].lower()
             if cmd == "whoami":
@@ -185,7 +185,7 @@ class TelegramGateway:
         except (ValueError, AskError) as e:
             await q.answer(str(e)[:190], show_alert=True)
 
-    # -- scheduled jobs (on James's bot) -------------------------------------------
+    # -- scheduled jobs (on the manager's bot) -------------------------------------------
     async def _job_report(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await self.rt.run_daily_report()

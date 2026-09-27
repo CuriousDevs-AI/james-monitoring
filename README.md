@@ -1,108 +1,119 @@
 # james-monitoring
 
-Run an AI team the way you'd run a real team: a Telegram HQ group, a 1:1 chat with every team member,
-tasks and memory in git, permissions before anything risky, and **James**, a delivery manager who
-monitors all of it and reports to you.
+Run a team of AI agents the way you'd run a real team. Any founder, any startup, any number of people.
 
-It works with any model. The team lives in plain markdown in a git repo, so switching from Claude to
-GPT, Codex or a local Llama is a one-line config change. Nothing is lost when you switch.
+- **A Telegram HQ group** for things everyone needs: announcements, `@all status`, `/pause all`, big news.
+- **A 1:1 chat with each team member.** You give instructions and corrections there, and they ask your permission there.
+- **A manager (James by default, any name you like)** who watches the board, chases blockers and reports to you daily.
+- **Everything lives in git:** personas, tasks, memory, deliverables, decisions, reports.
+- **Any model:** Claude, GPT/Codex, or a local model through Ollama. Switching is one line of config, and the team stays the same.
 
 ```
 You (Telegram)
- ├── HQ group ........ announcements · @all status · /pause all · big news · daily report
- ├── DM James ........ "what's the delivery status of Ojas?" · /board · /assign · /asks
- ├── DM Sofia ........ "change the navbar" → she works on a branch → asks you → you tap Approve → merged
- └── DM Alex, Daniel … instructions, corrections, permission requests
+ ├── HQ group ........ /onboard · @all give status · @riya … · /pause all · daily report
+ ├── DM the manager .. "what's blocked?" · "delivery status of the API?" · /board · /assign · /asks
+ └── DM each member .. instructions · corrections · ✅/❌ permission cards
         │
         ▼
- james-monitoring (one process on your server)
- ├── router ......... @all · @name · DMs → the right agent
+ james-monitoring (one process on any server)
+ ├── router ......... @all · @name · DMs → the right person
  ├── runtime ........ prompt = charter + persona + memory + board → model → actions
- ├── rules .......... 1 P0/person · WIP ≤ 2 · "Done means" before start · only reviewer marks done
- ├── permissions .... 🟢 do · 🟡 do & tell · 🔴 ask first (Approve/Reject buttons, deadline, default)
- ├── James .......... hourly checks · overdue/blocked/stale alerts · daily report · loop & budget guards
- ├── work sessions .. scheduled: every member moves their top task and saves real output to docs/
- └── model adapter .. anthropic | openai-compatible (OpenAI, Codex, Ollama, OpenRouter, vLLM)
+ ├── rules .......... 1 P0/person · WIP ≤ 2 · "Done means" before start · only the reviewer marks done
+ ├── permissions .... 🟢 do · 🟡 do & tell · 🔴 ask first (buttons, deadline, default)
+ ├── work sessions .. scheduled: everyone moves their top task and saves real output to docs/
+ ├── manager ........ hourly checks · alerts · daily report (built from files, not by a model)
+ └── model adapter .. anthropic | any OpenAI-compatible API
         │
         ▼
- git workspace: team/charter.md · team/<id>/{persona,memory,log}.md · tasks/ · asks/ · docs/ · reports/
+ git workspace: team/charter.md · team/<id>/{persona,memory,log}.md · tasks/ · asks/ · docs/ · decisions/ · reports/
 ```
 
-## What it does
-
-| You do | What happens |
-|---|---|
-| DM James: *"what's the delivery status of Ojas?"* | James answers from the board, recent commits and pending asks. He doesn't answer from memory. |
-| In the group: `@all give status` | Every member's bot replies with one line (status · task · blocker). This comes straight from the board: no model call, instant and free. |
-| In the group: `@all start working on the new plan` | Every member reads it and replies in the group. |
-| DM Sofia: *"make the navbar sticky"* | Sofia creates a task, runs a coding agent on branch `jm/T-012`, and sends you a 🔴 **Merge?** card. You tap ✅ and it's merged into main. |
-| DM Sofia: *"T-012 not like this — use brand blue"* | The correction is saved to T-012's Feedback **and** to Sofia's memory, so she won't make that mistake again. |
-| Alex needs ₹45k for a Jetson | Alex sends you a 🔴 card with the cost, the reason and James's recommendation. A 🔴 request never auto-approves. |
-| `/pause all` in the group | Everyone stops. `/resume all` starts them again. |
-| Mon–Sat at 10:00 and 15:00 (`work_sessions`) | Everyone with an open task moves it forward without being asked: they write the real output to `docs/`, update the task, and flag blockers. You get a one-line-per-person digest. |
-| Every day at 18:54 | James posts the status report in the group and commits it to `reports/`. |
-
-## Quick start
+## Set up a team in about 15 minutes
 
 ```bash
 git clone https://github.com/CuriousDevs-AI/james-monitoring.git
-cd james-monitoring
-python -m venv .venv && . .venv/bin/activate
-pip install -e ".[all]"
-
-mkdir -p data && cd data
-jm init            # wizard: AI → company → team → git workspace → Telegram → monitoring
-jm doctor --ping   # checks model, bots, repo
-jm run             # the team is live
+cd james-monitoring && python -m venv .venv && . .venv/bin/activate && pip install -e ".[all]"
+mkdir -p ../my-team && cd ../my-team
+jm init
 ```
 
-Then, in Telegram:
-1. Press **Start** on every bot, so each one is allowed to DM you.
-2. Add all the bots to your HQ group.
-3. Type `/onboard` in the group. Everyone introduces themselves.
+`jm init` walks you through it and **checks every Telegram link live**. Nothing is assumed:
 
-Telegram step by step (BotFather, privacy mode, ids): [docs/SETUP.md](docs/SETUP.md).
+1. **Basics:** company, your name, timezone (detected automatically), goals.
+2. **AI:** provider, model, key.
+3. **Workspace:** a new git repo, or clone an existing one.
+4. **Manager bot:** paste its token. The wizard then:
+   - **detects you** when you press Start on the bot,
+   - **detects your team group** when you add the bot to it,
+   - reminds you to switch off privacy mode, so the manager can read the group.
+5. **Each team member, one at a time:**
+   `name` → `role` → **persona / SKILL.md path** (a file or a folder) → projects → bot token →
+   waits until **the bot is in the group ✓** → waits until **you've pressed Start on it ✓** (you get a hello DM) →
+   the member introduces themselves in the group.
+6. **Monitoring:** daily report time, work sessions, token budget, and the coding tool (Claude Code / Codex / none).
+
+Then:
+
+```bash
+jm doctor --ping    # model, every bot, group membership, privacy mode
+jm run              # the team is live
+```
+
+Growing or shrinking the team later:
+
+```bash
+jm add-member                   # the same verified flow, for one person
+jm remove-member riya           # off the team; their files stay in git history
+```
+
+## Day to day
+
+| You do | What happens |
+|---|---|
+| DM the manager: *"what's the delivery status of the API?"* | The answer comes from the board, recent commits and open decisions. The manager doesn't answer from memory. |
+| In the group: `@all give status` | Each member's bot replies with one line. This comes straight from the board: instant, and no model call. |
+| In the group: `@riya @omar sync on the login flow` | Those two reply in the group. |
+| DM Riya: *"add rate limiting"* | Riya creates a task, codes it on branch `jm/T-012`, and sends you a 🔴 **Merge?** card. You tap ✅ and it's merged. |
+| DM Riya: *"T-012 not like this — per-user limits"* | The correction is saved on the task **and** in Riya's memory. |
+| Someone needs to spend money | You get a 🔴 card with the cost, the reason and the manager's recommendation. It never auto-approves. |
+| Work sessions (e.g. 10:00 and 15:00, Mon–Sat) | Everyone with open work moves it forward and writes the real output to `docs/`. You get a one-line-per-person digest. |
+| Daily report time | The report is posted in the group and committed to `reports/`, including your open decisions (`decisions/OPEN.md`). |
+| `/pause all` · `/resume all` | Everyone stops or starts. |
 
 ### Try it without Telegram
 
 ```bash
 jm chat james "what's blocked?"
-jm chat sofia                       # interactive; /commands work too
-jm chat james '/assign sofia "Hero section" P1 due:10-03'
-jm status && jm report
-jm work                             # one work session: everyone moves their top task
+jm chat riya                       # interactive; /commands work too
+jm status && jm report && jm work
 ```
 
 ## Commands
 
-| Command | Where | Does |
-|---|---|---|
-| `/status` | anywhere | Everyone's status, taken from the board |
-| `/board` | anywhere | All tasks by state |
-| `/assign sofia "title" P1 due:10-03 project:site` | James DM / group | Creates the task. Sofia acknowledges in your DM. |
-| `/accept T-012 [note]` | anywhere | Reviewer accepts, and the task is done |
-| `/feedback T-012 text` | anywhere | Saved on the task and in the owner's memory |
-| `/cut T-012 [reason]` | anywhere | Task cut |
-| `/asks`, `/approve ASK-3 [note]`, `/reject ASK-3 [note]` | anywhere | Permission requests (buttons also work) |
-| `/pause`, `/resume` | a member's DM | That member only |
-| `/pause all`, `/resume all` (`/stop all`, `/start all`) | group / James DM | Everyone |
-| `/work` | James DM / group | Run a work session now |
-| `/log alex` · `/budget` · `/report` · `/onboard` | anywhere | Activity · token use · report now · intros |
-| `/whoami` · `/groupid` | anywhere | IDs you need during setup |
+| Command | Does |
+|---|---|
+| `/status` · `/board` | Everyone's status · all tasks by state |
+| `/assign <who> "title" P1 due:10-03 project:<id>` | Creates the task. That person acknowledges in your DM. |
+| `/accept T-012 [note]` · `/feedback T-012 text` · `/cut T-012` | Review, feedback (saved to the task and to memory), cut |
+| `/asks` · `/approve ASK-3` · `/reject ASK-3` | Permission requests (the buttons do the same) |
+| `/pause`, `/resume` (in a member's DM) · `/pause all`, `/resume all` | One person · everyone |
+| `/work` · `/report` · `/onboard` · `/log <who>` · `/budget` | Work session now · report now · intros · activity · token use |
+| `/whoami` · `/groupid` | Your id · this chat's id |
 
 ## Rules the system enforces
 
-- **Priorities:** at most one P0 per person. Only the founder can override.
-- **Work in progress:** at most 2 tasks in `doing` per person. A task can't start without "Done means" (acceptance checks).
+- **Priorities:** at most one P0 per person. Only the owner can override.
+- **Work in progress:** at most 2 tasks in `doing` per person, and a task can't start without "Done means".
 - **Done means reviewed:** agents move work to `review`. Only the reviewer (you, by default) marks it `done`.
 - **Blocked needs a reason:** `blocked` must name the person and the exact thing needed.
-- **Code:** changes always happen on a `jm/<task>` branch. main changes only after you approve the merge.
-- **🔴 asks** (money, public, production, deleting, legal, new vendors) never auto-decide. 🟡 asks can have a default that applies at the deadline.
+- **Code:** changes happen only on `jm/<task>` branches. main changes only after you approve.
+- **🔴 asks** (money, public, production, deleting, legal, new vendors) never auto-decide.
 - **Loops:** agent-to-agent conversations stop after `max_agent_hops` and escalate to you.
-- **Budget:** a daily token budget per agent. You get a warning at 80%, and the agent pauses at 100%.
-- **Honest reports:** James's reports and checks are built from the files by code. No model is involved, so they can't invent progress.
+- **Budget:** a daily token budget per person. You get a warning at 80%, and they pause at 100%.
+- **Honest reports:** reports and checks are generated by code from the files, so they can't invent progress.
+- **Access:** only your Telegram id (plus any `extra_user_ids`) can command the team.
 
-## Switching models (so the team survives any vendor)
+## Switching models
 
 ```yaml
 llm: { provider: anthropic, model: <claude model id>, api_key_env: ANTHROPIC_API_KEY }
@@ -110,30 +121,25 @@ llm: { provider: openai,    model: <gpt/codex model id>, api_key_env: OPENAI_API
 llm: { provider: openai,    model: llama3.1, base_url: http://localhost:11434/v1, api_key_env: "" }   # Ollama
 ```
 
-The coding hands are just as swappable: set `executor.command` to Claude Code, Codex CLI, Aider, or any
-CLI that edits files in a folder.
-
-## Personas
-
-Each member's persona is `team/<id>/persona.md`: plain markdown that you can edit any time. `jm init` and
-`jm add-member --persona path/to/SKILL.md` can import existing Claude skill files. The front matter is
-stripped automatically.
+The coding tool is just as swappable (`executor.command`): Claude Code, Codex CLI, Aider, anything that edits files.
 
 ## Deploy (always on)
 
-- **Docker:** `cd deploy && mkdir data && cp ../examples/config.yaml data/ && docker compose up -d`
-- **systemd:** see [`deploy/james-monitoring.service`](deploy/james-monitoring.service)
+- **Docker:** see `deploy/docker-compose.yml`. Mount a folder holding `config.yaml`, `.env` and the workspace.
+- **systemd:** see `deploy/james-monitoring.service`.
 
-One small VPS is enough. The process uses long polling, so you don't need a domain or open ports.
+It uses long polling, so you don't need a domain or open ports. A small VPS is enough.
+
+Full guide: [docs/SETUP.md](docs/SETUP.md) · Internals: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-pytest -q
+pip install -e ".[dev]" && pytest -q
 ```
 
-More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The tests include a fake Telegram Bot API server. They drive the real python-telegram-bot code and the full
+`jm init` flow end to end.
 
 ## License
 

@@ -9,6 +9,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
 
+class _Forbidden(Exception):
+    pass
+
+
+class _Unauthorized(Exception):
+    pass
+
+
 class FakeTelegram:
     def __init__(self, bots: dict[str, str]):
         """bots: token -> username"""
@@ -18,6 +26,11 @@ class FakeTelegram:
         self._ids = itertools.count(1)
         self._msg_ids = itertools.count(1000)
         self._lock = threading.Lock()
+        self.in_group: set[str] = set()       # usernames of bots that are group members
+        self.started: set[str] = set()        # bots the user has pressed Start on (DMs allowed)
+        self.owner_dm_id = 111
+        self.privacy_on: set[str] = set()     # bots that still have BotFather privacy mode on
+        self.strict_dm = False                # True → DMs fail until the user pressed Start
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -47,6 +60,15 @@ class FakeTelegram:
                 "message": {**self._base_msg(user_id, "private", message_text, user_id),
                             "from": {"id": 1, "is_bot": True, "first_name": "bot"}}}})
 
+    def user_adds_bot_to_group(self, token, group_id=-100, user_id=111, title="HQ"):
+        with self._lock:
+            self.in_group.add(self.bots[token])
+            self.updates[token].append({"update_id": next(self._ids), "my_chat_member": {
+                "chat": {"id": group_id, "type": "supergroup", "title": title}, "date": int(time.time()),
+                "from": {"id": user_id, "is_bot": False, "first_name": "Owner"},
+                "old_chat_member": {"status": "left", "user": {"id": 1, "is_bot": True, "first_name": "b"}},
+                "new_chat_member": {"status": "member", "user": {"id": 1, "is_bot": True, "first_name": "b"}}}})
+
     def wait_for(self, pred, timeout=10.0):
         end = time.time() + timeout
         while time.time() < end:
@@ -75,9 +97,16 @@ class FakeTelegram:
                     params = {k: v[0] for k, v in parse_qs(body).items()}
                 _, bot, method = self.path.split("/", 2)
                 token = bot[3:]
-                result = fake.handle(token, method, params)
-                data = json.dumps({"ok": True, "result": result}).encode()
-                self.send_response(200)
+                try:
+                    result = fake.handle(token, method, params)
+                    status, data = 200, json.dumps({"ok": True, "result": result}).encode()
+                except _Unauthorized:
+                    status, data = 401, json.dumps({"ok": False, "error_code": 401,
+                                                    "description": "Unauthorized"}).encode()
+                except _Forbidden:
+                    status, data = 403, json.dumps({"ok": False, "error_code": 403, "description":
+                                                    "Forbidden: bot can't initiate conversation with a user"}).encode()
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
@@ -90,10 +119,12 @@ class FakeTelegram:
         return H
 
     def handle(self, token, method, p):
-        uname = self.bots.get(token, "unknown")
+        if token not in self.bots:
+            raise _Unauthorized()
+        uname = self.bots[token]
         if method == "getMe":
             return {"id": abs(hash(token)) % 10**9, "is_bot": True, "first_name": uname, "username": uname,
-                    "can_join_groups": True, "can_read_all_group_messages": uname.startswith("james"),
+                    "can_join_groups": True, "can_read_all_group_messages": uname not in self.privacy_on,
                     "supports_inline_queries": False}
         if method == "getUpdates":
             offset = int(p.get("offset") or 0)
@@ -103,8 +134,15 @@ class FakeTelegram:
             if not ups:
                 time.sleep(0.05)
             return ups
+        if method == "getChatMember":
+            return {"status": "member" if uname in self.in_group else "left",
+                    "user": {"id": 1, "is_bot": True, "first_name": uname}}
+        if method == "getChat":
+            return {"id": int(p.get("chat_id") or 0), "type": "supergroup", "title": "HQ"}
         if method in ("sendMessage", "editMessageText"):
             chat_id = int(p.get("chat_id") or 0)
+            if self.strict_dm and chat_id > 0 and uname not in self.started:
+                raise _Forbidden()
             markup = p.get("reply_markup")
             if isinstance(markup, str):
                 markup = json.loads(markup)

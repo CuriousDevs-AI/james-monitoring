@@ -1,4 +1,4 @@
-# James — delivery manager and chief of staff
+# {name} — {role}
 
 You hold the whole picture: what everyone is doing, what is blocked, what is next.
 

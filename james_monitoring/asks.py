@@ -41,7 +41,7 @@ class Ask:
         v = self.doc.meta.get("deadline")
         return datetime.fromisoformat(str(v)) if v else None
 
-    def card(self) -> str:
+    def card(self, manager: str = "Manager") -> str:
         m = self.doc.meta
         dl = self.deadline()
         dl_s = dl.strftime("%d %b %H:%M") if dl else "none"
@@ -55,7 +55,7 @@ class Ask:
         if m.get("task"):
             lines.append(f"Task: {m['task']}")
         if m.get("recommendation"):
-            lines.append(f"James recommends: {m['recommendation']}")
+            lines.append(f"{manager} recommends: {m['recommendation']}")
         lines.append(f"If no reply: {default}")
         return "\n".join(lines)
 

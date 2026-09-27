@@ -29,18 +29,36 @@ def cmd_init(args) -> None:
     from .setup import wizard
     base = Path(args.dir).resolve()
     if (base / "config.yaml").exists() and not args.force:
-        sys.exit(f"{base / 'config.yaml'} exists. Use --force to redo setup (personas and tasks are kept).")
-    wizard(base)
+        sys.exit(f"{base / 'config.yaml'} exists. Use `jm add-member` to grow the team, or --force to start over.")
+    try:
+        asyncio.run(wizard(base, api_base=args.telegram_api))
+    except (KeyboardInterrupt, EOFError):
+        sys.exit("\nSetup stopped. Everything confirmed so far is saved; run `jm init --force` to redo.")
 
 
 def cmd_add_member(args) -> None:
-    from .setup import add_member
+    from .setup import add_member, add_member_interactive
     cfg = _cfg(args)
-    projects = [p.strip() for p in (args.projects or "").split(",") if p.strip()]
-    mid = add_member(cfg.path, name=args.name, role=args.role, projects=projects, persona_file=args.persona or "",
-                     token=args.token or "")
-    print(f"Added {mid}. Create its bot with @BotFather, set TG_TOKEN_{mid.upper()} in .env, add it to the HQ group, "
-          f"press /start on it, then restart `jm run`.")
+    if args.name and args.role:            # scripted, no Telegram checks
+        projects = [p.strip() for p in (args.projects or "").split(",") if p.strip()]
+        mid = add_member(cfg.path, name=args.name, role=args.role, projects=projects,
+                         persona_file=args.persona or "", token=args.token or "")
+        print(f"Added {mid}. Verify with `jm doctor --ping`, then restart `jm run`.")
+        return
+    try:
+        asyncio.run(add_member_interactive(cfg.path))
+    except (KeyboardInterrupt, EOFError):
+        sys.exit("\nStopped; nothing was added.")
+
+
+def cmd_remove_member(args) -> None:
+    from .setup import remove_member
+    cfg = _cfg(args)
+    try:
+        name = remove_member(cfg.path, args.member)
+    except ValueError as e:
+        sys.exit(f"error: {e}")
+    print(f"Removed {name} from the team (their files stay in git). Restart `jm run`.")
 
 
 def cmd_run(args) -> None:
@@ -162,8 +180,19 @@ def cmd_doctor(args) -> None:
                     continue
                 try:
                     kw = {"base_url": f"{cfg.telegram_api_base}/bot"} if cfg.telegram_api_base else {}
-                    me = await Bot(m.bot_token, **kw).get_me()
-                    check(True, f"{m.name} → @{me.username}", "")
+                    async with Bot(m.bot_token, **kw) as bot:
+                        me = await bot.get_me()
+                        check(True, f"{m.name} → @{me.username}", "")
+                        if cfg.group_chat_id:
+                            try:
+                                cm = await bot.get_chat_member(cfg.group_chat_id, me.id)
+                                inside = cm.status in ("member", "administrator", "creator")
+                            except Exception:  # noqa: BLE001
+                                inside = False
+                            check(inside, f"{m.name} is in the group", f"@{me.username} is NOT in the group — add it")
+                        if m.monitor:
+                            check(bool(me.can_read_all_group_messages), f"{m.name} can read the group",
+                                  f"@{me.username}: BotFather → /setprivacy → Disable")
                 except Exception as e:  # noqa: BLE001
                     check(False, "", f"{m.name}: {e}")
         asyncio.run(tg())
@@ -186,20 +215,25 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("-c", "--config", default="config.yaml")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("init", help="setup wizard")
+    s = sub.add_parser("init", help="set up a team: AI, workspace, manager bot, members (verified live)")
     s.add_argument("--dir", default=".")
     s.add_argument("--force", action="store_true")
+    s.add_argument("--telegram-api", default="", help=argparse.SUPPRESS)   # self-hosted Bot API / tests
     s.set_defaults(fn=cmd_init)
 
-    s = sub.add_parser("add-member", help="add an employee")
-    s.add_argument("name")
-    s.add_argument("--role", required=True)
+    s = sub.add_parser("add-member", help="add a person: name → persona/SKILL.md → bot → group ✓ → DM ✓")
+    s.add_argument("name", nargs="?", help="with --role: add without the interactive Telegram checks")
+    s.add_argument("--role")
     s.add_argument("--projects", default="")
-    s.add_argument("--persona", help="persona markdown / SKILL.md to import")
+    s.add_argument("--persona", help="persona file, SKILL.md, or a folder containing one")
     s.add_argument("--token", help="Telegram bot token (saved to .env)")
     s.set_defaults(fn=cmd_add_member)
 
-    s = sub.add_parser("run", help="start the Telegram team (all bots + James's schedule)")
+    s = sub.add_parser("remove-member", help="take someone off the team (files kept in git)")
+    s.add_argument("member")
+    s.set_defaults(fn=cmd_remove_member)
+
+    s = sub.add_parser("run", help="start the Telegram team (all bots + the manager's schedule)")
     s.set_defaults(fn=cmd_run)
 
     s = sub.add_parser("chat", help="talk to a member locally, no Telegram")

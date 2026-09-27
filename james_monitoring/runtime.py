@@ -92,7 +92,7 @@ class Runtime:
         self.bus: Bus = bus or ConsoleBus()
         self.ws = ws or Workspace(cfg)
         self.ws.ensure()
-        self.owner_id = cfg.owner_name.lower()
+        self.owner_id = cfg.owner_key
         self.tasks = TaskStore(self.ws.root, cfg.timezone, owner_id=self.owner_id)
         self.asks = AskStore(self.ws.root, cfg.timezone, cfg.ask_default_hours)
         self.executor = Executor(cfg)
@@ -297,7 +297,7 @@ class Runtime:
                 except LLMError as e:
                     log.exception("llm failed for %s", m.id)
                     self._heartbeat(m.id, error=str(e)[:200])
-                    return f"⚠️ {m.name} couldn't think right now (model error). James has flagged it."
+                    return f"⚠️ {m.name} couldn't think right now (model error). {self.cfg.monitor.name} has flagged it."
                 self._heartbeat(m.id)
                 used = self._add_usage(m.id, res.total_tokens)
                 if cap and used >= 0.8 * cap and used - res.total_tokens < 0.8 * cap:
@@ -411,7 +411,7 @@ class Runtime:
             return f"📄 saved {rel}"
         if t == "run_code":
             if m.monitor:
-                raise ValueError("James coordinates; he does not write code")
+                raise ValueError(f"{m.name} coordinates the team and does not write code")
             tid, pid = a.get("task", ""), a.get("project", "")
             self.executor.project(pid)            # validate now, run in background
             self.tasks.get(tid)
@@ -503,7 +503,7 @@ class Runtime:
         """/assign <who> "<title>" [P0|P1|P2] [due:MM-DD|YYYY-MM-DD] [project:<id>]"""
         parts = args.strip().split(maxsplit=1)
         if len(parts) < 2:
-            raise ValueError('usage: /assign <who> "<title>" P1 due:10-03 project:ojas')
+            raise ValueError('usage: /assign <who> "<title>" P1 due:10-03 project:<id>')
         who, rest = parts[0].lstrip("@").lower(), parts[1]
         pr = re.search(r"(?<!\S)P[0-2](?!\S)", rest, re.I)
         due = re.search(r"(?<!\S)due:(\S+)", rest)
@@ -549,7 +549,7 @@ class Runtime:
 
     def cmd_asks(self) -> str:
         pend = self.asks.pending()
-        return "\n\n".join(a.card() for a in pend) or "No pending asks."
+        return "\n\n".join(a.card(self.cfg.monitor.name) for a in pend) or "No pending asks."
 
     def cmd_budget(self) -> str:
         cap = self.cfg.daily_tokens_per_agent

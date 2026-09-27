@@ -6,7 +6,7 @@ from .runtime import Event, Runtime
 HELP = [
     ("status", "Everyone's status from the board"),
     ("board", "All tasks by state"),
-    ("assign", 'Assign: /assign sofia "title" P1 due:10-03 project:site'),
+    ("assign", 'Assign: /assign <who> "title" P1 due:10-03 project:<id>'),
     ("accept", "Accept a task in review: /accept T-001 [note]"),
     ("feedback", "Feedback on a task: /feedback T-001 text"),
     ("cut", "Cut a task: /cut T-001 [reason]"),
@@ -15,7 +15,7 @@ HELP = [
     ("reject", "Reject: /reject ASK-001 [note]"),
     ("pause", "Pause this person, or /pause all  (alias /stop)"),
     ("resume", "Resume this person, or /resume all  (alias /start all)"),
-    ("log", "Activity log: /log alex"),
+    ("log", "Activity log: /log <who>"),
     ("budget", "Token use today"),
     ("report", "Generate and post the status report now"),
     ("work", "Start a work session now: everyone moves their top task"),

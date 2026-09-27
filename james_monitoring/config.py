@@ -19,7 +19,7 @@ class Member:
     name: str
     role: str
     bot_token_env: str = ""
-    monitor: bool = False          # True for James (delivery manager / router)
+    monitor: bool = False          # True for the manager who monitors and routes (e.g. "James")
     projects: list[str] = field(default_factory=list)
     persona_file: str = ""         # relative to workspace; default team/<id>/persona.md
 
@@ -91,6 +91,12 @@ class Config:
             if m.monitor:
                 return m
         return self.team[0]
+
+    @property
+    def owner_key(self) -> str:
+        """Stable id for the owner in tasks/asks (e.g. 'maria_lopez')."""
+        import re
+        return re.sub(r"[^a-z0-9]+", "_", self.owner_name.lower()).strip("_") or "owner"
 
     def is_authorized(self, user_id: int | None) -> bool:
         return user_id is not None and (user_id == self.owner_user_id or user_id in self.extra_user_ids)

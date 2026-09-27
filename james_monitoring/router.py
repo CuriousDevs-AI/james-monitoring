@@ -10,7 +10,7 @@ _STATUS = re.compile(r"\b(status|update|updates|standup|kya\s+chal\s+raha)\b", r
 
 
 def group_targets(text: str, cfg: Config, usernames: dict[str, str] | None = None) -> tuple[bool, list[str]]:
-    """Returns (is_all, member_ids). No mention → the monitor (James) handles it."""
+    """Returns (is_all, member_ids). No mention → the manager (monitor) handles it."""
     usernames = {k: v.lower() for k, v in (usernames or {}).items()}
     by_username = {v: k for k, v in usernames.items()}
     ids: list[str] = []

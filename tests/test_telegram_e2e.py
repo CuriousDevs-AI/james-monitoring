@@ -48,7 +48,7 @@ async def test_full_telegram_flow(tmp_path, tg, monkeypatch):
         # 2. Group "@all give status" → every bot answers in the group, from the board (no model call)
         calls = len(llm.calls)
         tg.user_says(TOKENS["james"], "@all give status", chat_id=-100, chat_type="supergroup")
-        hits = await wait(tg, lambda s: s.get("chat_id") == -100 and s["method"] == "sendMessage")
+        await wait(tg, lambda s: s.get("chat_id") == -100 and s["method"] == "sendMessage")
         await asyncio.sleep(0.5)
         bots = {s["bot"] for s in tg.sent if s.get("chat_id") == -100}
         assert bots == {"james_cd_bot", "sofia_cd_bot", "marcus_cd_bot"} and len(llm.calls) == calls

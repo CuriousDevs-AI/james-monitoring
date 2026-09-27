@@ -1,4 +1,4 @@
-"""James's monitoring: deterministic, from the files — no model call, so it can't invent progress."""
+"""The manager's monitoring: deterministic, from the files — no model call, so it can't invent progress."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -55,7 +55,8 @@ def build_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -
     blocked = [t for t in open_tasks if t.status == "blocked"]
     overdue = [t for t in open_tasks if t.overdue(tz) and t.status != "blocked"]
     pend = asks.pending()
-    owner_blocks = [t for t in blocked if cfg.owner_name.lower() in t.blocked_on.lower()]
+    owner_blocks = [t for t in blocked if cfg.owner_name.lower() in t.blocked_on.lower()
+                    or cfg.owner_key in t.blocked_on.lower()]
     p0 = sorted([t for t in open_tasks if t.priority == "P0"], key=lambda t: (t.due(tz) or d + timedelta(days=999)))
 
     if pend or owner_blocks or open_decisions(ws):
@@ -105,7 +106,7 @@ def write_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -
     rel = f"reports/{today(cfg.timezone).isoformat()}.md"
     ws.write(rel, text)
     ws.update_state(lambda s: s.__setitem__("last_report_date", today(cfg.timezone).isoformat()))
-    ws.commit(f"report: {today(cfg.timezone).isoformat()}", author="James")
+    ws.commit(f"report: {today(cfg.timezone).isoformat()}", author=cfg.monitor.name)
     return rel, text
 
 

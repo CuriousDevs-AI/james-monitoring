@@ -3,7 +3,7 @@
 Layout:
     team/charter.md               shared: mission, goals, rules, permissions
     team/<id>/persona.md          who this member is (plain markdown, any model can read it)
-    team/<id>/memory.md           durable notes + Pankaj's corrections
+    team/<id>/memory.md           durable notes + the owner's corrections
     team/<id>/log.md              agent<->agent messages and activity
     tasks/T-001-<slug>.md         one file per task
     asks/ASK-001.md               permission requests + outcome

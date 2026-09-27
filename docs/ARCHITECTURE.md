@@ -1,5 +1,8 @@
 # Architecture
 
+Nothing is specific to one company: names, roles, personas, projects, the manager's name, timezone and
+model all come from `config.yaml` and the workspace.
+
 ## Principles
 
 1. **Git is the truth.** Tasks, memory, decisions and reports are markdown files in a git repo. Telegram is
@@ -47,12 +50,12 @@ the run. A reply that isn't JSON is sent as plain text.
 Telegram bots never receive messages sent by other bots. So agent-to-agent messages go through the runtime:
 they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits.max_agent_hops`.
 
-## Data flow: "Sofia, change the navbar"
+## Data flow: "Riya, add rate limiting to the API"
 
-1. Sofia's bot receives your DM → `runtime.dispatch("sofia", Event("dm", ...))`.
-2. The prompt is built from the charter, Sofia's persona and memory, her tasks and the projects → model call.
+1. Riya's bot receives your DM → `runtime.dispatch("riya", Event("dm", ...))`.
+2. The prompt is built from the charter, Riya's persona and memory, her tasks and the projects → model call.
 3. The model returns `create_task` + `run_code` → a task file is written and committed. The executor starts in the background.
-4. The executor runs the coding CLI in `../.jm-worktrees/site-T-012` on branch `jm/T-012` and commits there.
+4. The executor runs the coding CLI in `../.jm-worktrees/api-T-012` on branch `jm/T-012` and commits there.
 5. A merge ask (🔴) is created → you get a card with the diffstat and ✅/❌ buttons.
-6. You tap ✅ → `git merge --no-ff jm/T-012` on main (only if main is clean) → the task is done → Sofia is told
+6. You tap ✅ → `git merge --no-ff jm/T-012` on main (only if main is clean) → the task is done → Riya is told
    and replies to you.

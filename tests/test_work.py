@@ -1,4 +1,3 @@
-import json
 
 from james_monitoring.llm.fake import FakeLLM
 from james_monitoring.runtime import ConsoleBus, Event, Runtime

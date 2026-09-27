@@ -1,95 +1,83 @@
-# Setup, step by step
+# Setup guide
 
-About 20 minutes the first time.
+About 15 minutes for a team of 3–5 people. You need: a machine that stays on (a small VPS, or your laptop to
+try it out), Python 3.10+, git, a Telegram account, and a model API key (or Ollama).
 
-## 1. Server
-
-Any Linux box with Python 3.10+ and git: a ₹500–1,000/month VPS, a spare machine, or your laptop for testing.
+## 1. Install
 
 ```bash
 git clone https://github.com/CuriousDevs-AI/james-monitoring.git /opt/james-monitoring
 cd /opt/james-monitoring && python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[all]"
-mkdir data && cd data
+mkdir -p /opt/my-team && cd /opt/my-team
 ```
 
-## 2. Model key
+## 2. Have these ready
 
-Get an API key for the model you want to use: Anthropic, OpenAI, OpenRouter, or none if you run Ollama.
-The wizard saves it to `data/.env` with permissions set to 600. It is never written to config.yaml.
+- **Personas:** one markdown file per person describing who they are and what they own. A Claude `SKILL.md`,
+  or a folder that contains one, works as-is: its front matter is stripped. If you have none, the wizard generates a starter persona.
+- **Bots:** you create one Telegram bot per person with **@BotFather** (`/newbot`). The wizard asks for each
+  token at the right moment, so you can create them as you go.
 
-## 3. Telegram bots: one per team member
-
-In Telegram, open **@BotFather**:
-
-1. `/newbot` → name `James (CuriousDevs)` → username e.g. `curiousdevs_james_bot` → copy the token.
-2. Repeat for every member: Alex, Ethan, Daniel, Sofia, and so on.
-3. **James only:** `/setprivacy` → choose James's bot → **Disable**.
-   James is the one bot that reads the group. The others only post there and read their own DMs.
-4. Optional: `/setuserpic` to give each bot a face, and `/setdescription` to add its role.
-
-Why one bot per person: it feels like messaging a real teammate, and every reply shows who sent it.
-
-## 4. HQ group
-
-1. Create a Telegram group named **CuriousDevs HQ**.
-2. Add all the bots.
-3. Optional: make James an admin. He can then pin announcements.
-
-## 5. Run the wizard
+## 3. Run the wizard
 
 ```bash
 jm init
 ```
 
-It asks for the following, in order:
+| Step | You do | The wizard verifies |
+|---|---|---|
+| 1 Basics | company, your name, timezone, goals | |
+| 2 AI | provider, model, key | |
+| 3 Workspace | folder, or a git URL to clone | creates or clones the repo |
+| 4 Manager | name (default James), role, persona, **bot token** | the token works |
+| | press **Start** on the manager bot | **detects your Telegram id** (you confirm) |
+| | create a group, add the manager bot, send a message | **detects the group** (you confirm) |
+| | BotFather → `/setprivacy` → Disable, for the manager bot | the manager can read the group |
+| 5 Each member | name → role → **persona/SKILL.md path** → projects → **bot token** | the token works (a bad one is re-asked) |
+| | add the member's bot to the group | **bot is in the group** ✓ |
+| | press **Start** on the member's bot | **DM works** ✓: you get "✅ <name> here" |
+| | | the member posts "👋 joined the team" in the group |
+| 6 Monitoring | report time, work sessions, budget, coding tool | |
 
-1. The AI provider, model and key.
-2. The company, founder and goals.
-3. The team: how many members, then each one's name, role, projects and persona file. You can import `SKILL.md` files.
-4. The git workspace: a new repo, or a clone of an existing one. Optionally, each project's repo, which is needed for code tasks.
-5. The bot tokens.
-6. The report time, the budget, and the coding CLI (Claude Code, Codex, or none).
+If something isn't detected in time, you can keep waiting or skip it. `jm doctor --ping` shows what's still missing.
+Everything confirmed is saved as you go, so an interrupted setup loses nothing.
 
-Leave your user id and group id at 0 for now. You get them in the next step.
-
-## 6. Get your ids
+## 4. Go live
 
 ```bash
+jm doctor --ping     # model, tokens, each bot in the group, privacy mode, workspace
 jm run
 ```
 
-- DM any bot `/whoami` to get your user id. Put it in `config.yaml` → `owner.telegram_user_id`.
-- In the HQ group, send `/groupid` to James to get the group id. Put it in `telegram.group_chat_id`.
-- Restart `jm run`.
+In the group, type `/onboard`: the manager explains how the team works and everyone introduces themselves.
+Then assign the first work, e.g. `/assign riya "Rate limiting for the API" P1 due:+3d project:api`.
 
-Until your user id is set, the bots answer only `/whoami` and `/groupid`, so nobody else can control your team.
-
-## 7. Go live
-
-1. Press **Start** on every bot. Telegram doesn't let a bot DM you until you've done this.
-2. `jm doctor --ping` should show all ✅.
-3. In the group: `/onboard`. Everyone introduces themselves.
-4. In James's DM: `/assign alex "Runtime survey: build vs reuse" P0 due:10-03 project:ojas`.
-
-## 8. Keep it always on
+## 5. Keep it running
 
 ```bash
-sudo cp ../deploy/james-monitoring.service /etc/systemd/system/
+sudo cp /opt/james-monitoring/deploy/james-monitoring.service /etc/systemd/system/
+# edit User / paths in it, then:
 sudo systemctl daemon-reload && sudo systemctl enable --now james-monitoring
 journalctl -u james-monitoring -f
 ```
 
-Or use Docker: see `deploy/docker-compose.yml`.
+Or use Docker: `deploy/docker-compose.yml`.
 
-## 9. Back up the workspace
+## 6. Back up and share the workspace
 
-Set `workspace.push: true` and add a private GitHub remote to the workspace repo. After that, every task,
-memory, decision and report is pushed as soon as it changes.
+Give the workspace repo a private remote and set `workspace.push: true`. Every task, memory, deliverable,
+decision and report is then pushed as it happens. `git pull` it anywhere to read along.
 
-## Adding someone later
+## Changing the team later
 
 ```bash
-jm add-member Riya --role "QA lead" --projects janus --persona ~/skills/riya/SKILL.md --token 123:ABC
+jm add-member                 # verified flow for one new person
+jm remove-member <id>         # take someone off; their files stay in git history
 ```
 
-Add the new bot to the group, press Start on it, then restart.
+Restart `jm run` afterwards. Edit any persona directly in `team/<id>/persona.md`; changes apply on the next message.
+
+## Your open decisions
+
+Put anything waiting on you in `decisions/OPEN.md` as a numbered list. Every report shows it under
+"Needs <you>" until you remove the line (or strike it through with `~~…~~`).

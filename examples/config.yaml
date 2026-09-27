@@ -1,62 +1,55 @@
-# james-monitoring — example config (copy to ./config.yaml, or run `jm init`)
-# Secrets never go here: put them in .env next to this file.
+# james-monitoring — example config. `jm init` writes this for you (and verifies every Telegram link);
+# edit it by hand any time. Secrets never go here: they live in .env next to this file.
 
-company: CuriousDevs
-timezone: Asia/Kolkata
+company: Acme Robotics
+timezone: Europe/Madrid          # any IANA timezone
 
 owner:
-  name: Pankaj
-  telegram_user_id: 0          # send /whoami to any team bot to get it
-  extra_user_ids: []           # other humans allowed to command the team (optional)
+  name: Maria Lopez
+  telegram_user_id: 0            # jm init detects it; or DM any team bot /whoami
+  extra_user_ids: []             # other humans allowed to command the team (optional)
 
 llm:
-  provider: anthropic          # anthropic | openai  (openai = any OpenAI-compatible API)
-  model: ""                    # a current model id, e.g. from docs.claude.com / platform.openai.com
-  base_url: ""                 # e.g. http://localhost:11434/v1 for Ollama, https://openrouter.ai/api/v1
+  provider: anthropic            # anthropic | openai  (openai = any OpenAI-compatible API)
+  model: ""                      # a current model id from your provider
+  base_url: ""                   # e.g. http://localhost:11434/v1 (Ollama), https://openrouter.ai/api/v1
   api_key_env: ANTHROPIC_API_KEY
   max_tokens: 2000
 
 workspace:
-  path: ./team-workspace       # git repo holding tasks, memory, reports (created if missing)
-  push: false                  # true = git push after every change (set up the remote first)
+  path: ./team-workspace         # git repo holding personas, tasks, memory, docs, reports
+  push: false                    # true = git push after every change
 
 telegram:
-  group_chat_id: 0             # send /groupid inside the HQ group
-  quiet_hours: ["22:00", "08:00"]   # messages arrive silently, except incidents and 🔴 asks
-  api_base_url: ""             # blank = api.telegram.org; set only for a self-hosted Bot API server
+  group_chat_id: 0               # jm init detects it; or send /groupid in the group
+  quiet_hours: ["22:00", "08:00"]
+  api_base_url: ""               # blank = api.telegram.org
 
 monitor:
-  daily_report: "18:54"
+  daily_report: "18:30"
   check_every_minutes: 60
-  work_sessions: ["10:00", "15:00"]   # Mon–Sat: every member with open work moves their top task (costs tokens)
+  work_sessions: ["10:00", "15:00"]   # Mon–Sat: everyone with open work moves their top task
   stale_days: 7
   blocked_escalate_days: 2
   ask_default_hours: 24
 
 budget:
-  daily_tokens_per_agent: 300000   # 80% → warning, 100% → that agent pauses for the day
+  daily_tokens_per_agent: 300000
 
-executor:                      # optional: lets agents change code on a branch (owner approves the merge)
-  command: []                  # ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits"]
-                               # ["codex", "exec", "--full-auto", "{prompt}"]
+executor:                        # optional: agents change code on a branch; you approve the merge
+  command: []                    # ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits"]
+                                 # ["codex", "exec", "--full-auto", "{prompt}"]
   timeout_minutes: 30
 
 limits:
-  max_agent_hops: 4            # agent↔agent exchanges before a loop is stopped and escalated
+  max_agent_hops: 4
 
 projects:
-  ojas:  { repo: "", main_branch: main }
-  parth: { repo: "", main_branch: main }
-  janus: { repo: "", main_branch: main }
-  site:  { repo: "", main_branch: main }
+  api:  { repo: "", main_branch: main }
+  app:  { repo: "", main_branch: main }
 
-team:
-  - { id: james,    name: James,    role: "Delivery manager and chief of staff", monitor: true }
-  - { id: alex,     name: Alex,     role: "Co-founder, product lead — Ojas", projects: [ojas] }
-  - { id: ethan,    name: Ethan,    role: "Co-founder, product lead — Parth", projects: [parth] }
-  - { id: daniel,   name: Daniel,   role: "Co-founder, product lead — Janus", projects: [janus] }
-  - { id: mitchell, name: Mitchell, role: "R&D, market intelligence, grants" }
-  - { id: marcus,   name: Marcus,   role: "Backend and infrastructure lead", projects: [janus, ojas] }
-  - { id: sofia,    name: Sofia,    role: "Frontend lead", projects: [site, janus] }
-  - { id: nina,     name: Nina,     role: "Marketing lead" }
-# Each member's bot token goes in .env as TG_TOKEN_<ID>, e.g. TG_TOKEN_SOFIA=123456:ABC...
+team:                            # any names, any number of people; exactly one has monitor: true
+  - { id: james, name: James, role: "Delivery manager and chief of staff", monitor: true }
+  - { id: riya,  name: Riya,  role: "Backend lead", projects: [api] }
+  - { id: omar,  name: Omar,  role: "Product designer", projects: [app] }
+# Bot tokens go in .env as TG_TOKEN_<ID>: TG_TOKEN_JAMES=..., TG_TOKEN_RIYA=..., TG_TOKEN_OMAR=...
