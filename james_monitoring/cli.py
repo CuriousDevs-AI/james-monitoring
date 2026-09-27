@@ -151,9 +151,14 @@ def cmd_doctor(args) -> None:
 
     print(f"james-monitoring {__version__} — {cfg.path}")
     print("AI")
-    check(bool(cfg.llm.model), f"model: {cfg.llm.provider}/{cfg.llm.model}", "llm.model is empty")
-    check(bool(cfg.llm.api_key) or cfg.llm.provider in ("fake",) or bool(cfg.llm.base_url),
-          f"API key present ({cfg.llm.api_key_env})", f"{cfg.llm.api_key_env} not set in .env")
+    if cfg.llm.provider in ("claude-code", "claude_code", "claude-cli", "subscription"):
+        check(shutil.which("claude") is not None, "claude CLI installed (uses your subscription login)",
+              "`claude` CLI not found — npm install -g @anthropic-ai/claude-code, then run `claude` and /login")
+        print(f"  ·  model: {cfg.llm.model or 'CLI default'}")
+    else:
+        check(bool(cfg.llm.model), f"model: {cfg.llm.provider}/{cfg.llm.model}", "llm.model is empty")
+        check(bool(cfg.llm.api_key) or cfg.llm.provider in ("fake",) or bool(cfg.llm.base_url),
+              f"API key present ({cfg.llm.api_key_env})", f"{cfg.llm.api_key_env} not set in .env")
     if args.ping:
         from .llm import LLMError, make_llm
         try:

@@ -1,7 +1,8 @@
 # Setup guide
 
 About 15 minutes for a team of 3–5 people. You need: a machine that stays on (a small VPS, or your laptop to
-try it out), Python 3.10+, git, a Telegram account, and a model API key (or Ollama).
+try it out), Python 3.10+, git, a Telegram account, and a model: **a Claude Pro/Max subscription**
+(install the CLI with `npm install -g @anthropic-ai/claude-code`, run `claude` once and `/login`), an API key, or Ollama.
 
 ## 1. Install
 
@@ -27,7 +28,7 @@ jm init
 | Step | You do | The wizard verifies |
 |---|---|---|
 | 1 Basics | company, your name, timezone, goals | |
-| 2 AI | provider, model, key | |
+| 2 AI | `claude-code` (subscription) or an API provider, model, key | the `claude` CLI is installed |
 | 3 Workspace | folder, or a git URL to clone | creates or clones the repo |
 | 4 Manager | name (default James), role, persona, **bot token** | the token works |
 | | press **Start** on the manager bot | **detects your Telegram id** (you confirm) |

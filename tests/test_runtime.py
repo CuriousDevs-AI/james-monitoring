@@ -96,3 +96,12 @@ async def test_monitor_context_has_board(rt):
     system = rt.llm.calls[-1][0]
     assert "## Board (all tasks)" in system and "ICP shortlist" in system
     assert "run_code" not in system                          # James coordinates, doesn't code
+
+
+async def test_agent_can_add_done_means_then_start(rt):
+    t = rt.tasks.create(title="Design note", owner="sofia", created_by="pankaj")
+    rt.llm.push({"reply": "Starting.", "actions": [{"type": "update_task", "id": t.id,
+                 "done_means": ["note in docs/", "3 options compared"], "status": "doing"}]})
+    out = await rt.dispatch("sofia", Event("dm", "start it", sender="pankaj"))
+    assert "⚠️" not in out and rt.tasks.get(t.id).status == "doing"
+    assert "- [ ] 3 options compared" in rt.tasks.get(t.id).doc.sections["Done means"]

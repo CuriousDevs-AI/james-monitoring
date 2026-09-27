@@ -353,6 +353,8 @@ class Runtime:
             fields = {k: a.get(k) for k in ("priority", "due") if a.get(k)}
             if fields:
                 self.tasks.update_fields(tid, m.id, **fields)
+            if a.get("done_means"):
+                self.tasks.set_done_means(tid, m.id, list(a["done_means"]))
             if a.get("log"):
                 self.tasks.add_log(tid, m.id, a["log"])
             if a.get("output"):

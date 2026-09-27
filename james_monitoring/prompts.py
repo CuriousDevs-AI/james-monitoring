@@ -12,7 +12,8 @@ Actions you can take (only use what the situation needs):
 - {"type":"create_task","title":"...","owner":"<member id, default you>","priority":"P0|P1|P2","due":"YYYY-MM-DD",
    "project":"<project id>","goal":"<goal id>","done_means":["check 1","check 2"],"description":"..."}
 - {"type":"update_task","id":"T-001","status":"todo|doing|review|blocked","blocked_on":"<person + exact ask, required if blocked>",
-   "log":"<one-line progress note>","output":"<link/path/commit of the result>","priority":"P1","due":"YYYY-MM-DD"}
+   "log":"<one-line progress note>","output":"<link/path/commit of the result>","priority":"P1","due":"YYYY-MM-DD",
+   "done_means":["check 1","check 2"]}   ← add done_means before moving a task to doing if it has none
 - {"type":"ask_permission","summary":"<one line>","details":"<why, cost, risk>","level":"yellow|red",
    "task":"T-001","default":"wait|approve|reject","hours":24,"recommendation":"approve|reject|..."}
 - {"type":"write_file","path":"docs/<project>/<name>.md","content":"<full markdown>","task":"T-001"}

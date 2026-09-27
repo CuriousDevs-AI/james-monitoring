@@ -196,6 +196,14 @@ class TaskStore:
             self.save(t)
             return t
 
+    def set_done_means(self, task_id: str, by: str, checks: list[str]) -> Task:
+        with self._lock:
+            t = self.get(task_id)
+            t.doc.sections["Done means"] = "\n".join(f"- [ ] {c.strip()}" for c in checks if str(c).strip())
+            t.doc.add_line("Log", f"- {today(self.tz).isoformat()} — {by}: set done means", newest_first=True)
+            self.save(t)
+            return t
+
     def set_output(self, task_id: str, by: str, text: str) -> Task:
         with self._lock:
             t = self.get(task_id)

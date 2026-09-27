@@ -1,6 +1,7 @@
 """Model adapters. The team never depends on one vendor: swap `llm.provider` in config.yaml.
 
-    anthropic  -> Claude via the Anthropic API
+    anthropic  -> Claude via the Anthropic API (API key)
+    claude-code -> Claude via the Claude Code CLI — works with a Claude Pro/Max subscription, no API key
     openai     -> any OpenAI-compatible endpoint: OpenAI / Codex models, Ollama, OpenRouter, vLLM, LM Studio
     fake       -> deterministic replies for tests and dry runs
 """
@@ -43,7 +44,10 @@ def make_llm(cfg: LLMConfig) -> LLM:
     if p in ("openai", "codex", "ollama", "openrouter", "openai-compatible"):
         from .openai_llm import OpenAILLM
         return OpenAILLM(cfg)
+    if p in ("claude-code", "claude_code", "claude-cli", "subscription"):
+        from .claude_code_llm import ClaudeCodeLLM
+        return ClaudeCodeLLM(cfg)
     if p == "fake":
         from .fake import FakeLLM
         return FakeLLM()
-    raise LLMError(f"Unknown llm.provider `{cfg.provider}` (use anthropic | openai | fake)")
+    raise LLMError(f"Unknown llm.provider `{cfg.provider}` (use anthropic | claude-code | openai | fake)")

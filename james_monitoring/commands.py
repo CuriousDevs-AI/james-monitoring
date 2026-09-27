@@ -27,7 +27,8 @@ HELP = [
 
 
 async def ack_assignment(rt: Runtime, who: str, line: str) -> None:
-    reply = await rt.dispatch(who, Event("system", f"{rt.cfg.owner_name} assigned you: {line}. Acknowledge in one "
+    reply = await rt.dispatch(who, Event("system", f"{rt.cfg.owner_name} assigned you: {line}. If the task has no "
+                                                   f"'Done means', set 2–4 checks with update_task. Acknowledge in one "
                                                    f"line: what you'll do first and when.", sender="system"))
     await rt.bus.send_owner(who, reply)
 

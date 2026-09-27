@@ -311,12 +311,21 @@ async def wizard(base_dir: Path, io: IO | None = None, *, api_base: str = "", ti
     goals = [g.strip() for g in io.ask("  Top goals, separated by ';' (optional)", "").split(";") if g.strip()]
 
     io.say("\nStep 2/6 — AI model (switch any time in config.yaml)")
-    provider = io.ask("  Provider: anthropic | openai (any OpenAI-compatible: OpenAI, Codex, Ollama, OpenRouter)",
-                      "anthropic")
-    model = io.ask("  Model id", required=True)
-    base_url = io.ask("  API base URL (blank = provider default; Ollama: http://localhost:11434/v1)", "")
-    key_env = "ANTHROPIC_API_KEY" if provider.startswith(("anthropic", "claude")) else "OPENAI_API_KEY"
-    api_key = io.ask(f"  API key (stored in .env as {key_env}; blank = set later)", "", secret=True)
+    io.say("  claude-code = your Claude Pro/Max subscription via the `claude` CLI (no API key)\n"
+           "  anthropic   = Anthropic API key · openai = any OpenAI-compatible API (OpenAI, Codex, Ollama, OpenRouter)")
+    provider = io.ask("  Provider: claude-code | anthropic | openai", "claude-code")
+    if provider == "claude-code":
+        model = io.ask("  Model (blank = the CLI's default, e.g. sonnet / opus)", "")
+        base_url, key_env, api_key = "", "", ""
+        import shutil
+        if not shutil.which("claude"):
+            io.say("  ⚠️ `claude` CLI not found on this machine. Install: npm install -g @anthropic-ai/claude-code,\n"
+                   "     then run `claude` once and /login with your subscription.")
+    else:
+        model = io.ask("  Model id", required=True)
+        base_url = io.ask("  API base URL (blank = provider default; Ollama: http://localhost:11434/v1)", "")
+        key_env = "ANTHROPIC_API_KEY" if provider.startswith("anthropic") else "OPENAI_API_KEY"
+        api_key = io.ask(f"  API key (stored in .env as {key_env}; blank = set later)", "", secret=True)
 
     io.say("\nStep 3/6 — Git workspace (tasks, personas, memory, reports live here)")
     ws = io.ask("  Workspace folder", str(base_dir / "team-workspace"))

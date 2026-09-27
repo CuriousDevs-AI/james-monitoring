@@ -6,7 +6,7 @@ Run a team of AI agents the way you'd run a real team. Any founder, any startup,
 - **A 1:1 chat with each team member.** You give instructions and corrections there, and they ask your permission there.
 - **A manager (James by default, any name you like)** who watches the board, chases blockers and reports to you daily.
 - **Everything lives in git:** personas, tasks, memory, deliverables, decisions, reports.
-- **Any model:** Claude, GPT/Codex, or a local model through Ollama. Switching is one line of config, and the team stays the same.
+- **Any model:** your **Claude Pro/Max subscription** (through the `claude` CLI, with no API key), the Claude API, GPT/Codex, or a local model through Ollama. Switching is one line of config, and the team stays the same.
 
 ```
 You (Telegram)
@@ -22,7 +22,7 @@ You (Telegram)
  ├── permissions .... 🟢 do · 🟡 do & tell · 🔴 ask first (buttons, deadline, default)
  ├── work sessions .. scheduled: everyone moves their top task and saves real output to docs/
  ├── manager ........ hourly checks · alerts · daily report (built from files, not by a model)
- └── model adapter .. anthropic | any OpenAI-compatible API
+ └── model adapter .. claude-code (subscription) | anthropic | any OpenAI-compatible API
         │
         ▼
  git workspace: team/charter.md · team/<id>/{persona,memory,log}.md · tasks/ · asks/ · docs/ · decisions/ · reports/
@@ -116,6 +116,7 @@ jm status && jm report && jm work
 ## Switching models
 
 ```yaml
+llm: { provider: claude-code, model: sonnet }        # your Claude subscription via the `claude` CLI, no API key
 llm: { provider: anthropic, model: <claude model id>, api_key_env: ANTHROPIC_API_KEY }
 llm: { provider: openai,    model: <gpt/codex model id>, api_key_env: OPENAI_API_KEY }
 llm: { provider: openai,    model: llama3.1, base_url: http://localhost:11434/v1, api_key_env: "" }   # Ollama

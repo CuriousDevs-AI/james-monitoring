@@ -169,6 +169,8 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
     llm = raw.get("llm") or {}
     provider = str(llm.get("provider") or "anthropic")
     default_key_env = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(provider, "")
+    if provider in ("claude-code", "claude_code", "claude-cli", "subscription", "fake"):
+        default_key_env = ""
     qh = _get(raw, "telegram.quiet_hours")
     ws = Path(str(_get(raw, "workspace.path", "./team-workspace"))).expanduser()
     if not ws.is_absolute():
@@ -189,7 +191,8 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
             provider=provider,
             model=str(llm.get("model") or ""),
             base_url=str(llm.get("base_url") or ""),
-            api_key_env=str(llm.get("api_key_env") or default_key_env),
+            api_key_env=(str(llm.get("api_key_env") or "") if ("api_key_env" in llm and default_key_env)
+                         else default_key_env),
             max_tokens=int(llm.get("max_tokens") or 2000),
             temperature=float(llm.get("temperature", 0.3)),
         ),

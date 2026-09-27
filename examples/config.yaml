@@ -10,7 +10,7 @@ owner:
   extra_user_ids: []             # other humans allowed to command the team (optional)
 
 llm:
-  provider: anthropic            # anthropic | openai  (openai = any OpenAI-compatible API)
+  provider: anthropic            # claude-code (Claude subscription via the `claude` CLI) | anthropic | openai
   model: ""                      # a current model id from your provider
   base_url: ""                   # e.g. http://localhost:11434/v1 (Ollama), https://openrouter.ai/api/v1
   api_key_env: ANTHROPIC_API_KEY
