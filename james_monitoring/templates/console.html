@@ -4,90 +4,181 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Console · james-monitoring</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--ink:#16181d;--muted:#5d6573;--line:#e3e6eb;--accent:#2f5bea;--accent-ink:#fff;
---ok:#1a7f4b;--ok-bg:#e5f5ec;--warn:#9a5b00;--warn-bg:#fdf2dc;--bad:#b42318;--bad-bg:#fde8e6;--chip:#eef0f4;--sel:#eef3ff;
---me:#2f5bea;--me-ink:#fff}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a21;--ink:#e8eaef;--muted:#9aa3b2;--line:#272b35;
---accent:#6c8cff;--accent-ink:#0f1115;--ok:#5fd39a;--ok-bg:#12301f;--warn:#f0b95a;--warn-bg:#33270f;--bad:#ff8a80;
---bad-bg:#3a1614;--chip:#222733;--sel:#1a2140;--me:#3a5bd9;--me-ink:#fff}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:14.5px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif}
-header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line)}
-.bar{max-width:1240px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-.brand{font-weight:700;font-size:16px;margin-right:8px}
-nav{display:flex;gap:2px;flex-wrap:wrap}
-nav a{padding:6px 10px;border-radius:8px;color:var(--muted);text-decoration:none;cursor:pointer;position:relative}
-nav a.on{background:var(--sel);color:var(--ink);font-weight:600}
-.badge{background:var(--bad);color:#fff;border-radius:999px;font-size:11px;padding:0 6px;margin-left:4px}
-.spacer{flex:1}
-main{max-width:1240px;margin:0 auto;padding:20px 16px 60px}
-h1{font-size:20px;margin:0 0 4px} h2{font-size:15px;margin:22px 0 10px} h3{margin:0;font-size:15px}
-.muted{color:var(--muted)} .small{font-size:12.5px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
-.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
-.kpis{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
-.kpi .n{font-size:26px;font-weight:700} .kpi .l{color:var(--muted);font-size:13px}
-.cols{display:grid;gap:14px;grid-template-columns:1.2fr 1fr} @media(max-width:900px){.cols{grid-template-columns:1fr}}
-.chip{display:inline-block;background:var(--chip);border-radius:999px;padding:2px 9px;font-size:12.5px;color:var(--muted);margin:1px 2px 1px 0}
-.ok{background:var(--ok-bg);color:var(--ok)} .warn{background:var(--warn-bg);color:var(--warn)} .bad{background:var(--bad-bg);color:var(--bad)}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.list{display:grid;gap:8px} .item{padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
-button{font:inherit;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:6px 12px;cursor:pointer}
-button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
-button.danger{color:var(--bad)} button.sm{padding:3px 9px;font-size:13px} button:disabled{opacity:.5;cursor:not-allowed}
-input,select,textarea{font:inherit;width:100%;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
-textarea{min-height:90px;resize:vertical} label{font-size:12px;color:var(--muted);display:block;margin:8px 0 3px}
-.two{display:grid;grid-template-columns:1fr 1fr;gap:10px} .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+/* Design system: same tokens as Janus — light, technical, warm neutrals, blue accent, square corners */
+:root{
+  --background:#ffffff;--surface:#ffffff;--surface-2:#f7f5f1;--surface-3:#efebe3;--foreground:#0a1424;--muted:#647085;
+  --border:#e8e1d8;--border-strong:#d7cdbe;--accent:#2563eb;--accent-fg:#ffffff;--accent-muted:rgba(37,99,235,.08);
+  --accent-border:rgba(37,99,235,.35);--success:#16a34a;--success-muted:rgba(22,163,74,.1);--warning:#d97706;
+  --warning-muted:rgba(217,119,6,.1);--danger:#dc2626;--danger-muted:rgba(220,38,38,.1);--info:#7c3aed;--info-muted:rgba(124,58,237,.1);
+  --ring:rgba(37,99,235,.35);--font:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box;border-color:var(--border)}
+html{color-scheme:light}
+body{margin:0;background:var(--background);color:var(--foreground);font:13px/1.5 var(--font);-webkit-font-smoothing:antialiased;font-feature-settings:"cv02","cv03","cv04","cv11"}
+::selection{background:var(--accent-muted)}
+*{scrollbar-width:thin;scrollbar-color:var(--border-strong) transparent}
+a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.bg-grid{background-image:linear-gradient(rgba(10,20,36,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(10,20,36,.045) 1px,transparent 1px);background-size:34px 34px}
+svg.i{width:14px;height:14px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+svg.i.lg{width:18px;height:18px}
+@keyframes fade{from{opacity:0}to{opacity:1}} @keyframes slide{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes sheet{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}} @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
+
+/* shell */
+.shell{display:flex;min-height:100vh}
+aside{width:248px;flex:none;border-right:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;height:100vh;position:sticky;top:0}
+.brand{height:56px;display:flex;align-items:center;gap:9px;padding:0 16px;border-bottom:1px solid var(--border)}
+.logo{width:24px;height:24px;background:var(--foreground);color:var(--background);display:grid;place-items:center;font-weight:700;font-size:12px}
+.brand b{font-size:13px;display:block;line-height:1.1} .brand small{font-size:10px;color:var(--muted)}
+.navsec{padding:12px 12px 0} .navsec p{margin:0 0 4px;padding:0 8px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:rgba(100,112,133,.75)}
+.navitem{display:flex;align-items:center;gap:10px;padding:6px 8px;font-size:13px;color:var(--muted);cursor:pointer;user-select:none}
+.navitem:hover{background:var(--surface-2);color:var(--foreground)} .navitem.on{background:var(--accent-muted);color:var(--foreground)} .navitem.on svg{color:var(--accent)}
+.navitem .count{margin-left:auto}
+.side-foot{margin-top:auto;border-top:1px solid var(--border);padding:12px;display:flex;align-items:center;gap:8px}
+.side-foot .who{font-size:12px;font-weight:500;line-height:1.1} .side-foot .sub{font-size:10px;color:var(--muted)}
+.content{flex:1;min-width:0;display:flex;flex-direction:column}
+.topbar{height:56px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;padding:0 20px;position:sticky;top:0;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);z-index:10}
+.crumb{display:flex;gap:6px;align-items:center;font-size:13px;min-width:0} .crumb span{color:var(--muted)} .crumb b{font-weight:500}
+.search{display:flex;align-items:center;gap:8px;border:1px solid var(--border);background:var(--surface-2);padding:6px 10px;color:var(--muted);font-size:12px;cursor:pointer;min-width:220px}
+.search:hover{border-color:var(--border-strong);color:var(--foreground)} .kbd{margin-left:auto;border:1px solid var(--border);padding:0 4px;font-size:10px;font-family:var(--mono)}
+.menu-btn{display:none}
+main{padding:20px 24px 60px;animation:fade .15s ease-out}
+.navscroll{flex:1;overflow:auto;padding-bottom:12px} .navadd{cursor:pointer;display:inline-grid;place-items:center;width:18px;height:18px;color:var(--muted)} .navadd:hover{background:var(--surface-3);color:var(--foreground)}
+.ellip{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pmark{display:inline-grid;place-items:center;width:28px;height:28px;flex:none;color:#fff;font-weight:600;font-size:11px;line-height:1} .pmark.xs{width:16px;height:16px;font-size:8px} .pmark.sm2{width:28px;height:28px}
+.pmark.lg{width:44px;height:44px;font-size:15px}
+.pile{display:inline-flex;align-items:center;padding-left:6px} .pile .av{margin-left:-4px;box-shadow:0 0 0 2px var(--surface)} .pile .more{background:var(--surface-3);color:var(--muted)}
+.progress{flex:1;height:6px;background:var(--surface-3);min-width:60px} .progress>div{height:6px;transition:width .3s}
+.clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pcard{cursor:pointer;transition:border-color .12s,box-shadow .12s;display:flex;flex-direction:column} .pcard:hover{border-color:var(--border-strong);box-shadow:0 6px 20px -12px rgba(10,20,36,.25)} .pcard .card-b{flex:1}
+.card-f{display:flex;align-items:center;gap:4px;padding:6px 8px;border-top:1px solid var(--border);background:var(--surface-2)}
+.phead{margin:-4px 0 18px} .phead h1{font-size:22px;margin:0;letter-spacing:-.01em}
+.pmeta{display:flex;flex-wrap:wrap;gap:28px;align-items:flex-end;margin:16px 0 0;padding:12px 16px;border:1px solid var(--border);background:var(--surface)}
+.pmeta>div{display:flex;flex-direction:column;gap:6px;font-size:13px} .pmeta .l{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-top:16px;overflow-x:auto}
+.tab{display:flex;align-items:center;gap:7px;padding:9px 14px;font-size:13px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+.tab:hover{color:var(--foreground)} .tab.on{color:var(--foreground);border-bottom-color:var(--accent);font-weight:500} .tab.on svg{color:var(--accent)} .tab .n{font-size:10.5px;background:var(--surface-3);padding:0 5px;color:var(--muted)}
+.pchat .conv{border:1px solid var(--border);height:calc(100vh - 330px);min-height:420px}
+.rooms-h{padding:12px 12px 6px;font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:rgba(100,112,133,.8);border-bottom:1px solid var(--border);background:var(--surface-2)}
+.chipsel{display:flex;flex-wrap:wrap;gap:6px} .chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 4px;border:1px solid var(--border);cursor:pointer;font-size:12.5px;background:var(--surface);user-select:none}
+.chip:hover{border-color:var(--border-strong)} .chip.on{border-color:var(--accent);background:var(--accent-muted)} .chip.on::after{content:"✓";color:var(--accent);font-size:11px}
+@media(max-width:860px){aside{position:fixed;left:-260px;z-index:40;transition:left .15s} aside.open{left:0;box-shadow:0 0 30px rgba(10,20,36,.12)} .pmeta{gap:16px}
+  .menu-btn{display:inline-flex} .search{min-width:0} .search .label,.search .kbd{display:none} main{padding:16px}
+  .topbar{padding:0 12px;gap:6px} .hide-sm,.crumb .co{display:none!important} .topbar .btn .lbl{display:none}
+  body.nav-open::after{content:"";position:fixed;inset:0;background:rgba(10,20,36,.25);z-index:35}}
+
+/* page header */
+.ph{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap}
+.ph h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em} .ph p{margin:3px 0 0;font-size:13px;color:var(--muted)}
+.ph .actions{display:flex;gap:8px;flex-wrap:wrap}
+h2.sec{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 8px;display:flex;align-items:center;gap:6px}
+
+/* primitives */
+.card{border:1px solid var(--border);background:var(--surface)} .card-h{padding:10px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.card-h h3{margin:0;font-size:13px;font-weight:600} .card-b{padding:12px 14px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;font:500 13px var(--font);border:1px solid transparent;cursor:pointer;white-space:nowrap;transition:background .12s,border-color .12s;color:var(--foreground);background:transparent}
+.btn:focus-visible,input:focus,select:focus,textarea:focus{outline:none;box-shadow:0 0 0 2px var(--ring)}
+.btn.primary{background:var(--accent);color:var(--accent-fg)} .btn.primary:hover{background:#1d4fd8}
+.btn.secondary{background:var(--surface-3);border-color:var(--border)} .btn.secondary:hover{border-color:var(--border-strong)}
+.btn.outline{border-color:var(--border)} .btn.outline:hover{background:var(--surface-2)}
+.btn.ghost:hover{background:var(--surface-2)} .btn.danger{background:var(--danger-muted);color:var(--danger);border-color:rgba(220,38,38,.3)}
+.btn.success{background:var(--success-muted);color:var(--success);border-color:rgba(22,163,74,.3)}
+.btn.sm{height:28px;padding:0 10px;font-size:12px} .btn.icon{width:32px;padding:0} .btn:disabled{opacity:.4;pointer-events:none}
+.badge{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--border);background:var(--surface-3);color:var(--muted);padding:2px 6px;font-size:11px;font-weight:500;line-height:1.2;white-space:nowrap}
+.badge.accent{background:var(--accent-muted);color:var(--accent);border-color:var(--accent-border)}
+.badge.success{background:var(--success-muted);color:var(--success);border-color:rgba(22,163,74,.3)}
+.badge.warning{background:var(--warning-muted);color:var(--warning);border-color:rgba(217,119,6,.3)}
+.badge.danger{background:var(--danger-muted);color:var(--danger);border-color:rgba(220,38,38,.3)}
+.badge.info{background:var(--info-muted);color:var(--info);border-color:rgba(124,58,237,.3)}
+.badge.outline{background:transparent;color:var(--foreground)}
+.av{display:inline-grid;place-items:center;width:28px;height:28px;flex:none;color:#fff;font-size:11px;font-weight:600;border-radius:50%}
+.av.sm{width:22px;height:22px;font-size:9.5px} .av.lg{width:40px;height:40px;font-size:14px}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap} .grow{flex:1} .muted{color:var(--muted)} .small{font-size:12px} .xs{font-size:11px}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(270px,1fr))}
+.metrics{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:18px}
+.metric{border:1px solid var(--border);background:var(--surface);padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+.metric .l{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)} .metric .v{font:600 22px/1 var(--mono)}
+.cols{display:grid;gap:16px;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)} @media(max-width:1000px){.cols{grid-template-columns:1fr}}
+.list>*+*{border-top:1px solid var(--border)}
+.li{display:flex;gap:10px;align-items:flex-start;padding:10px 14px} .li.click{cursor:pointer} .li.click:hover{background:var(--surface-2)}
+.li .t{font-weight:500} .ico{width:28px;height:28px;display:grid;place-items:center;flex:none;border:1px solid var(--border);background:var(--surface-2)}
+.ico.danger{color:var(--danger);background:var(--danger-muted);border-color:rgba(220,38,38,.25)} .ico.warning{color:var(--warning);background:var(--warning-muted);border-color:rgba(217,119,6,.25)}
+.ico.accent{color:var(--accent);background:var(--accent-muted);border-color:var(--accent-border)} .ico.success{color:var(--success);background:var(--success-muted);border-color:rgba(22,163,74,.25)}
+.empty{border:1px dashed var(--border);display:flex;flex-direction:column;align-items:center;gap:8px;padding:34px 16px;text-align:center}
+.empty .ico{width:40px;height:40px;border-radius:50%} .empty b{font-weight:500} .empty p{margin:0;max-width:360px;font-size:12px;color:var(--muted)}
+label.f{display:block;font-size:11px;font-weight:500;color:var(--muted);margin:10px 0 4px}
+input,select,textarea{width:100%;font:13px var(--font);padding:7px 10px;border:1px solid var(--border);background:var(--background);color:var(--foreground)}
+textarea{min-height:84px;resize:vertical} input[type=checkbox]{width:auto}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px} .three{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 @media(max-width:620px){.two,.three{grid-template-columns:1fr}}
-.dot{width:9px;height:9px;border-radius:50%;display:inline-block;background:var(--muted)}
-.dot.on-track{background:var(--ok)}.dot.at-risk{background:var(--warn)}.dot.blocked{background:var(--bad)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--border-strong);display:inline-block;flex:none}
+.dot.on-track{background:var(--success)}.dot.at-risk{background:var(--warning)}.dot.blocked{background:var(--danger)}.dot.not-started{background:var(--border-strong)}
+.err{color:var(--danger);font-size:12px} pre{white-space:pre-wrap;background:var(--surface-2);border:1px solid var(--border);padding:10px;font:12px/1.5 var(--mono);margin:0}
+.md{font-size:13px} .md h2,.md h3,.md h4{margin:14px 0 6px;font-size:13px} .md h2{font-size:15px} .md p{margin:4px 0} .md ul{margin:4px 0 6px 18px;padding:0} .md code{font-family:var(--mono);background:var(--surface-2);padding:0 4px}
+.dots span{animation:blink 1.2s infinite both;display:inline-block} .dots span:nth-child(2){animation-delay:.2s} .dots span:nth-child(3){animation-delay:.4s}
+
 /* chat */
-.chat{display:grid;grid-template-columns:240px 1fr;gap:12px;height:calc(100vh - 140px);min-height:420px}
-@media(max-width:760px){.chat{grid-template-columns:1fr;height:auto}}
-.rooms{overflow:auto} .room{padding:9px 10px;border-radius:9px;cursor:pointer;display:flex;gap:8px;align-items:center}
-.room.on{background:var(--sel)} .room .r{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.conv{display:flex;flex-direction:column;min-height:420px}
-.msgs{flex:1;overflow:auto;padding:6px 4px;display:flex;flex-direction:column;gap:8px}
-.msg{max-width:78%;padding:8px 12px;border-radius:12px;background:var(--card);border:1px solid var(--line);white-space:pre-wrap;word-wrap:break-word}
-.msg.me{align-self:flex-end;background:var(--me);color:var(--me-ink);border-color:var(--me)}
-.msg.system{align-self:center;background:var(--chip);border:none;font-size:13px;max-width:92%}
-.msg.notice{border-color:var(--warn)} .msg.ask{border:2px solid var(--bad)}
-.msg .who{font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:2px} .msg.me .who{color:#dfe6ff}
-.compose{display:flex;gap:8px;margin-top:8px} .compose textarea{min-height:44px;height:44px}
+.chat{display:grid;grid-template-columns:268px 1fr;height:calc(100vh - 96px);border:1px solid var(--border)}
+@media(max-width:860px){.chat{grid-template-columns:1fr;height:auto} .chat .rooms{max-height:230px;border-right:none;border-bottom:1px solid var(--border)} .conv-h .pile,.conv-h .xs{display:none} .conv-h b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block} .conv-h .btn{padding:4px 8px}}
+.rooms{border-right:1px solid var(--border);overflow:auto;background:var(--surface)}
+.room{display:flex;gap:10px;padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border)} .room:hover{background:var(--surface-2)} .room.on{background:var(--accent-muted);box-shadow:inset 2px 0 0 var(--accent)}
+.room .n{font-weight:500} .room .p{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+.conv{display:flex;flex-direction:column;min-height:460px;background:var(--surface-2)}
+.conv-h{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid var(--border);background:var(--surface)}
+.msgs{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+.msg{display:flex;gap:8px;max-width:78%;animation:slide .18s cubic-bezier(.16,1,.3,1)} .msg.me{align-self:flex-end;flex-direction:row-reverse}
+.bubble{border:1px solid var(--border);background:var(--surface);padding:8px 12px;white-space:pre-wrap;word-wrap:break-word}
+.msg.me .bubble{background:var(--accent);border-color:var(--accent);color:#fff}
+.msg .meta{font-size:10.5px;color:var(--muted);margin-bottom:3px} .msg.me .meta{text-align:right}
+.msg.system{align-self:center;max-width:92%} .msg.system .bubble{background:var(--surface-3);font-family:var(--mono);font-size:12px}
+.msg.ask .bubble{border:1px solid rgba(220,38,38,.45);box-shadow:inset 3px 0 0 var(--danger)} .msg.notice .bubble{box-shadow:inset 3px 0 0 var(--warning)}
+.composer{border-top:1px solid var(--border);background:var(--surface);padding:10px 12px}
+.composer .box{display:flex;gap:8px;align-items:flex-end} .composer textarea{min-height:40px;height:40px;resize:none}
+.chips{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap} .chips .badge{cursor:pointer} .badge.click{cursor:pointer} .badge.click:hover{border-color:var(--accent);color:var(--accent)} .chips .badge:hover{border-color:var(--accent-border);color:var(--accent)}
+
 /* board */
-.board{display:grid;grid-template-columns:repeat(5,minmax(200px,1fr));gap:10px;overflow-x:auto}
-.col{background:var(--chip);border-radius:12px;padding:8px;min-height:120px}
-.col h4{margin:4px 6px 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-.task{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 10px;margin-bottom:8px;cursor:pointer}
-.task:hover{border-color:var(--accent)} .task .t{font-weight:600;font-size:14px}
-.p0{color:var(--bad);font-weight:700} .p1{color:var(--warn);font-weight:700} .p2{color:var(--muted);font-weight:700}
-/* drawer */
-.drawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,100%);background:var(--card);border-left:1px solid var(--line);
-box-shadow:-10px 0 30px rgba(0,0,0,.12);padding:18px;overflow:auto;z-index:20;display:none}
-.drawer.open{display:block} .md h1,.md h2,.md h3{margin:14px 0 6px} .md p{margin:6px 0} .md ul{margin:4px 0 4px 18px;padding:0}
-.md code{background:var(--chip);padding:1px 5px;border-radius:5px} pre{white-space:pre-wrap;background:var(--chip);padding:10px;border-radius:8px;font-size:13px}
-.drop{border:2px dashed var(--line);border-radius:12px;padding:20px;text-align:center;background:var(--card)} .drop.over{border-color:var(--accent);background:var(--sel)}
-.steps{list-style:none;padding:0;margin:6px 0;display:grid;gap:4px;font-size:13.5px} .steps li{display:flex;gap:6px}
-.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:10px;z-index:30;display:none}
-.center{max-width:640px;margin:30px auto}
-.err{color:var(--bad);font-size:13px}
+.board{display:grid;grid-template-columns:repeat(5,minmax(220px,1fr));gap:10px;overflow-x:auto;padding-bottom:8px}
+.col{background:var(--surface-2);border:1px solid var(--border);min-height:200px;display:flex;flex-direction:column}
+.col.over{border-color:var(--accent);background:var(--accent-muted)}
+.col-h{padding:9px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.col-b{padding:8px;display:flex;flex-direction:column;gap:8px;flex:1}
+.tcard{background:var(--surface);border:1px solid var(--border);padding:10px;cursor:grab;animation:slide .18s} .tcard:hover{border-color:var(--border-strong)} .tcard.drag{opacity:.4}
+.tcard .ttl{font-weight:500;margin:5px 0 8px}
+
+/* sheet, palette, toasts */
+.scrim{position:fixed;inset:0;background:rgba(10,20,36,.25);z-index:30;display:none;animation:fade .15s} .scrim.open{display:block}
+.sheet{position:fixed;top:0;right:0;bottom:0;width:min(560px,100%);background:var(--surface);border-left:1px solid var(--border);z-index:31;display:none;flex-direction:column}
+.sheet.open{display:flex;animation:sheet .18s cubic-bezier(.16,1,.3,1)} .sheet-h{height:56px;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--border)}
+.sheet-b{padding:16px;overflow:auto;flex:1} .sheet-b h2.sec{margin-top:18px}
+.palette{position:fixed;top:12vh;left:50%;transform:translateX(-50%);width:min(620px,94vw);background:var(--surface);border:1px solid var(--border-strong);z-index:50;display:none;box-shadow:0 20px 60px rgba(10,20,36,.2)}
+.palette.open{display:block;animation:slide .15s} .palette input{border:none;border-bottom:1px solid var(--border);padding:14px 16px;font-size:14px}
+.palette input:focus{box-shadow:none} .pal-list{max-height:380px;overflow:auto;padding:6px 0}
+.pal-g{padding:6px 16px 2px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.pal-i{display:flex;align-items:center;gap:10px;padding:8px 16px;cursor:pointer} .pal-i.on{background:var(--accent-muted)} .pal-i .hint{margin-left:auto;font-size:11px;color:var(--muted)}
+.toasts{position:fixed;bottom:16px;right:16px;display:flex;flex-direction:column;gap:8px;z-index:60}
+.toast{background:var(--surface);border:1px solid var(--border-strong);padding:10px 14px;min-width:240px;box-shadow:0 8px 24px rgba(10,20,36,.12);animation:slide .18s;display:flex;gap:8px;align-items:center}
+.drop{border:1px dashed var(--border-strong);background:var(--surface-2);padding:24px;text-align:center} .drop.over{border-color:var(--accent);background:var(--accent-muted)}
+.steps{list-style:none;padding:0;margin:8px 0;display:grid;gap:4px} .steps li{display:flex;gap:6px;align-items:center;font-size:12.5px}
+.setup{min-height:100vh;display:flex;justify-content:center;padding:40px 16px}
+.setup-in{width:min(720px,100%)} .step-n{width:22px;height:22px;display:grid;place-items:center;background:var(--foreground);color:#fff;font:600 11px var(--mono)}
 </style>
 </head>
 <body>
-<header id="hdr" style="display:none"><div class="bar">
-  <span class="brand" id="brand">Company</span>
-  <nav id="nav"></nav><span class="spacer"></span>
-  <span id="tgchip"></span>
-  <button class="sm" id="pauseAll"></button>
-</div></header>
-<main id="main"></main>
-<div class="drawer" id="drawer"></div>
-<div class="toast" id="toast"></div>
+<div id="app"></div>
+<div class="scrim" id="scrim"></div>
+<div class="sheet" id="sheet"></div>
+<div class="palette" id="palette"></div>
+<div class="toasts" id="toasts"></div>
 
 <script>
+// ------------------------------------------------------------------ basics
 const KEY = new URLSearchParams(location.search).get("k") || "";
-let S = null, VIEW = "dashboard", ROOM = "team", LAST = {}, timers = [];
+let S = null, VIEW = "overview", ROOM = "", PROJECT = "", PTAB = "overview", timers = [], PENDING_ASKS = 0, FILTER = {project: "", owner: "", powner: ""};
 const $ = (s, r = document) => r.querySelector(s);
 async function api(path, body) {
   const opt = body === undefined ? {headers: {"X-JM-Key": KEY}}
@@ -106,13 +197,58 @@ function h(tag, attrs = {}, ...kids) {
   return e;
 }
 Element.prototype.put = function (...kids) { this.replaceChildren(...kids.flat(9).filter(k => k != null && k !== false)); return this; };
-const chip = (t, c = "") => h("span", {class: "chip " + c}, t);
-const toast = (t) => { const e = $("#toast"); e.textContent = t; e.style.display = "block"; clearTimeout(e._t); e._t = setTimeout(() => e.style.display = "none", 2600); };
+
+// Lucide icons (ISC licence), inlined so the console works offline.
+const ICON = {
+  hash: '<line x1="4" x2="20" y1="9" y2="9"/><line x1="4" x2="20" y1="15" y2="15"/><line x1="10" x2="8" y1="3" y2="21"/><line x1="16" x2="14" y1="3" y2="21"/>',
+  overview: '<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  board: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 7v7"/><path d="M12 7v4"/><path d="M16 7v9"/>',
+  projects: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  team: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  approvals: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  reports: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  settings: '<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>', plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>', send: '<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>',
+  pause: '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>', play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>', alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  zap: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
+  commit: '<circle cx="12" cy="12" r="3"/><line x1="3" x2="9" y1="12" y2="12"/><line x1="15" x2="21" y1="12" y2="12"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
+  inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  bot: '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>',
+  menu: '<line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/>',
+  arrow: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>', eye: '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+};
+const icon = (n, cls = "") => { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"); s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("class", "i " + cls); s.innerHTML = ICON[n] || ""; return s; };
+const badge = (t, tone = "") => h("span", {class: "badge " + tone}, t);
+const btn = (label, onclick, cls = "outline", ic) => h("button", {class: "btn " + cls, onclick}, ic ? icon(ic) : null, label);
+const COLORS = ["#2563eb", "#7c3aed", "#0891b2", "#16a34a", "#d97706", "#db2777", "#4f46e5", "#0d9488", "#b45309", "#475569"];
+const avColor = s => COLORS[[...String(s)].reduce((a, c) => a + c.charCodeAt(0), 0) % COLORS.length];
+const initials = n => String(n || "?").split(/\s+/).map(w => w[0]).join("").slice(0, 2).toUpperCase();
+const avatar = (name, size = "") => h("span", {class: "av " + size, style: `background:${avColor(name)}`}, initials(name));
+const nameOf = id => (S?.members || []).find(m => m.id === id)?.name || (id === S?.owner_key ? S.owner : id);
+const PROOM = "p-";
+const projOf = id => (S?.projects || []).find(p => p.id === id);
+const projMark = (p, size = "") => h("span", {class: "pmark " + size, style: `background:${avColor(p?.name || p?.id || "?")}`}, initials(p?.name || p?.id || "?"));
+const facepile = (ids, max = 5) => h("span", {class: "pile"}, (ids || []).slice(0, max).map(id => { const a = avatar(nameOf(id), "sm"); a.title = nameOf(id); return a; }),
+  (ids || []).length > max ? h("span", {class: "av sm more"}, "+" + ((ids || []).length - max)) : null);
+const roomInfo = id => { if (id === "team") return {kind: "team", name: "All hands", sub: "Whole company · announcements · @all status"};
+  if (id.startsWith(PROOM)) { const p = projOf(id.slice(PROOM.length)) || {id: id.slice(PROOM.length), name: id.slice(PROOM.length), members: []};
+    return {kind: "project", project: p, name: "# " + p.name, sub: `${p.members.length} ${p.members.length === 1 ? "person" : "people"} · project room`}; }
+  return {kind: "dm", name: nameOf(id), sub: (S.members.find(m => m.id === id) || {}).role || ""}; };
+const roomAvatar = (id, size = "") => { const r = roomInfo(id); return r.kind === "team" ? h("span", {class: "av " + size, style: "background:var(--foreground)"}, icon("team"))
+  : r.kind === "project" ? projMark(r.project, size || "sm2") : avatar(r.name, size); };
+const humanIds = s => String(s ?? "").replace(/\b[a-z][a-z0-9_]*\b/g, w => (S?.members || []).some(m => m.id === w) ? nameOf(w) : w);
+const personLine = l => { const m = /^(T-\d+) \[P\d\] (.+?) — \S+ — (\S+) — due (\S+)(?: date)?(.*)$/.exec(l || ""); return m ? `${m[1]} · ${m[2]} · ${m[3]}${m[4] !== "no" ? " · due " + m[4] : ""}${humanIds(m[5])}` : humanIds(l); };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 function md(src) {
-  const lines = String(src || "").split("\n"); let out = "", list = false;
-  const inl = s => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
-  for (const l of lines) {
+  let out = "", list = false; const inl = s => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  for (const l of String(src || "").split("\n")) {
     const m = l.match(/^(#{1,3})\s+(.*)/), li = l.match(/^\s*[-*]\s+(.*)/);
     if (li) { if (!list) { out += "<ul>"; list = true; } out += "<li>" + inl(li[1].replace(/^\[ \]\s*/, "☐ ").replace(/^\[x\]\s*/i, "☑ ")) + "</li>"; continue; }
     if (list) { out += "</ul>"; list = false; }
@@ -120,360 +256,583 @@ function md(src) {
   }
   return out + (list ? "</ul>" : "");
 }
-const nameOf = id => (S?.members || []).find(m => m.id === id)?.name || (id === S?.owner_key ? S.owner : id);
+function toast(text, tone = "success") {
+  const t = h("div", {class: "toast"}, h("span", {class: "ico " + tone, style: "width:22px;height:22px"}, icon(tone === "danger" ? "alert" : "check")), text);
+  $("#toasts").append(t); setTimeout(() => t.remove(), 3200);
+}
+const STATUS_TONE = {"on track": "success", "at risk": "warning", "blocked": "danger", "not started": ""};
+const PRI_TONE = {P0: "danger", P1: "warning", P2: ""};
+const TASK_TONE = {todo: "", doing: "accent", blocked: "danger", review: "warning", done: "success", cut: ""};
 const clearTimers = () => { timers.forEach(clearInterval); timers = []; };
-function openDrawer(...kids) { const d = $("#drawer"); d.put(h("div", {class: "row"}, h("span", {class: "spacer"}), h("button", {class: "sm", onclick: closeDrawer}, "Close")), ...kids); d.classList.add("open"); }
-function closeDrawer() { $("#drawer").classList.remove("open"); }
+const empty = (ic, title, text, action) => h("div", {class: "empty"}, h("div", {class: "ico"}, icon(ic, "lg")), h("b", {}, title), text ? h("p", {}, text) : null, action);
+const pageHeader = (title, desc, ...actions) => h("div", {class: "ph"}, h("div", {}, h("h1", {}, title), desc ? h("p", {}, desc) : null), h("div", {class: "actions"}, actions));
 
-// ---------------------------------------------------------------- boot
+// ------------------------------------------------------------------ sheet + palette
+function openSheet(title, ...kids) {
+  $("#sheet").put(h("div", {class: "sheet-h"}, h("b", {}, title), h("span", {class: "grow"}), h("button", {class: "btn ghost icon", onclick: closeSheet, title: "Close (Esc)"}, icon("x"))),
+    h("div", {class: "sheet-b"}, kids));
+  $("#sheet").classList.add("open"); $("#scrim").classList.add("open");
+}
+function closeSheet() { $("#sheet").classList.remove("open"); $("#scrim").classList.remove("open"); }
+$("#scrim").onclick = () => { closeSheet(); closePalette(); };
+
+async function openPalette() {
+  const pal = $("#palette"); const input = h("input", {placeholder: "Jump to a page, task, person or project… or run an action"}), list = h("div", {class: "pal-list"});
+  pal.put(input, list); pal.classList.add("open"); $("#scrim").classList.add("open"); input.focus();
+  const tasks = await api("/api/tasks").catch(() => []);
+  const items = [
+    ...NAV.flatMap(s => s.items).map(([v, t, ic]) => ({g: "Go to", label: t, ic, run: () => go(v)})),
+    {g: "Actions", label: "New task", ic: "plus", run: () => newTaskSheet()}, {g: "Actions", label: "Run a work session now", ic: "zap", run: runWork},
+    {g: "Actions", label: "Write the report now", ic: "reports", run: runReport}, {g: "Actions", label: "Add people", ic: "upload", run: () => go("team")},
+    ...S.members.map(m => ({g: "People", label: m.name, hint: m.role, av: m.name, run: () => { ROOM = m.id; go("chat"); }})),
+    ...S.projects.flatMap(p => [{g: "Projects", label: p.name, ic: "projects", hint: `${p.members.length} people · ${p.counts.open} open · ${p.status}`, run: () => openProject(p.id)},
+      {g: "Rooms", label: "# " + p.name, ic: "hash", hint: "project room", run: () => openProject(p.id, "chat")}]),
+    {g: "Actions", label: "New project", ic: "projects", run: () => projectSheet()},
+    ...tasks.map(t => ({g: "Tasks", label: `${t.id} · ${t.title}`, ic: "board", hint: `${nameOf(t.owner)} · ${t.status}`, run: () => taskSheet(t.id)}))];
+  let sel = 0, shown = [];
+  const draw = () => {
+    const q = input.value.toLowerCase().trim();
+    shown = items.filter(i => !q || (i.label + " " + (i.hint || "") + " " + i.g).toLowerCase().includes(q)).slice(0, 40);
+    sel = Math.min(sel, Math.max(0, shown.length - 1)); let g = "";
+    list.put(shown.length ? shown.flatMap((it, n) => { const hd = it.g !== g ? h("div", {class: "pal-g"}, (g = it.g)) : null;
+      return [hd, h("div", {class: "pal-i" + (n === sel ? " on" : ""), onclick: () => { closePalette(); it.run(); }, onmousemove: () => { if (sel !== n) { sel = n; draw(); } }},
+        it.av ? avatar(it.av, "sm") : icon(it.ic || "arrow"), h("span", {}, it.label), it.hint ? h("span", {class: "hint"}, it.hint) : null)]; })
+      : h("div", {class: "pal-i muted"}, "Nothing matches."));
+  };
+  input.oninput = () => { sel = 0; draw(); };
+  input.onkeydown = e => { if (e.key === "ArrowDown") { sel = Math.min(sel + 1, shown.length - 1); draw(); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { sel = Math.max(sel - 1, 0); draw(); e.preventDefault(); }
+    else if (e.key === "Enter" && shown[sel]) { closePalette(); shown[sel].run(); } else if (e.key === "Escape") closePalette(); };
+  draw();
+}
+function closePalette() { $("#palette").classList.remove("open"); if (!$("#sheet").classList.contains("open")) $("#scrim").classList.remove("open"); }
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); S && !S.setup_needed && openPalette(); }
+  else if (e.key === "Escape") { closePalette(); closeSheet(); }
+});
+
+// ------------------------------------------------------------------ shell
+const NAV = [
+  {title: "Workspace", items: [["overview", "Overview", "overview"], ["chat", "Chat", "chat"], ["board", "All tasks", "board"], ["projects", "Projects", "projects"]]},
+  {title: "Company", items: [["team", "People", "team"], ["approvals", "Approvals", "approvals"], ["reports", "Reports", "reports"]]},
+  {title: "System", items: [["settings", "Settings", "settings"]]}];
+const TITLES = {...Object.fromEntries(NAV.flatMap(s => s.items).map(([v, t]) => [v, t])), project: "Project"};
+
+document.addEventListener("click", e => { if (document.body.classList.contains("nav-open") && !e.target.closest("aside,.menu-btn")) { document.body.classList.remove("nav-open"); $("#side")?.classList.remove("open"); } });
 async function boot() {
-  if (!KEY) { $("#main").innerHTML = "<div class='center card'>Open the console with the link <code>jm run</code> printed (it includes a key).</div>"; return; }
+  if (!KEY) { $("#app").put(h("div", {class: "setup bg-grid"}, h("div", {class: "setup-in"}, h("div", {class: "card card-b"}, "Open the console with the link ", h("code", {class: "mono"}, "jm run"), " printed (it includes a key).")))); return; }
   S = await api("/api/state");
   if (S.setup_needed) return renderSetup();
-  $("#hdr").style.display = "block"; $("#brand").textContent = S.company;
-  const views = [["dashboard", "Dashboard"], ["chat", "Chat"], ["board", "Board"], ["projects", "Projects"], ["team", "Team"],
-                 ["approvals", "Approvals"], ["reports", "Reports"], ["settings", "Settings"]];
-  $("#nav").put(...views.map(([v, t]) => h("a", {class: VIEW === v ? "on" : "", onclick: () => go(v), "data-v": v}, t)));
-  $("#tgchip").put(S.telegram.connected ? chip("Telegram on", "ok") : chip("Telegram off", ""),
-    S.llm_error ? chip("Model problem: see Settings", "bad") : null);
-  const pb = $("#pauseAll"); pb.textContent = S.paused_all ? "▶ Resume team" : "⏸ Pause team";
-  pb.onclick = async () => { await api("/api/pause", {who: "all", pause: !S.paused_all}); toast(S.paused_all ? "Team resumed" : "Team paused"); refresh(); };
-  api("/api/asks").then(a => { const n = a.filter(x => x.status === "pending").length; const link = $('#nav a[data-v="approvals"]'); if (link && n) link.append(h("span", {class: "badge"}, n)); });
+  const asks = await api("/api/asks").catch(() => []); PENDING_ASKS = asks.filter(a => a.status === "pending").length;
+  const side = h("aside", {id: "side"},
+    h("div", {class: "brand"}, h("span", {class: "logo"}, initials(S.company)[0]), h("span", {}, h("b", {}, S.company), h("small", {}, "Team console"))),
+    h("div", {class: "navscroll"}, NAV.map((sec, i) => [h("div", {class: "navsec"}, h("p", {}, sec.title), sec.items.map(([v, t, ic]) => h("div", {class: "navitem" + (VIEW === v ? " on" : ""), onclick: () => go(v)},
+      icon(ic), t, v === "approvals" && PENDING_ASKS ? h("span", {class: "count"}, badge(PENDING_ASKS, "danger")) : null))),
+      i === 0 ? h("div", {class: "navsec"}, h("p", {class: "row", style: "justify-content:space-between"}, "Your projects", h("span", {class: "navadd", title: "New project", onclick: () => projectSheet()}, icon("plus"))),
+        S.projects.filter(p => p.status !== "done").map(p => h("div", {class: "navitem" + (VIEW === "project" && PROJECT === p.id ? " on" : ""), onclick: () => openProject(p.id, VIEW === "project" ? PTAB : "overview")},
+          projMark(p, "xs"), h("span", {class: "ellip"}, p.name), p.counts.blocked ? h("span", {class: "count"}, badge(p.counts.blocked, "danger")) : p.counts.open ? h("span", {class: "count mono xs muted"}, p.counts.open) : null)),
+        S.projects.length ? null : h("div", {class: "navitem", onclick: () => projectSheet()}, icon("plus"), "New project")) : null])),
+    h("div", {class: "side-foot"}, avatar(S.owner, "sm"), h("div", {}, h("div", {class: "who"}, S.owner), h("div", {class: "sub"}, "Founder · " + S.members.length + " people"))));
+  const top = h("div", {class: "topbar"},
+    h("button", {class: "btn ghost icon menu-btn", onclick: () => document.body.classList.toggle("nav-open", $("#side").classList.toggle("open"))}, icon("menu")),
+    h("div", {class: "crumb"}, h("span", {class: "co"}, S.company), h("span", {class: "co"}, "/"), VIEW === "project" ? [h("a", {class: "co", href: "#", onclick: e => { e.preventDefault(); go("projects"); }}, "Projects"), h("span", {class: "co"}, "/"), h("b", {}, projOf(PROJECT)?.name || PROJECT)] : h("b", {}, TITLES[VIEW] || "")),
+    S.paused_all ? badge("PAUSED", "warning") : null, h("span", {class: "grow"}),
+    h("div", {class: "search", onclick: openPalette}, icon("search"), h("span", {class: "label"}, "Search everything…"), h("span", {class: "kbd"}, "⌘K")),
+    h("span", {class: "hide-sm"}, S.telegram.connected ? badge("Telegram", "success") : badge("Telegram off")), S.llm_error ? badge("Model issue", "danger") : null,
+    h("button", {class: "btn secondary sm", onclick: togglePause}, icon(S.paused_all ? "play" : "pause"), h("span", {class: "lbl"}, S.paused_all ? "Resume" : "Pause team")),
+    h("button", {class: "btn primary sm", onclick: () => newTaskSheet()}, icon("plus"), h("span", {class: "lbl"}, "New task")));
+  $("#app").put(h("div", {class: "shell"}, side, h("div", {class: "content"}, top, h("main", {id: "main"}))));
   render();
 }
+async function togglePause() { await api("/api/pause", {who: "all", pause: !S.paused_all}); toast(S.paused_all ? "Team resumed" : "Team paused", S.paused_all ? "success" : "warning"); refresh(); }
 async function refresh() { S = await api("/api/state"); boot(); }
-function go(v) { VIEW = v; closeDrawer(); boot(); }
+function go(v) { VIEW = v; closeSheet(); document.body.classList.remove("nav-open"); boot(); scrollTo(0, 0); }
 function render() {
   clearTimers();
-  const fn = {dashboard: vDashboard, chat: vChat, board: vBoard, projects: vProjects, team: vTeam, approvals: vApprovals, reports: vReports, settings: vSettings}[VIEW];
+  const fn = {overview: vOverview, chat: vChat, board: vBoard, projects: vProjects, project: vProject, team: vTeam, approvals: vApprovals, reports: vReports, settings: vSettings}[VIEW] || vOverview;
   $("#main").put(h("div", {class: "muted"}, "Loading…"));
-  fn().catch(e => $("#main").put(h("div", {class: "card err"}, e.message)));
+  fn().catch(e => $("#main").put(h("div", {class: "card card-b err"}, e.message)));
 }
+async function runWork() { toast("Work session started — each person moves their top task"); const r = await api("/api/work", {}).catch(e => ({digest: e.message}));
+  openSheet("Work session", r.digest ? h("pre", {}, r.digest) : empty("zap", "Nothing to do", "Nobody has open to-do or doing tasks.")); if (VIEW === "overview" || VIEW === "board") render(); }
+async function runReport() { await api("/api/report/run", {}); toast("Report written and posted"); go("reports"); }
 
-// ---------------------------------------------------------------- setup
+// ------------------------------------------------------------------ setup
 function renderSetup() {
-  const f = {company: h("input", {placeholder: "e.g. Acme Robotics"}), owner: h("input", {placeholder: "Your name"}),
-    timezone: h("input", {value: S.timezone}), goals: h("textarea", {placeholder: "One goal per line (optional)"}),
-    provider: h("select", {}, h("option", {value: "claude-code"}, "Claude subscription (claude CLI, no API key)"),
-      h("option", {value: "anthropic"}, "Anthropic API key"), h("option", {value: "openai"}, "OpenAI-compatible (OpenAI, Codex, Ollama, OpenRouter)")),
-    model: h("input", {placeholder: "blank = default (claude-code), e.g. sonnet"}), base_url: h("input", {placeholder: "only for Ollama/OpenRouter"}),
-    api_key: h("input", {type: "password", placeholder: "only for API providers"}),
-    workspace: h("input", {value: "./team-workspace"}), clone_url: h("input", {placeholder: "optional: https://github.com/you/team.git"}),
-    push: h("input", {type: "checkbox", style: "width:auto"}),
+  const f = {company: h("input", {placeholder: "e.g. Acme Robotics"}), owner: h("input", {placeholder: "Your name"}), timezone: h("input", {value: S.timezone}),
+    goals: h("textarea", {placeholder: "One goal per line (optional)"}),
+    provider: h("select", {}, h("option", {value: "claude-code"}, "Claude subscription — claude CLI, no API key"), h("option", {value: "anthropic"}, "Anthropic API key"), h("option", {value: "openai"}, "OpenAI-compatible — OpenAI, Codex, Ollama, OpenRouter")),
+    model: h("input", {placeholder: "blank = default · e.g. sonnet"}), base_url: h("input", {placeholder: "only for Ollama / OpenRouter"}), api_key: h("input", {type: "password", placeholder: "only for API providers"}),
+    workspace: h("input", {value: "./team-workspace"}), clone_url: h("input", {placeholder: "optional · https://github.com/you/team.git"}), push: h("input", {type: "checkbox"}),
     manager_name: h("input", {value: "James"}), manager_role: h("input", {value: "Delivery manager and chief of staff"})};
-  const err = h("div", {class: "err"}), btn = h("button", {class: "primary"}, "Create the team");
-  btn.onclick = async () => {
-    err.textContent = ""; btn.disabled = true; btn.textContent = "Setting up…";
+  const err = h("div", {class: "err"}), go_ = h("button", {class: "btn primary"}, "Create the team", icon("arrow"));
+  go_.onclick = async () => { err.textContent = ""; go_.disabled = true; go_.textContent = "Setting up…";
     const b = {}; for (const [k, el] of Object.entries(f)) b[k] = el.type === "checkbox" ? el.checked : el.value;
-    try { await api("/api/setup", b); VIEW = "team"; await refresh(); toast("Team created. Now add people."); }
-    catch (e) { err.textContent = e.message; btn.disabled = false; btn.textContent = "Create the team"; }
-  };
-  $("#main").put(h("div", {class: "center"},
-    h("h1", {}, "Set up your company"), h("p", {class: "muted"}, `Folder: ${S.folder}. Everything here can be changed later in Settings.`),
-    h("div", {class: "card"}, h("h3", {}, "1 · Company"), h("div", {class: "two"}, h("div", {}, h("label", {}, "Company / project"), f.company), h("div", {}, h("label", {}, "Your name (founder)"), f.owner)),
-      h("label", {}, "Timezone"), f.timezone, h("label", {}, "Goals"), f.goals), h("div", {style: "height:12px"}),
-    h("div", {class: "card"}, h("h3", {}, "2 · AI model"), h("label", {}, "Provider"), f.provider, h("div", {class: "two"}, h("div", {}, h("label", {}, "Model"), f.model), h("div", {}, h("label", {}, "API base URL"), f.base_url)),
-      h("label", {}, "API key"), f.api_key), h("div", {style: "height:12px"}),
-    h("div", {class: "card"}, h("h3", {}, "3 · Team repo (tasks, personas, memory, reports)"), h("label", {}, "Folder"), f.workspace, h("label", {}, "Clone from git URL"), f.clone_url,
-      h("label", {}, h("span", {class: "row"}, f.push, " Push to the remote after every change"))), h("div", {style: "height:12px"}),
-    h("div", {class: "card"}, h("h3", {}, "4 · Manager"), h("p", {class: "muted small"}, "Watches everyone, routes messages, reports to you."),
-      h("div", {class: "two"}, h("div", {}, h("label", {}, "Name"), f.manager_name), h("div", {}, h("label", {}, "Role"), f.manager_role))),
-    h("div", {style: "height:14px"}), h("div", {class: "row"}, btn, err)));
+    try { await api("/api/setup", b); VIEW = "team"; await refresh(); toast("Team created — now add people"); } catch (e) { err.textContent = e.message; go_.disabled = false; go_.textContent = "Create the team"; } };
+  const step = (n, title, sub, ...kids) => h("div", {class: "card", style: "margin-bottom:12px"}, h("div", {class: "card-h"}, h("span", {class: "step-n"}, n), h("h3", {}, title), h("span", {class: "muted small"}, sub)), h("div", {class: "card-b"}, kids));
+  $("#app").put(h("div", {class: "setup bg-grid"}, h("div", {class: "setup-in"},
+    h("div", {class: "row", style: "margin-bottom:18px"}, h("span", {class: "logo"}, "J"), h("b", {}, "james-monitoring")),
+    h("div", {class: "ph"}, h("div", {}, h("h1", {}, "Set up your company"), h("p", {}, `Folder ${S.folder} · everything can be changed later in Settings.`))),
+    step("1", "Company", "who and why", h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Company / project"), f.company), h("div", {}, h("label", {class: "f"}, "Your name"), f.owner)),
+      h("label", {class: "f"}, "Timezone"), f.timezone, h("label", {class: "f"}, "Goals"), f.goals),
+    step("2", "AI model", "any provider, switch any time", h("label", {class: "f"}, "Provider"), f.provider, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Model"), f.model), h("div", {}, h("label", {class: "f"}, "API base URL"), f.base_url)), h("label", {class: "f"}, "API key"), f.api_key),
+    step("3", "Team repo", "tasks, personas, memory, reports", h("label", {class: "f"}, "Folder"), f.workspace, h("label", {class: "f"}, "Clone from git URL"), f.clone_url,
+      h("label", {class: "f row", style: "margin-top:10px"}, f.push, h("span", {}, "Push to the remote after every change"))),
+    step("4", "Manager", "watches everyone and reports to you", h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Name"), f.manager_name), h("div", {}, h("label", {class: "f"}, "Role"), f.manager_role))),
+    h("div", {class: "row"}, go_, err))));
+  f.company.focus();
 }
 
-// ---------------------------------------------------------------- dashboard
-async function vDashboard() {
+// ------------------------------------------------------------------ overview
+async function vOverview() {
   const d = await api("/api/dashboard");
-  const kpi = (n, l, c = "") => h("div", {class: "card kpi"}, h("div", {class: "n " + c}, n), h("div", {class: "l"}, l));
-  const taskLine = t => h("div", {class: "item", style: "cursor:pointer", onclick: () => taskDrawer(t.id)},
-    h("div", {class: "row"}, h("b", {}, t.id), h("span", {class: "p" + t.priority[1]}, t.priority), t.title),
-    h("div", {class: "small muted"}, `${nameOf(t.owner)} · ${t.status}${t.due ? " · due " + t.due : ""}${t.blocked_on ? " · blocked on " + t.blocked_on : ""}`, t.overdue ? chip("overdue", "bad") : null));
+  const metric = (label, v, tone) => h("div", {class: "metric"}, h("span", {class: "l"}, label), h("span", {class: "v", style: tone ? `color:var(--${tone})` : ""}, v));
   const needs = [
-    ...d.asks.map(a => askItem(a, () => render())),
-    ...d.review.map(t => h("div", {class: "item"}, h("div", {class: "row"}, chip("review", "warn"), h("b", {}, t.id), t.title, h("span", {class: "spacer"}),
-        h("button", {class: "sm", onclick: () => taskDrawer(t.id)}, "Open"),
-        h("button", {class: "sm primary", onclick: async () => { await api("/api/task", {id: t.id, action: "accept"}); toast(t.id + " accepted"); render(); }}, "Accept")))),
-    ...d.decisions.map(x => h("div", {class: "item row"}, chip("decide", ""), x, h("span", {class: "spacer"}), h("button", {class: "sm", onclick: () => go("reports")}, "Edit list")))];
+    ...d.asks.map(a => h("div", {class: "li"}, h("span", {class: "ico " + (a.level === "red" ? "danger" : "warning")}, icon("approvals")),
+      h("div", {class: "grow"}, h("div", {class: "row"}, h("span", {class: "t"}, a.summary), badge(a.level === "red" ? "Needs you" : "FYI", a.level === "red" ? "danger" : "warning")),
+        h("div", {class: "xs muted"}, h("span", {class: "mono"}, a.id), " · from ", nameOf(a.from), a.task ? " · " + a.task : "")),
+      h("div", {class: "row"}, h("button", {class: "btn success sm", onclick: async () => { await decide(a.id, "approved"); render(); }}, icon("check"), "Approve"),
+        h("button", {class: "btn danger sm", onclick: async () => { await decide(a.id, "rejected"); render(); }}, "Reject")))),
+    ...d.review.map(t => h("div", {class: "li"}, h("span", {class: "ico warning"}, icon("eye")),
+      h("div", {class: "grow"}, h("div", {class: "t"}, t.title), h("div", {class: "xs muted"}, h("span", {class: "mono"}, t.id), " · ", nameOf(t.owner), " · ready for review")),
+      h("div", {class: "row"}, h("button", {class: "btn outline sm", onclick: () => taskSheet(t.id)}, "Open"),
+        h("button", {class: "btn primary sm", onclick: async () => { await api("/api/task", {id: t.id, action: "accept"}); toast(t.id + " accepted"); render(); }}, icon("check"), "Accept")))),
+    ...d.decisions.map(x => h("div", {class: "li click", onclick: () => go("reports")}, h("span", {class: "ico accent"}, icon("target")), h("div", {class: "grow"}, h("div", {class: "t"}, x), h("div", {class: "xs muted"}, "Open decision")), icon("arrow")))];
+  const tline = t => h("div", {class: "li click", onclick: () => taskSheet(t.id)}, avatar(nameOf(t.owner), "sm"),
+    h("div", {class: "grow"}, h("div", {class: "row"}, h("span", {class: "t"}, t.title), badge(t.priority, PRI_TONE[t.priority]), t.overdue ? badge("Overdue", "danger") : null),
+      h("div", {class: "xs muted"}, h("span", {class: "mono"}, t.id), ` · ${nameOf(t.owner)} · ${t.status}`, t.due ? h("span", {class: "mono"}, " · due " + t.due) : null, t.blocked_on ? " · blocked on " + t.blocked_on : "")));
+  const card = (title, ic, body, extra) => h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon(ic), h("h3", {}, title), h("span", {class: "grow"}), extra), body);
   $("#main").put(
-    h("div", {class: "row"}, h("h1", {}, "Dashboard"), h("span", {class: "spacer"}),
-      h("button", {onclick: async e => { e.target.disabled = true; e.target.textContent = "Working…"; const r = await api("/api/work", {}).catch(x => ({digest: x.message})); toast("Work session done"); openDrawer(h("h3", {}, "Work session"), h("pre", {}, r.digest || "Nobody had open todo/doing tasks.")); render(); }}, "▶ Work session now"),
-      h("button", {onclick: async () => { await api("/api/report/run", {}); toast("Report written and posted"); go("reports"); }}, "Write report now")),
-    d.push_error ? h("div", {class: "card bad", style: "margin:10px 0"}, "Team repo can't push: " + d.push_error) : null,
-    h("div", {class: "kpis", style: "margin-top:12px"}, kpi(d.tasks.open, "open tasks"), kpi(d.tasks.review, "waiting for your review", d.tasks.review ? "p1" : ""),
-      kpi(d.tasks.blocked, "blocked", d.tasks.blocked ? "p0" : ""), kpi(d.tasks.overdue, "overdue", d.tasks.overdue ? "p0" : ""), kpi(d.tasks.done, "done")),
-    h("div", {class: "cols", style: "margin-top:6px"},
-      h("div", {}, h("h2", {}, `Needs you (${needs.length})`), needs.length ? h("div", {class: "list"}, needs) : h("div", {class: "card muted"}, "Nothing is waiting on you."),
-        h("h2", {}, "Blocked or overdue"), d.attention.length ? h("div", {class: "list"}, d.attention.map(taskLine)) : h("div", {class: "card muted"}, "None."),
-        h("h2", {}, "Critical path (P0)"), d.critical.length ? h("div", {class: "list"}, d.critical.map(taskLine)) : h("div", {class: "card muted"}, "No P0 set. Give each active project one.")),
-      h("div", {}, h("h2", {}, "People"), h("div", {class: "list"}, d.people.map(p => h("div", {class: "item", style: "cursor:pointer", onclick: () => memberDrawer(p.id)},
-          h("div", {class: "row"}, h("span", {class: "dot " + p.status.replace(" ", "-")}), h("b", {}, p.name), h("span", {class: "small muted"}, p.status), h("span", {class: "spacer"}),
-            p.tokens ? h("span", {class: "small muted"}, `${Math.round(p.tokens / 1000)}k / ${Math.round(d.budget / 1000)}k tokens`) : null),
-          h("div", {class: "small muted"}, p.line), p.error ? h("div", {class: "err"}, "⚠️ " + p.error) : null))),
-        h("h2", {}, "Recent activity (team repo)"), h("div", {class: "card small"}, d.commits.length ? d.commits.map(c => h("div", {}, c)) : "No commits yet."))));
+    pageHeader("Overview", `${S.company} · what needs you, who's on track, what's moving`,
+      h("button", {class: "btn outline", onclick: runWork}, icon("zap"), "Work session now"), h("button", {class: "btn secondary", onclick: runReport}, icon("reports"), "Write report")),
+    d.push_error ? h("div", {class: "card card-b", style: "margin-bottom:12px;border-color:rgba(220,38,38,.3);color:var(--danger)"}, "Team repo can't push: " + d.push_error) : null,
+    h("div", {class: "metrics"}, metric("Open tasks", d.tasks.open), metric("Needs your review", d.tasks.review, d.tasks.review ? "warning" : ""),
+      metric("Blocked", d.tasks.blocked, d.tasks.blocked ? "danger" : ""), metric("Overdue", d.tasks.overdue, d.tasks.overdue ? "danger" : ""), metric("Done", d.tasks.done, "success")),
+    h("div", {class: "cols"},
+      h("div", {}, card("Needs you", "inbox", needs.length ? h("div", {class: "list"}, needs) : h("div", {class: "card-b"}, empty("check", "You're clear", "No approvals, reviews or decisions are waiting.")), needs.length ? badge(needs.length, "danger") : null),
+        card("Blocked or overdue", "alert", d.attention.length ? h("div", {class: "list"}, d.attention.map(tline)) : h("div", {class: "card-b muted small"}, "Nothing blocked or late.")),
+        card("Critical path", "target", d.critical.length ? h("div", {class: "list"}, d.critical.map(tline)) : h("div", {class: "card-b muted small"}, "No P0 yet — give each active project one."))),
+      h("div", {}, card("Projects", "projects", d.projects.length ? h("div", {class: "list"}, d.projects.filter(p => p.status !== "done").map(p => h("div", {class: "li click", onclick: () => openProject(p.id)}, projMark(p),
+            h("div", {class: "grow", style: "min-width:0"}, h("div", {class: "row"}, h("span", {class: "t"}, p.name), p.counts.blocked ? badge(`${p.counts.blocked} blocked`, "danger") : null, p.counts.review ? badge(`${p.counts.review} review`, "warning") : null),
+              h("div", {class: "row", style: "flex-wrap:nowrap;margin-top:6px"}, progress(pctOf(p)), h("span", {class: "mono xs muted"}, `${p.counts.done}/${p.counts.total}`))), facepile(p.members, 3))))
+          : h("div", {class: "card-b"}, empty("projects", "No projects yet", "Projects give each team its own room and board.", h("button", {class: "btn primary sm", onclick: () => projectSheet()}, icon("plus"), "New project"))),
+          h("button", {class: "btn ghost sm", onclick: () => go("projects")}, "All", icon("arrow"))),
+        card("People", "team", h("div", {class: "list"}, d.people.map(p => h("div", {class: "li click", onclick: () => memberSheet(p.id)}, avatar(p.name),
+          h("div", {class: "grow", style: "min-width:0"}, h("div", {class: "row"}, h("span", {class: "t"}, p.name), badge(p.status, STATUS_TONE[p.status])),
+            h("div", {class: "xs muted", style: "white-space:nowrap;overflow:hidden;text-overflow:ellipsis", title: p.line}, personLine(p.line)), p.error ? h("div", {class: "err xs"}, p.error) : null),
+          p.tokens ? h("span", {class: "xs muted mono"}, Math.round(p.tokens / 1000) + "k") : null)))),
+        card("Recent activity", "commit", d.commits.length ? h("div", {class: "list"}, d.commits.map(c => { const [hash, date, ...rest] = c.split(" ");
+          return h("div", {class: "li", style: "padding:8px 14px"}, h("span", {class: "mono xs muted", style: "width:62px"}, hash), h("span", {class: "small grow"}, humanIds(rest.join(" "))), h("span", {class: "mono xs muted"}, date)); }))
+          : h("div", {class: "card-b muted small"}, "No activity yet.")))));
 }
-function askItem(a, after) {
-  const note = h("input", {placeholder: "note (optional)"});
-  const decide = async (dec) => { try { const r = await api("/api/ask", {id: a.id, decision: dec, note: note.value}); toast(r.result); after && after(); } catch (e) { toast(e.message); } };
-  return h("div", {class: "item"}, h("div", {class: "row"}, chip(a.level === "red" ? "🔴 needs you" : "🟡 FYI", a.level === "red" ? "bad" : "warn"), h("b", {}, a.id), h("span", {class: "muted"}, "from " + nameOf(a.from))),
-    h("div", {style: "margin:4px 0"}, a.summary), a.details ? h("pre", {}, a.details) : null,
-    a.recommendation ? h("div", {class: "small muted"}, `${nameOf(S.manager)} recommends: ${a.recommendation}`) : null,
-    a.status === "pending" ? h("div", {class: "row", style: "margin-top:6px"}, note, h("button", {class: "primary sm", onclick: () => decide("approved")}, "Approve"), h("button", {class: "danger sm", onclick: () => decide("rejected")}, "Reject"))
-      : h("div", {class: "small"}, chip(a.status, a.status === "approved" ? "ok" : "bad")));
+async function decide(id, decision, note = "") { try { const r = await api("/api/ask", {id, decision, note}); toast(r.result, decision === "approved" ? "success" : "warning"); } catch (e) { toast(e.message, "danger"); } }
+
+// ------------------------------------------------------------------ chat
+async function vChat() {
+  const rooms = [...S.projects.filter(p => p.status !== "done").map(p => p.room), "team", ...S.members.map(m => m.id)];
+  if (!rooms.includes(ROOM)) ROOM = rooms[0] || "team";
+  const previews = {};
+  await Promise.all(rooms.map(async r => { const c = await api(`/api/chat?room=${encodeURIComponent(r)}&after=-1`).catch(() => ({messages: []})); previews[r] = c.messages.at(-1); }));
+  const item = r => { const info = roomInfo(r), last = previews[r];
+    return h("div", {class: "room" + (r === ROOM ? " on" : ""), onclick: () => { ROOM = r; render(); }}, roomAvatar(r),
+      h("div", {style: "min-width:0"}, h("div", {class: "n"}, info.name), h("div", {class: "p"}, last ? (last.who === S.owner_key ? "You: " : (info.kind === "dm" ? "" : nameOf(last.who) + ": ")) + last.text.split("\n")[0] : info.sub))); };
+  const grp = (title, ids) => ids.length ? [h("div", {class: "rooms-h"}, title), ids.map(item)] : null;
+  const list = h("div", {class: "rooms"},
+    grp("Project rooms", rooms.filter(r => r.startsWith(PROOM))), grp("Company", ["team"]), grp("Direct messages", S.members.map(m => m.id)),
+    S.projects.length ? null : h("div", {class: "xs muted", style: "padding:12px"}, "Create a project to get a room for its team."));
+  $("#main").style.padding = "16px 24px";
+  const panel = chatPanel(ROOM);
+  $("#main").put(h("div", {class: "chat"}, list, panel));
 }
 
-// ---------------------------------------------------------------- chat
-async function vChat() {
-  const rooms = [{id: "team", name: "Team room", role: "Everyone (@all, @name, /commands)"}, ...S.members.map(m => ({id: m.id, name: m.name, role: m.role}))];
-  const list = h("div", {class: "card rooms"}, rooms.map(r => h("div", {class: "room" + (r.id === ROOM ? " on" : ""), onclick: () => { ROOM = r.id; render(); }},
-    h("div", {}, h("div", {}, h("b", {}, r.name)), h("div", {class: "r"}, r.role)))));
-  const msgs = h("div", {class: "msgs"}), think = h("div", {class: "small muted", style: "min-height:18px"});
-  const box = h("textarea", {placeholder: ROOM === "team" ? "Message everyone — @all give status · @name … · /help" : `Message ${nameOf(ROOM)} — instructions, corrections, T-012 feedback, /help`});
-  const send = h("button", {class: "primary"}, "Send");
-  const doSend = async () => { const t = box.value.trim(); if (!t) return; box.value = ""; try { await api("/api/chat", {room: ROOM, text: t}); poll(); } catch (e) { toast(e.message); } };
-  send.onclick = doSend; box.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doSend(); } });
+// A conversation: header, messages (polled), composer. Works for DMs, All hands and project rooms.
+function chatPanel(room, opts = {}) {
+  const info = roomInfo(room), kind = info.kind;
+  const msgs = h("div", {class: "msgs"}), think = h("div", {class: "xs muted", style: "min-height:16px;margin-bottom:6px"});
+  const box = h("textarea", {placeholder: kind === "team" ? "Message the whole company — @all give status · @name … · /help"
+    : kind === "project" ? `Message ${info.name} — no @ goes to the lead · @all = everyone on this project · @name`
+    : `Message ${info.name} — instructions, corrections, questions…`});
+  const send = async (text) => { const t = (text ?? box.value).trim(); if (!t) return; box.value = ""; try { await api("/api/chat", {room, text: t}); poll(); } catch (e) { toast(e.message, "danger"); } };
+  box.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+  const quick = kind === "team" ? ["@all give status", "/status", "/board", "/report"]
+    : kind === "project" ? ["@all give status", "@all what's the plan for this week?", "What's blocking this project?"]
+    : ["What are you working on?", "What's blocking you?", "/log " + room];
   let after = -1;
   async function poll() {
     try {
-      const r = await api(`/api/chat?room=${encodeURIComponent(ROOM)}&after=${after}`);
-      const stick = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 60;
+      const r = await api(`/api/chat?room=${encodeURIComponent(room)}&after=${after}`);
+      const stick = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80;
       for (const m of r.messages) {
-        after = Math.max(after, m.i);
-        const mine = m.who === S.owner_key;
-        const el = h("div", {class: "msg" + (mine ? " me" : "") + (m.kind === "system" ? " system" : "") + (m.kind === "notice" ? " notice" : "") + (m.kind === "ask" ? " ask" : "")},
-          h("div", {class: "who"}, (mine ? "You" : nameOf(m.who)) + (m.via === "telegram" ? " · via Telegram" : "") + " · " + new Date(m.ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})), m.text);
-        if (m.kind === "ask" && m.ask_id) el.append(h("div", {class: "row", style: "margin-top:6px"},
-          h("button", {class: "sm primary", onclick: async () => { toast((await api("/api/ask", {id: m.ask_id, decision: "approved"}).catch(e => ({result: e.message}))).result); }}, "Approve"),
-          h("button", {class: "sm danger", onclick: async () => { toast((await api("/api/ask", {id: m.ask_id, decision: "rejected"}).catch(e => ({result: e.message}))).result); }}, "Reject")));
-        msgs.append(el);
+        after = Math.max(after, m.i); const mine = m.who === S.owner_key, sys = m.kind === "system";
+        const bubble = h("div", {class: "bubble"}, m.text);
+        if (m.kind === "ask" && m.ask_id) bubble.append(h("div", {class: "row", style: "margin-top:8px"},
+          h("button", {class: "btn success sm", onclick: () => decide(m.ask_id, "approved")}, icon("check"), "Approve"), h("button", {class: "btn danger sm", onclick: () => decide(m.ask_id, "rejected")}, "Reject")));
+        msgs.append(h("div", {class: "msg" + (mine ? " me" : "") + (sys ? " system" : "") + (m.kind === "ask" ? " ask" : "") + (m.kind === "notice" ? " notice" : "")},
+          sys ? null : (mine ? avatar(S.owner, "sm") : avatar(nameOf(m.who), "sm")),
+          h("div", {}, h("div", {class: "meta"}, (mine ? "You" : nameOf(m.who)) + (m.via === "telegram" ? " · via Telegram" : "") + " · " + new Date(m.ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})), bubble)));
       }
-      think.textContent = r.thinking ? (ROOM === "team" ? "The team is replying…" : `${nameOf(ROOM)} is thinking…`) : "";
+      if (!r.messages.length && after < 0 && !msgs.children.length) msgs.put(empty(kind === "project" ? "hash" : "chat", "No messages yet",
+        kind === "team" ? "Announcements for everyone. Try “@all give status”." : kind === "project" ? `Only people on ${info.project?.name || "this project"} get these messages. Try “@all give status”.` : `Say hi to ${info.name} — give an instruction or ask a question.`));
+      else if (r.messages.length && msgs.querySelector(".empty")) msgs.querySelector(".empty").remove();
+      think.put(r.thinking ? h("span", {}, kind === "dm" ? info.name + " is thinking" : "The team is replying", h("span", {class: "dots"}, h("span", {}, "."), h("span", {}, "."), h("span", {}, "."))) : null);
       if (stick || r.messages.length) msgs.scrollTop = msgs.scrollHeight;
     } catch (e) { think.textContent = e.message; }
   }
-  $("#main").put(h("div", {class: "chat"}, list, h("div", {class: "card conv"},
-    h("div", {class: "row"}, h("h3", {}, ROOM === "team" ? "Team room" : nameOf(ROOM)), h("span", {class: "spacer"}),
-      ROOM !== "team" ? h("button", {class: "sm", onclick: () => memberDrawer(ROOM)}, "Profile") : null),
-    msgs, think, h("div", {class: "compose"}, box, send))));
-  await poll(); timers.push(setInterval(poll, 1500)); box.focus();
+  const p = info.project;
+  const head = h("div", {class: "conv-h"}, roomAvatar(room), h("div", {style: "min-width:0"}, h("b", {}, info.name), h("div", {class: "xs muted"}, info.sub)), h("span", {class: "grow"}),
+    kind === "project" ? facepile(p.members, 4) : null,
+    kind === "project" && !opts.inProject ? h("button", {class: "btn outline sm", onclick: () => openProject(p.id)}, icon("projects"), "Project") : null,
+    kind === "project" ? h("button", {class: "btn outline sm", onclick: () => newTaskSheet({project: p.id})}, icon("plus"), "Task") : null,
+    kind === "dm" ? h("button", {class: "btn outline sm", onclick: () => newTaskSheet({owner: room})}, icon("plus"), "Task") : null,
+    kind === "dm" ? h("button", {class: "btn outline sm", onclick: () => memberSheet(room)}, "Profile") : null);
+  const el = h("div", {class: "conv"}, head, msgs, h("div", {class: "composer"}, think, h("div", {class: "chips"}, quick.map(q => h("span", {class: "badge outline", onclick: () => send(q)}, q))),
+    h("div", {class: "box"}, box, h("button", {class: "btn primary icon", onclick: () => send(), title: "Send (Enter)"}, icon("send")))));
+  poll().then(() => box.focus()); timers.push(setInterval(poll, 1500));
+  return el;
 }
 
-// ---------------------------------------------------------------- board
-let FILTER = {project: "", owner: ""};
+// ------------------------------------------------------------------ board
 async function vBoard() {
-  let tasks = await api("/api/tasks");
-  const fp = h("select", {onchange: e => { FILTER.project = e.target.value; render(); }}, h("option", {value: ""}, "All projects"), S.projects.map(p => h("option", {value: p.id, selected: FILTER.project === p.id}, p.name)));
-  const fo = h("select", {onchange: e => { FILTER.owner = e.target.value; render(); }}, h("option", {value: ""}, "Everyone"), S.members.map(m => h("option", {value: m.id, selected: FILTER.owner === m.id}, m.name)));
-  tasks = tasks.filter(t => (!FILTER.project || t.project === FILTER.project) && (!FILTER.owner || t.owner === FILTER.owner));
+  $("#main").style.padding = "";
+  const tasks = await api("/api/tasks");
+  const fp = h("select", {style: "width:180px", onchange: e => { FILTER.project = e.target.value; render(); }}, h("option", {value: ""}, "All projects"), S.projects.map(p => h("option", {value: p.id, selected: FILTER.project === p.id}, p.name)), h("option", {value: "-", selected: FILTER.project === "-"}, "No project"));
+  const fo = h("select", {style: "width:160px", onchange: e => { FILTER.owner = e.target.value; render(); }}, h("option", {value: ""}, "Everyone"), S.members.map(m => h("option", {value: m.id, selected: FILTER.owner === m.id}, m.name)));
+  const shown = tasks.filter(t => (!FILTER.project || (FILTER.project === "-" ? !t.project : t.project === FILTER.project)) && (!FILTER.owner || t.owner === FILTER.owner));
+  $("#main").put(pageHeader("Board", "Every task across projects. Drag cards between columns — Done means accepted by you.", fp, fo, h("button", {class: "btn primary", onclick: () => newTaskSheet()}, icon("plus"), "New task")),
+    boardPanel(shown, {showProject: !FILTER.project || FILTER.project === "-"}));
+}
+function boardPanel(tasks, opts = {}) {
   const cols = [["todo", "To do"], ["doing", "Doing"], ["blocked", "Blocked"], ["review", "Review"], ["done", "Done"]];
-  $("#main").put(h("div", {class: "row"}, h("h1", {}, "Board"), h("span", {class: "spacer"}), h("div", {style: "width:180px"}, fp), h("div", {style: "width:160px"}, fo),
-      h("button", {class: "primary", onclick: newTaskDrawer}, "+ New task")),
-    h("div", {class: "board", style: "margin-top:12px"}, cols.map(([st, title]) => {
-      const items = tasks.filter(t => t.status === st).sort((a, b) => (a.priority + a.id).localeCompare(b.priority + b.id));
-      return h("div", {class: "col"}, h("h4", {}, `${title} · ${items.length}`), items.map(t => h("div", {class: "task", onclick: () => taskDrawer(t.id)},
-        h("div", {class: "row small"}, h("b", {}, t.id), h("span", {class: "p" + t.priority[1]}, t.priority), t.overdue ? chip("overdue", "bad") : null),
-        h("div", {class: "t"}, t.title), h("div", {class: "small muted"}, nameOf(t.owner) + (t.due ? " · " + t.due : "") + (t.project ? " · " + t.project : "")))));
-    })));
+  const move = async (id, to) => {
+    const t = tasks.find(x => x.id === id); if (!t || t.status === to) return;
+    if (to === "blocked") return taskSheet(id, {status: "blocked"});
+    try { const r = await api("/api/task", to === "done" ? {id, action: "accept"} : {id, action: "status", status: to}); toast(r.message || `${id} → ${to}`); render(); } catch (e) { toast(e.message, "danger"); }
+  };
+  return h("div", {class: "board"}, cols.map(([st, title]) => {
+    const items = tasks.filter(t => t.status === st).sort((a, b) => (a.priority + a.id).localeCompare(b.priority + b.id));
+    const col = h("div", {class: "col"}, h("div", {class: "col-h"}, h("span", {class: "dot " + ({doing: "on-track", blocked: "blocked", review: "at-risk", done: "on-track"}[st] || "")}), title, h("span", {class: "grow"}), h("span", {class: "mono"}, items.length)),
+      h("div", {class: "col-b"}, items.length ? items.map(t => { const c = h("div", {class: "tcard", draggable: "true", onclick: () => taskSheet(t.id)},
+          h("div", {class: "row"}, h("span", {class: "mono xs muted"}, t.id), badge(t.priority, PRI_TONE[t.priority]), t.overdue ? badge("Overdue", "danger") : null),
+          h("div", {class: "ttl"}, t.title), h("div", {class: "row xs muted"}, avatar(nameOf(t.owner), "sm"), nameOf(t.owner), h("span", {class: "grow"}), t.due ? h("span", {class: "mono"}, t.due) : null),
+          opts.showProject && t.project ? h("div", {style: "margin-top:6px"}, h("span", {class: "badge outline", onclick: e => { e.stopPropagation(); openProject(t.project); }}, "# " + (projOf(t.project)?.name || t.project))) : null);
+        c.addEventListener("dragstart", e => { e.dataTransfer.setData("text/plain", t.id); c.classList.add("drag"); }); c.addEventListener("dragend", () => c.classList.remove("drag")); return c; })
+        : h("div", {class: "xs muted", style: "padding:6px 2px"}, st === "todo" ? "Nothing to do yet." : "—")));
+    col.addEventListener("dragover", e => { e.preventDefault(); col.classList.add("over"); }); col.addEventListener("dragleave", () => col.classList.remove("over"));
+    col.addEventListener("drop", e => { e.preventDefault(); col.classList.remove("over"); move(e.dataTransfer.getData("text/plain"), st); });
+    return col;
+  }));
 }
-function newTaskDrawer(pre = {}) {
-  const f = {title: h("input", {placeholder: "What needs to be done"}), owner: h("select", {}, S.members.map(m => h("option", {value: m.id, selected: pre.owner === m.id}, m.name))),
+function newTaskSheet(pre = {}) {
+  const startProject = pre.project ?? (VIEW === "project" ? PROJECT : (FILTER.project !== "-" ? FILTER.project : ""));
+  const f = {title: h("input", {placeholder: "What needs to be done"}), owner: h("select", {}),
     priority: h("select", {}, S.priorities.map(p => h("option", {value: p, selected: p === "P1"}, p))), due: h("input", {type: "date"}),
-    project: h("select", {}, h("option", {value: ""}, "—"), S.projects.map(p => h("option", {value: p.id, selected: (pre.project || FILTER.project) === p.id}, p.name))),
-    description: h("textarea", {placeholder: "Context, links, constraints"}), done: h("textarea", {placeholder: "One check per line: how we'll know it's done (the owner can fill this if blank)"})};
-  const err = h("div", {class: "err"});
-  openDrawer(h("h3", {}, "New task"), h("label", {}, "Title"), f.title, h("div", {class: "three"}, h("div", {}, h("label", {}, "Owner"), f.owner), h("div", {}, h("label", {}, "Priority"), f.priority), h("div", {}, h("label", {}, "Due"), f.due)),
-    h("label", {}, "Project"), f.project, h("label", {}, "Description"), f.description, h("label", {}, "Done means"), f.done, h("div", {style: "height:10px"}),
-    h("div", {class: "row"}, h("button", {class: "primary", onclick: async () => {
-      try { const t = await api("/api/tasks", {title: f.title.value, owner: f.owner.value, priority: f.priority.value, due: f.due.value, project: f.project.value,
-          description: f.description.value, done_means: f.done.value.split("\n")}); toast(`${t.id} assigned to ${nameOf(t.owner)}`); closeDrawer(); render(); }
-      catch (e) { err.textContent = e.message; } }}, "Create and assign"), err));
-  f.title.focus();
+    project: h("select", {}, h("option", {value: ""}, "No project"), S.projects.map(p => h("option", {value: p.id, selected: startProject === p.id}, p.name))),
+    description: h("textarea", {placeholder: "Context, links, constraints"}), done: h("textarea", {placeholder: "One check per line — how you'll know it's done (the owner fills this in if blank)"})};
+  const hint = h("div", {class: "xs muted", style: "margin-top:4px;min-height:14px"});
+  const fillOwners = () => { const p = projOf(f.project.value), keep = f.owner.value || pre.owner || p?.lead;
+    const on = p ? S.members.filter(m => p.members.includes(m.id)) : S.members, off = p ? S.members.filter(m => !p.members.includes(m.id)) : [];
+    const opt = m => h("option", {value: m.id, selected: m.id === keep}, m.name + (p && m.id === p.lead ? " · lead" : ""));
+    f.owner.put(p ? [h("optgroup", {label: `On ${p.name}`}, on.map(opt)), off.length ? h("optgroup", {label: "Others — joins the project"}, off.map(opt)) : null] : on.map(opt));
+    hint.textContent = p && f.owner.value && !p.members.includes(f.owner.value) ? `${nameOf(f.owner.value)} will be added to ${p.name}.` : ""; };
+  f.project.onchange = fillOwners; f.owner.onchange = fillOwners; fillOwners();
+  const err = h("div", {class: "err"}), create = h("button", {class: "btn primary"}, icon("check"), "Create and assign");
+  create.onclick = async () => { err.textContent = ""; create.disabled = true;
+    try { const t = await api("/api/tasks", {title: f.title.value, owner: f.owner.value, priority: f.priority.value, due: f.due.value, project: f.project.value, description: f.description.value, done_means: f.done.value.split("\n")});
+      toast(`${t.id} assigned to ${nameOf(t.owner)}`); closeSheet(); S = await api("/api/state"); if (["board", "overview", "projects", "project"].includes(VIEW)) boot(); } catch (e) { err.textContent = e.message; create.disabled = false; } };
+  openSheet("New task", h("label", {class: "f"}, "Title"), f.title, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Project"), f.project), h("div", {}, h("label", {class: "f"}, "Owner"), f.owner)), hint,
+    h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Priority"), f.priority), h("div", {}, h("label", {class: "f"}, "Due"), f.due)),
+    h("label", {class: "f"}, "Description"), f.description, h("label", {class: "f"}, "Done means"), f.done,
+    h("div", {class: "row", style: "margin-top:14px"}, create, err), h("p", {class: "xs muted"}, "The owner gets it in their chat and replies with a plan."));
+  f.title.focus(); f.title.addEventListener("keydown", e => { if (e.key === "Enter") create.click(); });
 }
-async function taskDrawer(id) {
+async function taskSheet(id, preset = {}) {
   const t = await api("/api/task?id=" + encodeURIComponent(id)); const sec = t.sections || {};
-  const fb = h("textarea", {placeholder: "Feedback: saved on the task and in the owner's memory"}), err = h("div", {class: "err"});
-  const act = async (b, msg) => { try { const r = await api("/api/task", {id, ...b}); toast(r.message || msg); taskDrawer(id); if (VIEW === "board" || VIEW === "dashboard") render(); } catch (e) { err.textContent = e.message; } };
-  const status = h("select", {}, ["todo", "doing", "blocked", "review", "done", "cut"].map(s => h("option", {value: s, selected: s === t.status}, s)));
-  const blockedOn = h("input", {placeholder: "blocked on: person + exact thing needed"});
+  const err = h("div", {class: "err"}), fb = h("textarea", {placeholder: "Feedback — saved on the task and in the owner's memory"});
+  const act = async (b, msg) => { try { const r = await api("/api/task", {id, ...b}); toast(r.message || msg); taskSheet(id); if (["board", "overview"].includes(VIEW)) render(); } catch (e) { err.textContent = e.message; } };
+  const status = h("select", {}, ["todo", "doing", "blocked", "review", "done", "cut"].map(s => h("option", {value: s, selected: s === (preset.status || t.status)}, s)));
+  const blockedOn = h("input", {placeholder: "Blocked on — person + exact thing needed", value: t.blocked_on || ""});
   const owner = h("select", {}, S.members.map(m => h("option", {value: m.id, selected: m.id === t.owner}, m.name)));
   const pr = h("select", {}, S.priorities.map(p => h("option", {value: p, selected: p === t.priority}, p))), due = h("input", {type: "date", value: t.due || ""});
-  openDrawer(h("div", {class: "row"}, h("b", {}, t.id), h("span", {class: "p" + t.priority[1]}, t.priority), chip(t.status), t.overdue ? chip("overdue", "bad") : null),
-    h("h3", {style: "margin-top:6px"}, t.title), h("div", {class: "small muted"}, `${nameOf(t.owner)} · due ${t.due || "—"} · project ${t.project || "—"}`),
-    t.status === "review" ? h("div", {class: "row", style: "margin:10px 0"}, h("button", {class: "primary", onclick: () => act({action: "accept"}, "Accepted")}, "✓ Accept (done)")) : null,
-    ["Goal", "Done means", "Output", "Feedback", "Log"].map(k => sec[k] ? h("div", {}, h("h2", {}, k), h("div", {class: "md", html: md(sec[k])})) : null),
-    h("h2", {}, "Give feedback"), fb, h("div", {class: "row", style: "margin-top:6px"}, h("button", {onclick: () => act({action: "feedback", text: fb.value}, "Feedback saved")}, "Send feedback")),
-    h("h2", {}, "Change"), h("div", {class: "three"}, h("div", {}, h("label", {}, "Owner"), owner), h("div", {}, h("label", {}, "Priority"), pr), h("div", {}, h("label", {}, "Due"), due)),
-    h("div", {class: "row", style: "margin-top:6px"}, h("button", {onclick: () => act({action: "edit", owner: owner.value, priority: pr.value, due: due.value}, "Saved")}, "Save changes")),
-    h("div", {class: "two", style: "margin-top:8px"}, h("div", {}, h("label", {}, "Status"), status), h("div", {}, h("label", {}, "Blocked on (if blocked)"), blockedOn)),
-    h("div", {class: "row", style: "margin-top:6px"}, h("button", {onclick: () => act({action: "status", status: status.value, blocked_on: blockedOn.value}, "Status changed")}, "Set status"),
-      h("span", {class: "spacer"}), h("button", {class: "danger", onclick: () => confirm("Cut this task?") && act({action: "cut"}, "Cut")}, "Cut task")), err);
+  openSheet(t.id,
+    h("div", {class: "row"}, badge(t.priority, PRI_TONE[t.priority]), badge(t.status, TASK_TONE[t.status]), t.overdue ? badge("Overdue", "danger") : null, t.project ? badge(t.project) : null),
+    h("h2", {style: "font-size:17px;margin:10px 0 4px"}, t.title), h("div", {class: "row small muted"}, avatar(nameOf(t.owner), "sm"), nameOf(t.owner), " · due ", h("span", {class: "mono"}, t.due || "—")),
+    t.status === "review" ? h("div", {class: "card card-b", style: "margin-top:12px;background:var(--warning-muted);border-color:rgba(217,119,6,.3)"}, h("div", {class: "row"}, h("b", {class: "grow"}, "Ready for your review"), h("button", {class: "btn primary sm", onclick: () => act({action: "accept"}, "Accepted")}, icon("check"), "Accept"))) : null,
+    ["Goal", "Done means", "Output", "Feedback", "Log"].map(k => sec[k] ? [h("h2", {class: "sec"}, k), h("div", {class: "md" + (k === "Log" ? " small" : "")}, h("div", {html: md(sec[k])}))] : null),
+    h("h2", {class: "sec"}, "Give feedback"), fb, h("div", {class: "row", style: "margin-top:6px"}, h("button", {class: "btn secondary sm", onclick: () => act({action: "feedback", text: fb.value}, "Feedback saved")}, "Send feedback")),
+    h("h2", {class: "sec"}, "Edit"), h("div", {class: "three"}, h("div", {}, h("label", {class: "f"}, "Owner"), owner), h("div", {}, h("label", {class: "f"}, "Priority"), pr), h("div", {}, h("label", {class: "f"}, "Due"), due)),
+    h("div", {class: "row", style: "margin-top:8px"}, h("button", {class: "btn outline sm", onclick: () => act({action: "edit", owner: owner.value, priority: pr.value, due: due.value}, "Saved")}, "Save changes")),
+    h("div", {class: "two", style: "margin-top:4px"}, h("div", {}, h("label", {class: "f"}, "Status"), status), h("div", {}, h("label", {class: "f"}, "Blocked on"), blockedOn)),
+    h("div", {class: "row", style: "margin-top:8px"}, h("button", {class: "btn outline sm", onclick: () => act({action: "status", status: status.value, blocked_on: blockedOn.value}, "Status changed")}, "Set status"),
+      h("span", {class: "grow"}), h("button", {class: "btn danger sm", onclick: () => confirm("Cut this task?") && act({action: "cut"}, "Cut")}, "Cut task")), err);
+  if (preset.status === "blocked") blockedOn.focus();
 }
 
-// ---------------------------------------------------------------- projects
+// ------------------------------------------------------------------ projects
+const P_TONE = {active: "success", paused: "warning", done: ""};
+const progress = (pct, tone = "success") => h("div", {class: "progress"}, h("div", {style: `width:${pct}%;background:var(--${tone})`}));
+const pctOf = p => p.counts.total ? Math.round(100 * p.counts.done / p.counts.total) : 0;
+function openProject(pid, tab = "overview") { PROJECT = pid; PTAB = tab; go("project"); }
+
 async function vProjects() {
-  const tasks = await api("/api/tasks");
-  $("#main").put(h("div", {class: "row"}, h("h1", {}, "Projects"), h("span", {class: "spacer"}), h("button", {class: "primary", onclick: () => projectDrawer()}, "+ New project")),
-    S.projects.length ? h("div", {class: "grid", style: "margin-top:12px"}, S.projects.map(p => {
-      const mine = tasks.filter(t => t.project === p.id), open = mine.filter(t => !["done", "cut"].includes(t.status));
-      return h("div", {class: "card"}, h("div", {class: "row"}, h("h3", {}, p.name), chip(p.status, p.status === "active" ? "ok" : "")),
-        h("div", {class: "small muted", style: "margin:4px 0 8px"}, p.description || "No description."),
-        h("div", {class: "row small"}, chip("lead: " + (p.lead ? nameOf(p.lead) : "—")), chip(`${open.length} open / ${mine.length} tasks`), p.repo ? chip("code repo") : null),
-        h("div", {class: "row", style: "margin-top:8px"}, h("button", {class: "sm", onclick: () => { FILTER.project = p.id; go("board"); }}, "Board"),
-          h("button", {class: "sm", onclick: () => newTaskDrawer({project: p.id, owner: p.lead})}, "+ Task"), h("button", {class: "sm", onclick: () => projectDrawer(p)}, "Edit")));
-    })) : h("div", {class: "card muted", style: "margin-top:12px"}, "No projects yet. Create one; tasks and people can be linked to it."));
-}
-function projectDrawer(p = {}) {
-  const f = {name: h("input", {value: p.name || "", placeholder: "e.g. Ojas"}), description: h("textarea", {}, p.description || ""),
-    lead: h("select", {}, h("option", {value: ""}, "—"), S.members.map(m => h("option", {value: m.id, selected: m.id === p.lead}, m.name))),
-    status: h("select", {}, ["active", "paused", "done"].map(s => h("option", {value: s, selected: s === (p.status || "active")}, s))),
-    repo: h("input", {value: p.repo || "", placeholder: "optional: local path of its git repo, for code tasks"})};
-  const err = h("div", {class: "err"});
-  openDrawer(h("h3", {}, p.id ? "Edit project" : "New project"), h("label", {}, "Name"), f.name, h("label", {}, "What it is / goal"), f.description,
-    h("div", {class: "two"}, h("div", {}, h("label", {}, "Lead"), f.lead), h("div", {}, h("label", {}, "Status"), f.status)), h("label", {}, "Code repo"), f.repo,
-    h("div", {style: "height:10px"}), h("div", {class: "row"}, h("button", {class: "primary", onclick: async () => {
-      try { await api("/api/projects", {id: p.id, name: f.name.value, description: f.description.value, lead: f.lead.value, status: f.status.value, repo: f.repo.value});
-        toast("Project saved"); closeDrawer(); await refresh(); } catch (e) { err.textContent = e.message; } }}, "Save"), err));
+  $("#main").style.padding = "";
+  const card = p => { const lead = p.lead ? S.members.find(m => m.id === p.lead) : null;
+    return h("div", {class: "card pcard", onclick: () => openProject(p.id)},
+      h("div", {class: "card-b"}, h("div", {class: "row", style: "flex-wrap:nowrap"}, projMark(p), h("div", {class: "grow", style: "min-width:0"}, h("b", {style: "font-size:14px"}, p.name), h("div", {class: "xs muted mono"}, "#" + p.id)), badge(p.status, P_TONE[p.status])),
+        h("p", {class: "small muted clamp", style: "margin:10px 0 12px;min-height:38px"}, p.description || "No brief yet."),
+        h("div", {class: "row small"}, facepile(p.members, 5), h("span", {class: "muted xs"}, p.members.length ? `${p.members.length} ${p.members.length === 1 ? "person" : "people"}` : "No team yet"), h("span", {class: "grow"}),
+          lead ? h("span", {class: "xs muted"}, "Lead ", h("b", {style: "color:var(--foreground);font-weight:500"}, lead.name)) : null),
+        h("div", {class: "row", style: "margin-top:12px"}, progress(pctOf(p)), h("span", {class: "mono xs muted"}, pctOf(p) + "%")),
+        h("div", {class: "row xs muted", style: "margin-top:8px"}, h("span", {class: "mono"}, `${p.counts.open} open`), p.counts.review ? badge(`${p.counts.review} review`, "warning") : null,
+          p.counts.blocked ? badge(`${p.counts.blocked} blocked`, "danger") : null, p.counts.overdue ? badge(`${p.counts.overdue} overdue`, "danger") : null)),
+      h("div", {class: "card-f"}, h("button", {class: "btn ghost sm", onclick: e => { e.stopPropagation(); openProject(p.id, "chat"); }}, icon("hash"), "Room"),
+        h("button", {class: "btn ghost sm", onclick: e => { e.stopPropagation(); openProject(p.id, "board"); }}, icon("board"), "Board"),
+        h("button", {class: "btn ghost sm", onclick: e => { e.stopPropagation(); openProject(p.id, "team"); }}, icon("team"), "Team"), h("span", {class: "grow"}), icon("arrow", "muted"))); };
+  const groups = ["active", "paused", "done"].map(st => [st, S.projects.filter(p => (p.status || "active") === st)]).filter(([, l]) => l.length);
+  $("#main").put(pageHeader("Projects", "Each project has its own team, room, board and progress. A person can be on several projects.", h("button", {class: "btn primary", onclick: () => projectSheet()}, icon("plus"), "New project")),
+    S.projects.length ? groups.map(([st, list]) => [groups.length > 1 ? h("h2", {class: "sec"}, st[0].toUpperCase() + st.slice(1), h("span", {class: "mono muted"}, " " + list.length)) : null, h("div", {class: "grid"}, list.map(card))])
+      : empty("projects", "No projects yet", "Create a project, put people on it, and it gets its own room and board.", h("button", {class: "btn primary", onclick: () => projectSheet()}, icon("plus"), "New project")));
 }
 
-// ---------------------------------------------------------------- team
+async function vProject() {
+  let p;
+  try { p = await api("/api/project?id=" + encodeURIComponent(PROJECT)); } catch { toast("That project no longer exists", "warning"); return go("projects"); }
+  const lead = S.members.find(m => m.id === p.lead), pct = pctOf(p);
+  const tabs = [["overview", "Overview", "overview"], ["chat", "Room", "hash"], ["board", "Board", "board", p.counts.open], ["team", "Team", "team", p.members.length]];
+  const head = h("div", {class: "phead"},
+    h("div", {class: "row", style: "flex-wrap:nowrap;align-items:flex-start;gap:14px"}, projMark(p, "lg"),
+      h("div", {class: "grow", style: "min-width:0"}, h("div", {class: "row"}, h("h1", {}, p.name), badge(p.status, P_TONE[p.status])),
+        h("p", {class: "muted", style: "margin:4px 0 0;font-size:13px;max-width:760px"}, p.description || "No brief yet — add one so everyone knows the goal.")),
+      h("div", {class: "row actions"}, h("button", {class: "btn outline sm", onclick: () => projectSheet(projOf(p.id))}, "Edit"), h("button", {class: "btn primary sm", onclick: () => newTaskSheet({project: p.id})}, icon("plus"), "Task"))),
+    h("div", {class: "pmeta"},
+      h("div", {}, h("span", {class: "l"}, "Lead"), lead ? h("span", {class: "row"}, avatar(lead.name, "sm"), lead.name) : h("span", {class: "muted"}, "Not set")),
+      h("div", {}, h("span", {class: "l"}, "Team"), p.members.length ? facepile(p.members, 8) : h("span", {class: "muted"}, "Nobody yet")),
+      h("div", {class: "grow", style: "min-width:180px"}, h("span", {class: "l"}, "Progress"), h("div", {class: "row", style: "flex-wrap:nowrap"}, progress(pct), h("span", {class: "mono xs"}, `${p.counts.done}/${p.counts.total} · ${pct}%`)))),
+    h("div", {class: "tabs"}, tabs.map(([k, t, ic, n]) => h("div", {class: "tab" + (PTAB === k ? " on" : ""), onclick: () => { PTAB = k; render(); }}, icon(ic), t, n ? h("span", {class: "mono n"}, n) : null))));
+  $("#main").style.padding = "";
+  const body = h("div", {class: "pbody"});
+  $("#main").put(head, body);
+  if (PTAB === "chat") { body.classList.add("pchat"); body.put(chatPanel(p.room, {inProject: true})); return; }
+  if (PTAB === "board") {
+    const fo = h("select", {style: "width:180px", onchange: e => { FILTER.powner = e.target.value; render(); }}, h("option", {value: ""}, "Everyone on it"), S.members.filter(m => p.members.includes(m.id)).map(m => h("option", {value: m.id, selected: FILTER.powner === m.id}, m.name)));
+    return body.put(h("div", {class: "row", style: "margin-bottom:12px"}, fo, h("span", {class: "grow"}), h("span", {class: "xs muted"}, "Drag cards between columns · Done = accepted by you")),
+      boardPanel(p.tasks.filter(t => !FILTER.powner || t.owner === FILTER.powner)));
+  }
+  if (PTAB === "team") return body.put(projectTeam(p));
+  // overview
+  const attention = p.tasks.filter(t => t.status === "blocked" || t.overdue || t.status === "review");
+  const metric = (label, v, tone) => h("div", {class: "metric"}, h("span", {class: "l"}, label), h("span", {class: "v", style: tone ? `color:var(--${tone})` : ""}, v));
+  const card = (title, ic, bodyEl, extra) => h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon(ic), h("h3", {}, title), h("span", {class: "grow"}), extra), bodyEl);
+  const tline = t => h("div", {class: "li click", onclick: () => taskSheet(t.id)}, avatar(nameOf(t.owner), "sm"),
+    h("div", {class: "grow"}, h("div", {class: "row"}, h("span", {class: "t"}, t.title), badge(t.status, TASK_TONE[t.status]), t.overdue ? badge("Overdue", "danger") : null),
+      h("div", {class: "xs muted"}, h("span", {class: "mono"}, t.id), ` · ${nameOf(t.owner)}`, t.blocked_on ? " · blocked on " + humanIds(t.blocked_on) : "", t.due ? h("span", {class: "mono"}, " · due " + t.due) : null)),
+    t.status === "review" ? h("button", {class: "btn primary sm", onclick: async e => { e.stopPropagation(); await api("/api/task", {id: t.id, action: "accept"}); toast(t.id + " accepted"); render(); }}, icon("check"), "Accept") : null);
+  const openTasks = p.tasks.filter(t => !["done", "cut"].includes(t.status)).sort((a, b) => (a.priority + a.id).localeCompare(b.priority + b.id));
+  body.put(h("div", {class: "metrics"}, metric("Open", p.counts.open), metric("In review", p.counts.review, p.counts.review ? "warning" : ""), metric("Blocked", p.counts.blocked, p.counts.blocked ? "danger" : ""),
+      metric("Overdue", p.counts.overdue, p.counts.overdue ? "danger" : ""), metric("Done", p.counts.done, "success")),
+    h("div", {class: "cols"},
+      h("div", {}, card("Needs attention", "alert", attention.length ? h("div", {class: "list"}, attention.map(tline)) : h("div", {class: "card-b muted small"}, "Nothing blocked, late or waiting for review.")),
+        card("Open work", "board", openTasks.length ? h("div", {class: "list"}, openTasks.slice(0, 8).map(tline)) : h("div", {class: "card-b"}, empty("board", "No open tasks", "Give the team something to do.", h("button", {class: "btn primary sm", onclick: () => newTaskSheet({project: p.id})}, icon("plus"), "New task"))),
+          h("button", {class: "btn ghost sm", onclick: () => { PTAB = "board"; render(); }}, "Board", icon("arrow")))),
+      h("div", {}, card("Team", "team", p.people.length ? h("div", {class: "list"}, p.people.map(x => h("div", {class: "li click", onclick: () => memberSheet(x.id)}, avatar(x.name),
+            h("div", {class: "grow", style: "min-width:0"}, h("div", {class: "row"}, h("span", {class: "t"}, x.name), x.lead ? badge("Lead", "info") : null, badge(x.status, STATUS_TONE[x.status])),
+              h("div", {class: "xs muted"}, x.role, x.other_projects.length ? ` · also on ${x.other_projects.map(id => projOf(id)?.name || id).join(", ")}` : "")),
+            h("span", {class: "mono xs muted"}, `${x.open} open`))))
+          : h("div", {class: "card-b"}, empty("team", "No one on this project", "Add people so they get its room and tasks.", h("button", {class: "btn primary sm", onclick: () => { PTAB = "team"; render(); }}, icon("plus"), "Add people"))),
+          h("button", {class: "btn ghost sm", onclick: () => { PTAB = "team"; render(); }}, "Manage", icon("arrow"))),
+        card("Latest in the room", "hash", p.last.length ? h("div", {class: "list"}, p.last.map(m => h("div", {class: "li"}, avatar(nameOf(m.who), "sm"),
+            h("div", {class: "grow", style: "min-width:0"}, h("div", {class: "xs muted"}, (m.who === S.owner_key ? "You" : nameOf(m.who)) + " · " + new Date(m.ts * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"})),
+              h("div", {class: "small clamp"}, m.text))))) : h("div", {class: "card-b muted small"}, "No messages yet."),
+          h("button", {class: "btn ghost sm", onclick: () => { PTAB = "chat"; render(); }}, "Open room", icon("arrow"))))));
+}
+
+function projectTeam(p) {
+  const save = async (members, msg) => { try { await api("/api/project/members", {id: p.id, members}); toast(msg); S = await api("/api/state"); boot(); } catch (e) { toast(e.message, "danger"); } };
+  const setLead = async id => { try { await api("/api/projects", {id: p.id, lead: id}); toast(`${nameOf(id)} leads ${p.name}`); S = await api("/api/state"); boot(); } catch (e) { toast(e.message, "danger"); } };
+  const on = S.members.filter(m => p.members.includes(m.id)), off = S.members.filter(m => !p.members.includes(m.id));
+  const row = (m, isOn) => { const other = (m.projects || []).filter(x => x !== p.id);
+    return h("div", {class: "li"}, avatar(m.name), h("div", {class: "grow", style: "min-width:0"}, h("div", {class: "row"}, h("span", {class: "t"}, m.name), m.id === p.lead ? badge("Lead", "info") : null, m.manager ? badge("Manager") : null),
+        h("div", {class: "xs muted"}, m.role, other.length ? ` · on ${other.map(id => projOf(id)?.name || id).join(", ")}` : "")),
+      isOn ? [m.id !== p.lead ? h("button", {class: "btn ghost sm", onclick: () => setLead(m.id)}, "Make lead") : null,
+          h("button", {class: "btn outline sm", onclick: () => save(p.members.filter(x => x !== m.id), `${m.name} left ${p.name}`)}, "Remove")]
+        : h("button", {class: "btn secondary sm", onclick: () => save([...p.members, m.id], `${m.name} joined ${p.name}`)}, icon("plus"), "Add")); };
+  return h("div", {class: "cols"},
+    h("div", {class: "card"}, h("div", {class: "card-h"}, icon("team"), h("h3", {}, `On ${p.name}`), h("span", {class: "grow"}), badge(on.length)),
+      on.length ? h("div", {class: "list"}, on.map(m => row(m, true))) : h("div", {class: "card-b muted small"}, "Nobody yet — add people from the right.")),
+    h("div", {class: "card"}, h("div", {class: "card-h"}, icon("plus"), h("h3", {}, "Add from the company"), h("span", {class: "grow"}), off.length > 1 ? h("button", {class: "btn ghost sm", onclick: () => save(S.members.map(m => m.id), "Everyone added")}, "Add all") : null),
+      off.length ? h("div", {class: "list"}, off.map(m => row(m, false))) : h("div", {class: "card-b muted small"}, "Everyone is on this project."),
+      h("div", {class: "card-b xs muted", style: "border-top:1px solid var(--border)"}, "People can be on several projects. They get this project's room, tasks and context. New people are added on the ", h("a", {href: "#", onclick: e => { e.preventDefault(); go("team"); }}, "People"), " page.")));
+}
+
+function projectSheet(p = {}) {
+  const f = {name: h("input", {value: p.name || "", placeholder: "e.g. Mobile app"}), description: h("textarea", {placeholder: "What it is and the goal — everyone on the project reads this"}, p.description || ""),
+    lead: h("select", {}, h("option", {value: ""}, "—"), S.members.map(m => h("option", {value: m.id, selected: m.id === p.lead}, m.name))),
+    status: h("select", {}, ["active", "paused", "done"].map(s => h("option", {value: s, selected: s === (p.status || "active")}, s))), repo: h("input", {value: p.repo || "", placeholder: "optional · local path of its git repo, for code tasks"})};
+  const picked = new Set(p.members || []);
+  const chips = p.id ? null : h("div", {class: "chipsel"}, S.members.map(m => { const c = h("span", {class: "chip" + (picked.has(m.id) ? " on" : ""), onclick: () => { picked.has(m.id) ? picked.delete(m.id) : picked.add(m.id); c.classList.toggle("on"); }}, avatar(m.name, "sm"), m.name); return c; }));
+  const err = h("div", {class: "err"});
+  openSheet(p.id ? "Edit project" : "New project", h("label", {class: "f"}, "Name"), f.name, h("label", {class: "f"}, "Brief"), f.description,
+    chips ? [h("label", {class: "f"}, "Team"), chips, h("div", {class: "xs muted", style: "margin-top:4px"}, "You can change this any time on the project's Team tab.")] : null,
+    h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Lead"), f.lead), h("div", {}, h("label", {class: "f"}, "Status"), f.status)), h("label", {class: "f"}, "Code repo"), f.repo,
+    h("div", {class: "row", style: "margin-top:14px"}, h("button", {class: "btn primary", onclick: async () => { try { const r = await api("/api/projects", {id: p.id, name: f.name.value, description: f.description.value, lead: f.lead.value, status: f.status.value, repo: f.repo.value, members: [...picked]});
+      toast("Project saved"); closeSheet(); S = await api("/api/state"); if (!p.id) openProject(r.id); else boot(); } catch (e) { err.textContent = e.message; } }}, icon("check"), p.id ? "Save" : "Create project"), err));
+  f.name.focus();
+}
+
+// ------------------------------------------------------------------ team
 async function vTeam() {
+  $("#main").style.padding = "";
   const t = await api("/api/team");
   const cards = t.members.map(m => {
-    const st = h("div", {class: "row small"}, m.has_token ? chip("checking Telegram…") : chip("console only (no bot)"));
-    if (m.has_token) api("/api/member_status", {id: m.id}).then(s => st.put(...[s.ok ? chip("@" + s.username, "ok") : chip("bot token not working", "bad"),
-      s.ok ? chip(s.in_group ? "in the group" : "not in the group", s.in_group ? "ok" : "bad") : null,
-      s.ok && s.manager ? chip(s.reads_groups ? "reads the group" : "privacy ON → /setprivacy Disable", s.reads_groups ? "ok" : "warn") : null].filter(Boolean))).catch(() => {});
-    return h("div", {class: "card"}, h("div", {class: "row"}, h("h3", {}, m.name), m.manager ? chip("manager") : null), h("div", {class: "small muted", style: "margin:2px 0 8px"}, m.role),
-      h("div", {class: "row small"}, chip(m.persona_lines ? `persona · ${m.persona_lines} lines` : "no persona"), m.skill_files ? chip(`${m.skill_files} skill file(s)`) : null,
-        m.projects.length ? chip(m.projects.join(", ")) : null), h("div", {style: "height:6px"}), st,
-      h("div", {class: "row", style: "margin-top:8px"}, h("button", {class: "sm", onclick: () => { ROOM = m.id; go("chat"); }}, "Chat"),
-        h("button", {class: "sm", onclick: () => memberDrawer(m.id)}, "Profile"), h("button", {class: "sm", onclick: () => newTaskDrawer({owner: m.id})}, "+ Task"),
-        h("span", {class: "spacer"}), m.manager ? null : h("button", {class: "sm danger", onclick: async () => {
-          if (!confirm(`Remove ${m.name}? Their files stay in the team repo history.`)) return; await api("/api/remove", {id: m.id}); toast("Removed"); await refresh(); }}, "Remove")));
+    const st = h("div", {class: "row"}, m.has_token ? badge("Checking Telegram…") : badge("Console only"));
+    if (m.has_token) api("/api/member_status", {id: m.id}).then(s => st.put(s.ok ? badge("@" + s.username, "accent") : badge("Bot token not working", "danger"),
+      s.ok ? badge(s.in_group ? "In the group" : "Not in the group", s.in_group ? "success" : "danger") : null,
+      s.ok && s.manager ? badge(s.reads_groups ? "Reads the group" : "Privacy ON → /setprivacy Disable", s.reads_groups ? "success" : "warning") : null)).catch(() => {});
+    return h("div", {class: "card"}, h("div", {class: "card-b"}, h("div", {class: "row", style: "flex-wrap:nowrap"}, avatar(m.name, "lg"), h("div", {class: "grow", style: "min-width:0"},
+        h("div", {class: "row"}, h("b", {style: "font-size:14px"}, m.name), m.manager ? badge("Manager", "info") : null), h("div", {class: "small muted"}, m.role))),
+      h("div", {class: "row", style: "margin:10px 0 8px"}, badge(m.persona_lines ? `Persona · ${m.persona_lines} lines` : "No persona"), m.skill_files ? badge(`${m.skill_files} skill files`) : null, m.projects.map(pid => h("span", {class: "badge outline click", onclick: () => openProject(pid)}, "# " + (projOf(pid)?.name || pid)))), st),
+      h("div", {class: "card-h", style: "border-top:1px solid var(--border);border-bottom:none"}, h("button", {class: "btn outline sm", onclick: () => { ROOM = m.id; go("chat"); }}, icon("chat"), "Chat"),
+        h("button", {class: "btn outline sm", onclick: () => memberSheet(m.id)}, "Profile"), h("button", {class: "btn ghost sm", onclick: () => newTaskSheet({owner: m.id})}, icon("plus"), "Task"), h("span", {class: "grow"}),
+        m.manager ? null : h("button", {class: "btn ghost sm", style: "color:var(--danger)", onclick: async () => { if (!confirm(`Remove ${m.name}? Their files stay in the team repo history.`)) return; await api("/api/remove", {id: m.id}); toast("Removed " + m.name, "warning"); await refresh(); }}, "Remove")));
   });
   const drafts = h("div", {class: "grid", style: "margin-top:12px"});
   const pick = h("input", {type: "file", multiple: true, accept: ".skill,.zip,.md,.markdown,.txt", style: "display:none", onchange: e => handleFiles(e.target.files, drafts)});
-  const drop = h("div", {class: "drop"}, h("p", {}, h("b", {}, "Drop persona files here"), ": .skill, .zip, SKILL.md, .md. Several at once."),
-    h("p", {class: "muted small"}, "Name and role are read from each file. The whole file is copied into the team repo, so you can delete the original afterwards."),
-    h("div", {class: "row", style: "justify-content:center"}, pick, h("button", {onclick: () => pick.click()}, "Choose files…"), h("button", {onclick: () => addDraft({}, drafts)}, "Add someone without a file")));
+  const drop = h("div", {class: "drop"}, h("div", {class: "ico accent", style: "margin:0 auto 8px;width:36px;height:36px"}, icon("upload", "lg")), h("b", {}, "Drop persona files here"),
+    h("p", {class: "small muted", style: "margin:4px 0 12px"}, ".skill, .zip, SKILL.md or any .md · several at once · names and roles are read from each file · the whole package is kept in the team repo"),
+    h("div", {class: "row", style: "justify-content:center"}, pick, h("button", {class: "btn secondary", onclick: () => pick.click()}, "Choose files…"), h("button", {class: "btn ghost", onclick: () => addDraft({}, drafts)}, icon("plus"), "Add without a file")));
   ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
   drop.addEventListener("drop", e => handleFiles(e.dataTransfer.files, drafts));
-  $("#main").put(h("h1", {}, "Team"), h("div", {class: "grid", style: "margin-top:12px"}, cards), h("h2", {}, "Add people"), drop, drafts);
+  $("#main").put(pageHeader("People", `${t.members.length} on the team · Telegram bots are optional — everyone can be reached in Chat.`), h("div", {class: "grid"}, cards),
+    h("h2", {class: "sec", style: "margin-top:24px"}, icon("plus"), "Add people"), drop, drafts);
 }
 async function handleFiles(files, box) {
-  for (const f of files) {
-    const buf = new Uint8Array(await f.arrayBuffer()); let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-    try { addDraft(await api("/api/upload", {filename: f.name, data: btoa(bin)}), box); } catch (e) { toast(`${f.name}: ${e.message}`); }
-  }
+  for (const f of files) { const buf = new Uint8Array(await f.arrayBuffer()); let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+    try { addDraft(await api("/api/upload", {filename: f.name, data: btoa(bin)}), box); } catch (e) { toast(`${f.name}: ${e.message}`, "danger"); } }
 }
 function addDraft(pre, box) {
   const d = {token: "", username: "", inGroup: false, dm: false, timer: null};
   const name = h("input", {value: pre.name || "", placeholder: "Name"}), role = h("input", {value: pre.role || "", placeholder: "Role"}),
-    projects = h("input", {placeholder: "optional: project ids, comma separated"}), token = h("input", {type: "password", placeholder: "optional: bot token from @BotFather (for Telegram)", autocomplete: "off"});
-  const s1 = h("li", {class: "muted"}, "Telegram (optional): paste the bot token"), s2 = h("li", {class: "muted"}, ""), s3 = h("li", {class: "muted"}, "");
-  const err = h("div", {class: "err"}), save = h("button", {class: "primary"}, "Save");
+    picked = new Set(pre.project ? [pre.project] : []),
+    projects = h("div", {class: "chipsel"}, S.projects.length ? S.projects.map(p => { const c = h("span", {class: "chip" + (picked.has(p.id) ? " on" : ""), onclick: () => { picked.has(p.id) ? picked.delete(p.id) : picked.add(p.id); c.classList.toggle("on"); }}, projMark(p, "xs"), p.name); return c; }) : h("span", {class: "xs muted"}, "No projects yet — you can add them to projects later.")), token = h("input", {type: "password", placeholder: "optional · bot token from @BotFather", autocomplete: "off"});
+  const step = (txt) => h("li", {class: "muted"}, h("span", {class: "dot"}), txt);
+  const s1 = step("Telegram (optional): paste a bot token"), s2 = h("li"), s3 = h("li");
+  const mark = (li, ok, ...txt) => { li.className = ok ? "" : "muted"; li.put(h("span", {class: "dot " + (ok ? "on-track" : "at-risk")}), txt); };
+  const err = h("div", {class: "err"}), save = h("button", {class: "btn primary sm"}, icon("check"), "Save");
   const stop = () => { if (d.timer) clearInterval(d.timer); d.timer = null; };
   const poll = async () => { try { const r = await api("/api/links", {token: d.token, name: name.value, role: role.value}); d.inGroup = r.in_group; d.dm = r.dm;
-      s2.put(r.in_group ? "✓ In the group" : h("span", {}, "⏳ Add ", h("b", {}, "@" + d.username), " to your team group")); s2.className = r.in_group ? "" : "muted";
-      s3.put(r.dm ? "✓ DM works: check Telegram" : h("span", {}, "⏳ Open ", h("a", {href: "https://t.me/" + d.username, target: "_blank", rel: "noopener"}, "t.me/" + d.username), " and press Start")); s3.className = r.dm ? "" : "muted";
+      mark(s2, r.in_group, r.in_group ? "In the group" : ["Add ", h("b", {}, "@" + d.username), " to your team group"]);
+      mark(s3, r.dm, r.dm ? "DM works — check Telegram" : ["Open ", h("a", {href: "https://t.me/" + d.username, target: "_blank", rel: "noopener"}, "t.me/" + d.username), " and press Start"]);
       if (r.in_group && r.dm) stop(); } catch (e) { err.textContent = e.message; } };
   let seq = 0;
-  token.addEventListener("input", async () => { const my = ++seq; stop(); d.username = ""; err.textContent = ""; s2.textContent = ""; s3.textContent = "";
-    const t = token.value.trim(); d.token = t; if (!t) { s1.textContent = "Telegram (optional): paste the bot token"; return; }
-    if (!/^\d+:[\w-]{20,}$/.test(t)) { s1.textContent = "That doesn't look like a bot token yet"; return; }
-    s1.textContent = "Checking the token…"; const r = await api("/api/token", {token: t}).catch(e => ({ok: false, error: e.message})); if (my !== seq) return;
-    if (!r.ok) { s1.textContent = "✗ Token didn't work"; err.textContent = r.error; return; }
-    d.username = r.username; s1.put("✓ Connected: ", h("b", {}, "@" + r.username)); s1.className = ""; poll(); d.timer = setInterval(poll, 3000); timers.push(d.timer); });
-  const card = h("div", {class: "card"}, h("div", {class: "row"}, h("b", {}, pre.source || "New person"), h("span", {class: "spacer"}), pre.lines ? chip(`${pre.lines} lines · ${pre.files} file(s)`, "ok") : chip("persona will be generated")),
-    h("div", {class: "two"}, h("div", {}, h("label", {}, "Name"), name), h("div", {}, h("label", {}, "Role"), role)), h("label", {}, "Projects"), projects,
-    h("label", {}, "Telegram bot"), token, h("div", {class: "small muted"}, "Create one: ", h("a", {href: "https://t.me/BotFather", target: "_blank", rel: "noopener"}, "@BotFather"), " → /newbot → copy the token. Skip it to chat only in the console."),
-    h("ul", {class: "steps"}, s1, s2, s3), err, h("div", {class: "row"}, save, h("span", {class: "spacer"}), h("button", {class: "sm", onclick: () => { stop(); card.remove(); }}, "Discard")));
-  save.onclick = async () => { err.textContent = "";
-    if (d.token && !(d.inGroup && d.dm) && !confirm("Telegram group/DM isn't confirmed yet. Save anyway?")) return;
-    save.disabled = true; save.textContent = "Saving…";
-    try { await api("/api/add", {name: name.value, role: role.value, token: d.token, upload_id: pre.upload_id || "", projects: projects.value.split(",").map(s => s.trim()).filter(Boolean)});
+  token.addEventListener("input", async () => { const my = ++seq; stop(); d.username = ""; err.textContent = ""; s2.put(); s3.put(); const t = token.value.trim(); d.token = t;
+    if (!t) return s1.put(h("span", {class: "dot"}), "Telegram (optional): paste a bot token");
+    if (!/^\d+:[\w-]{20,}$/.test(t)) return s1.put(h("span", {class: "dot at-risk"}), "That doesn't look like a bot token yet");
+    s1.put(h("span", {class: "dot at-risk"}), "Checking the token…"); const r = await api("/api/token", {token: t}).catch(e => ({ok: false, error: e.message})); if (my !== seq) return;
+    if (!r.ok) { s1.put(h("span", {class: "dot blocked"}), "Token didn't work"); err.textContent = r.error; return; }
+    d.username = r.username; mark(s1, true, "Connected: ", h("b", {}, "@" + r.username)); poll(); d.timer = setInterval(poll, 3000); timers.push(d.timer); });
+  const card = h("div", {class: "card"}, h("div", {class: "card-h"}, avatar(pre.name || "?", "sm"), h("div", {class: "grow", style: "min-width:0"}, h("h3", {}, pre.name || "New person"), pre.source ? h("div", {class: "small muted mono"}, pre.source) : null), pre.lines ? badge(`${pre.lines} lines · ${pre.files} file${pre.files === 1 ? "" : "s"}`, "success") : badge("Persona generated")),
+    h("div", {class: "card-b"}, h("div", {class: "two"}, h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Name"), name), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Role"), role)),
+      h("label", {class: "f"}, "Projects"), projects, h("label", {class: "f"}, "Telegram bot"), token,
+      h("div", {class: "xs muted", style: "margin-top:4px"}, "Create one: ", h("a", {href: "https://t.me/BotFather", target: "_blank", rel: "noopener"}, "@BotFather"), " → /newbot → copy the token. Skip it to chat only here."),
+      h("ul", {class: "steps"}, s1, s2, s3), err, h("div", {class: "row"}, save, h("span", {class: "grow"}), h("button", {class: "btn ghost sm", onclick: () => { stop(); card.remove(); }}, "Discard"))));
+  save.onclick = async () => { err.textContent = ""; if (d.token && !(d.inGroup && d.dm) && !confirm("Telegram group/DM isn't confirmed yet. Save anyway?")) return;
+    save.disabled = true;
+    try { await api("/api/add", {name: name.value, role: role.value, token: d.token, upload_id: pre.upload_id || "", projects: [...picked]});
       stop(); card.remove(); toast(`${name.value} joined the team`); S = await api("/api/state"); if (!box.children.length) { VIEW = "team"; boot(); } }
-    catch (e) { err.textContent = e.message; save.disabled = false; save.textContent = "Save"; } };
-  box.append(card); (pre.name ? projects : name).focus();
+    catch (e) { err.textContent = e.message; save.disabled = false; } };
+  box.append(card); (!pre.name ? name : !pre.role ? role : token).focus();
 }
-async function memberDrawer(id) {
+async function memberSheet(id) {
   const m = await api("/api/member?id=" + encodeURIComponent(id));
-  const role = h("input", {value: m.role}), projects = h("input", {value: (m.projects || []).join(", ")}), persona = h("textarea", {style: "min-height:260px;font-family:ui-monospace,monospace;font-size:12.5px"}, m.persona);
+  const on = new Set(m.projects || []);
+  const projects = h("div", {class: "chipsel"}, S.projects.length ? S.projects.map(p => { const c = h("span", {class: "chip" + (on.has(p.id) ? " on" : ""), onclick: () => { on.has(p.id) ? on.delete(p.id) : on.add(p.id); c.classList.toggle("on"); }}, projMark(p, "xs"), p.name); return c; }) : h("span", {class: "xs muted"}, "No projects yet."));
+  const role = h("input", {value: m.role}), persona = h("textarea", {class: "mono", style: "min-height:260px;font-size:12px"}, m.persona);
   const paused = (S.paused || []).includes(id), err = h("div", {class: "err"});
-  openDrawer(h("div", {class: "row"}, h("h3", {}, m.name), m.manager ? chip("manager") : null, chip(m.status[0])), h("div", {class: "small muted"}, m.status[1]),
-    h("div", {class: "row", style: "margin:10px 0"}, h("button", {class: "sm", onclick: () => { ROOM = id; go("chat"); }}, "Chat"), h("button", {class: "sm", onclick: () => newTaskDrawer({owner: id})}, "+ Task"),
-      h("button", {class: "sm", onclick: async () => { await api("/api/pause", {who: id, pause: !paused}); toast(paused ? "Resumed" : "Paused"); S = await api("/api/state"); memberDrawer(id); }}, paused ? "▶ Resume" : "⏸ Pause")),
-    h("h2", {}, "Tasks"), m.tasks.length ? h("div", {class: "list"}, m.tasks.map(t => h("div", {class: "item small", style: "cursor:pointer", onclick: () => taskDrawer(t.id)}, h("b", {}, t.id), " ", t.title, " · ", t.status))) : h("div", {class: "muted"}, "None."),
-    h("h2", {}, "Profile"), h("label", {}, "Role"), role, h("label", {}, "Projects (ids, comma separated)"), projects, h("label", {}, "Persona (what the agent reads)"), persona,
-    m.skill_files.length ? h("div", {class: "small muted"}, "Stored skill files: " + m.skill_files.join(", ")) : null,
-    h("div", {class: "row", style: "margin-top:8px"}, h("button", {class: "primary", onclick: async () => { try { await api("/api/member", {id, role: role.value, projects: projects.value.split(","), persona: persona.value}); toast("Saved"); S = await api("/api/state"); } catch (e) { err.textContent = e.message; } }}, "Save profile"), err),
-    h("h2", {}, "Memory (corrections are binding)"), h("div", {class: "md card", html: md(m.memory || "Empty.")}),
-    h("h2", {}, "Activity"), h("pre", {}, m.log || "No activity yet."));
+  openSheet(m.name,
+    h("div", {class: "row", style: "flex-wrap:nowrap"}, avatar(m.name, "lg"), h("div", {class: "grow"}, h("div", {class: "row"}, h("b", {style: "font-size:15px"}, m.name), m.manager ? badge("Manager", "info") : null, badge(m.status[0], STATUS_TONE[m.status[0]]), paused ? badge("Paused", "warning") : null),
+      h("div", {class: "small muted"}, m.role))),
+    h("div", {class: "row", style: "margin:12px 0"}, h("button", {class: "btn outline sm", onclick: () => { ROOM = id; go("chat"); }}, icon("chat"), "Message"), h("button", {class: "btn outline sm", onclick: () => newTaskSheet({owner: id})}, icon("plus"), "Task"),
+      h("button", {class: "btn outline sm", onclick: async () => { await api("/api/pause", {who: id, pause: !paused}); toast(paused ? "Resumed" : "Paused", paused ? "success" : "warning"); S = await api("/api/state"); memberSheet(id); }}, icon(paused ? "play" : "pause"), paused ? "Resume" : "Pause")),
+    h("h2", {class: "sec"}, "Tasks"), m.tasks.length ? h("div", {class: "card list"}, m.tasks.map(t => h("div", {class: "li click", style: "padding:8px 12px", onclick: () => taskSheet(t.id)}, h("span", {class: "mono xs muted"}, t.id), h("span", {class: "grow small"}, t.title), badge(t.status, TASK_TONE[t.status])))) : h("div", {class: "small muted"}, "No tasks."),
+    h("h2", {class: "sec"}, "Profile"), h("label", {class: "f"}, "Role"), role, h("label", {class: "f"}, "Projects"), projects, h("label", {class: "f"}, "Persona — what the agent reads"), persona,
+    m.skill_files.length ? h("div", {class: "xs muted", style: "margin-top:4px"}, "Stored skill package: ", h("span", {class: "mono"}, m.skill_files.join(", "))) : null,
+    h("div", {class: "row", style: "margin-top:8px"}, h("button", {class: "btn primary sm", onclick: async () => { try { await api("/api/member", {id, role: role.value, projects: [...on], persona: persona.value}); toast("Profile saved"); S = await api("/api/state"); } catch (e) { err.textContent = e.message; } }}, icon("check"), "Save profile"), err),
+    h("h2", {class: "sec"}, "Memory — corrections are binding"), h("div", {class: "card card-b md", html: md(m.memory || "Empty.")}),
+    h("h2", {class: "sec"}, "Activity"), h("pre", {}, m.log || "No activity yet."));
 }
 
-// ---------------------------------------------------------------- approvals, reports
+// ------------------------------------------------------------------ approvals, reports
 async function vApprovals() {
+  $("#main").style.padding = "";
   const a = await api("/api/asks"); const pend = a.filter(x => x.status === "pending"), done = a.filter(x => x.status !== "pending");
-  $("#main").put(h("h1", {}, "Approvals"), h("p", {class: "muted"}, "🔴 requests (money, public, production, deleting, legal) never decide themselves: they wait for you."),
-    h("h2", {}, `Waiting (${pend.length})`), pend.length ? h("div", {class: "list"}, pend.map(x => askItem(x, render))) : h("div", {class: "card muted"}, "Nothing waiting."),
-    h("h2", {}, "History"), done.length ? h("div", {class: "list"}, done.map(x => askItem(x))) : h("div", {class: "card muted"}, "None yet."));
+  const item = x => h("div", {class: "li"}, h("span", {class: "ico " + (x.status === "pending" ? (x.level === "red" ? "danger" : "warning") : x.status === "approved" ? "success" : "")}, icon("approvals")),
+    h("div", {class: "grow"}, h("div", {class: "row"}, h("span", {class: "t"}, x.summary), x.status === "pending" ? badge(x.level === "red" ? "Needs you" : "FYI", x.level === "red" ? "danger" : "warning") : badge(x.status, x.status === "approved" ? "success" : "danger")),
+      h("div", {class: "xs muted"}, h("span", {class: "mono"}, x.id), ` · from ${nameOf(x.from)}`, x.task ? " · " + x.task : "", x.created ? h("span", {class: "mono"}, " · " + x.created.slice(0, 16).replace("T", " ")) : null),
+      x.details ? h("pre", {style: "margin-top:6px"}, x.details) : null, x.recommendation ? h("div", {class: "xs muted", style: "margin-top:4px"}, `${nameOf(S.manager)} recommends: ${x.recommendation}`) : null),
+    x.status === "pending" ? h("div", {class: "row"}, h("button", {class: "btn success sm", onclick: async () => { await decide(x.id, "approved"); render(); }}, icon("check"), "Approve"), h("button", {class: "btn danger sm", onclick: async () => { await decide(x.id, "rejected"); render(); }}, "Reject")) : null);
+  $("#main").put(pageHeader("Approvals", "🔴 requests — money, anything public, production, deleting, legal — never decide themselves. They wait for you."),
+    h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon("inbox"), h("h3", {}, "Waiting"), pend.length ? badge(pend.length, "danger") : null),
+      pend.length ? h("div", {class: "list"}, pend.map(item)) : h("div", {class: "card-b"}, empty("check", "Nothing waiting", "Requests from the team show up here and in their chat."))),
+    h("div", {class: "card"}, h("div", {class: "card-h"}, icon("clock"), h("h3", {}, "History")), done.length ? h("div", {class: "list"}, done.map(item)) : h("div", {class: "card-b muted small"}, "None yet.")));
 }
 async function vReports() {
+  $("#main").style.padding = "";
   const [list, dec] = await Promise.all([api("/api/reports"), api("/api/decisions")]);
-  const view = h("div", {class: "card md"}, list.length ? "Pick a report." : "No reports yet. Click “Write report now”.");
-  const decBox = h("textarea", {style: "min-height:160px"}, dec.text || "");
-  const show = async n => { const r = await api("/api/report?name=" + encodeURIComponent(n)); view.innerHTML = md(r.text); };
-  $("#main").put(h("div", {class: "row"}, h("h1", {}, "Reports & decisions"), h("span", {class: "spacer"}),
-      h("button", {class: "primary", onclick: async () => { await api("/api/report/run", {}); toast("Report written"); render(); }}, "Write report now")),
-    h("div", {class: "cols", style: "margin-top:12px"}, h("div", {}, view),
-      h("div", {}, h("h2", {}, "Reports"), h("div", {class: "list"}, list.map(n => h("div", {class: "item", style: "cursor:pointer", onclick: () => show(n)}, n.replace(".md", "")))),
-        h("h2", {}, "Open decisions (what's waiting on you)"), h("div", {class: "small muted"}, "Numbered lines appear in every report under “Needs you”. Remove a line when decided."), decBox,
-        h("button", {style: "margin-top:6px", onclick: async () => { await api("/api/decisions", {text: decBox.value}); toast("Saved"); }}, "Save decisions"))));
-  if (list.length) show(list[0]);
+  const view = h("div", {class: "card-b md"}, list.length ? "" : empty("reports", "No reports yet", "Reports are written daily at the time set in Settings — or now.", h("button", {class: "btn primary", onclick: runReport}, "Write report now")));
+  const decBox = h("textarea", {style: "min-height:170px", class: "mono"}, dec.text || "");
+  let current = list[0];
+  const show = async n => { current = n; const r = await api("/api/report?name=" + encodeURIComponent(n)); view.innerHTML = md(r.text); drawList(); };
+  const listBox = h("div", {class: "list"});
+  const drawList = () => listBox.put(list.map(n => h("div", {class: "li click" + (n === current ? " on" : ""), style: n === current ? "background:var(--accent-muted)" : "", onclick: () => show(n)}, icon("reports"), h("span", {class: "mono small grow"}, n.replace(".md", "")))));
+  $("#main").put(pageHeader("Reports & decisions", "Daily reports are generated from the files — they can't invent progress.", h("button", {class: "btn primary", onclick: runReport}, icon("reports"), "Write report now")),
+    h("div", {class: "cols"}, h("div", {class: "card"}, h("div", {class: "card-h"}, icon("reports"), h("h3", {}, current ? "Report · " + current.replace(".md", "") : "Report")), view),
+      h("div", {}, h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon("clock"), h("h3", {}, "All reports")), list.length ? listBox : h("div", {class: "card-b muted small"}, "None yet.")),
+        h("div", {class: "card"}, h("div", {class: "card-h"}, icon("target"), h("h3", {}, "Open decisions")), h("div", {class: "card-b"}, h("p", {class: "xs muted", style: "margin:0 0 8px"}, "Numbered lines appear in every report under “Needs you”. Remove a line when it's decided."), decBox,
+          h("button", {class: "btn secondary sm", style: "margin-top:8px", onclick: async () => { await api("/api/decisions", {text: decBox.value}); toast("Decisions saved"); }}, icon("check"), "Save"))))));
+  drawList(); if (list.length) show(list[0]);
 }
 
-// ---------------------------------------------------------------- settings
+// ------------------------------------------------------------------ settings
 async function vSettings() {
+  $("#main").style.padding = "";
   const s = await api("/api/settings"); const m = s.monitor || {}, l = s.llm || {};
   const f = {company: h("input", {value: s.company || ""}), owner_name: h("input", {value: s.owner?.name || ""}), timezone: h("input", {value: s.timezone || ""}),
     provider: h("select", {}, [["claude-code", "Claude subscription (claude CLI)"], ["anthropic", "Anthropic API"], ["openai", "OpenAI-compatible"]].map(([v, t]) => h("option", {value: v, selected: l.provider === v}, t))),
     model: h("input", {value: l.model || ""}), base_url: h("input", {value: l.base_url || ""}), api_key: h("input", {type: "password", placeholder: "leave blank to keep"}),
-    daily_report: h("input", {type: "time", value: m.daily_report || "18:30"}), work_sessions: h("input", {value: (m.work_sessions || []).join(", "), placeholder: "e.g. 10:00, 15:00 (blank = only when asked)"}),
+    daily_report: h("input", {type: "time", value: m.daily_report || "18:30"}), work_sessions: h("input", {value: (m.work_sessions || []).join(", "), placeholder: "e.g. 10:00, 15:00 · blank = only when asked"}),
     budget: h("input", {type: "number", value: s.budget?.daily_tokens_per_agent || 300000}),
-    coding_tool: h("select", {}, [["none", "none"], ["claude", "Claude Code"], ["codex", "Codex CLI"]].map(([v, t]) => h("option", {value: v, selected: v === ((s.executor?.command || [])[0] || "none")}, t))),
-    owner_telegram_id: h("input", {value: s.owner?.telegram_user_id || ""}), group_chat_id: h("input", {value: s.telegram?.group_chat_id || ""})};
+    coding_tool: h("select", {}, [["none", "None"], ["claude", "Claude Code"], ["codex", "Codex CLI"]].map(([v, t]) => h("option", {value: v, selected: v === ((s.executor?.command || [])[0] || "none")}, t))),
+    owner_telegram_id: h("input", {class: "mono", value: s.owner?.telegram_user_id || ""}), group_chat_id: h("input", {class: "mono", value: s.telegram?.group_chat_id || ""})};
   const err = h("div", {class: "err"});
-  const save = async () => { err.textContent = ""; try { await api("/api/settings", {...Object.fromEntries(Object.entries(f).map(([k, e]) => [k, e.value])), work_sessions: f.work_sessions.value.split(",")});
-      toast("Saved and restarted"); await refresh(); } catch (e) { err.textContent = e.message; } };
-  const tgToken = h("input", {type: "password", placeholder: "manager bot token from @BotFather"}), tgOut = h("div", {class: "small"});
+  const save = async () => { err.textContent = ""; try { await api("/api/settings", {...Object.fromEntries(Object.entries(f).map(([k, e]) => [k, e.value])), work_sessions: f.work_sessions.value.split(",")}); toast("Settings saved — restarted"); await refresh(); } catch (e) { err.textContent = e.message; } };
+  const tgToken = h("input", {type: "password", placeholder: "Manager bot token from @BotFather"}), tgOut = h("div", {class: "small", style: "min-height:18px;margin-top:8px"});
   const tg = S.telegram;
-  $("#main").put(h("h1", {}, "Settings"), S.llm_error ? h("div", {class: "card bad", style: "margin:10px 0"}, "Model problem: " + S.llm_error) : null,
+  const card = (title, ic, ...kids) => h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon(ic), h("h3", {}, title)), h("div", {class: "card-b"}, kids));
+  const detect = (what, waitMsg) => async () => { tgOut.textContent = waitMsg; try { const r = await api("/api/telegram/detect", {what}); tgOut.put(r.found ? badge(`${what === "owner" ? "You" : "Group"}: ${r.name} (${r.id})`, "success") : badge("Not detected — try again", "warning")); } catch (x) { tgOut.textContent = x.message; } };
+  $("#main").put(pageHeader("Settings", "Changes apply immediately — the team restarts in the background.", h("button", {class: "btn primary", onclick: save}, icon("check"), "Save & restart")),
+    S.llm_error ? h("div", {class: "card card-b", style: "margin-bottom:12px;border-color:rgba(220,38,38,.3);color:var(--danger)"}, "Model problem: " + S.llm_error) : null, err,
     h("div", {class: "cols"}, h("div", {},
-      h("div", {class: "card"}, h("h3", {}, "Company"), h("div", {class: "three"}, h("div", {}, h("label", {}, "Name"), f.company), h("div", {}, h("label", {}, "Owner"), f.owner_name), h("div", {}, h("label", {}, "Timezone"), f.timezone))),
-      h("div", {style: "height:12px"}),
-      h("div", {class: "card"}, h("h3", {}, "AI model"), h("label", {}, "Provider"), f.provider, h("div", {class: "two"}, h("div", {}, h("label", {}, "Model"), f.model), h("div", {}, h("label", {}, "Base URL"), f.base_url)), h("label", {}, "API key"), f.api_key,
-        h("label", {}, "Coding tool for code tasks"), f.coding_tool),
-      h("div", {style: "height:12px"}),
-      h("div", {class: "card"}, h("h3", {}, "Schedule & budget"), h("div", {class: "two"}, h("div", {}, h("label", {}, "Daily report"), f.daily_report), h("div", {}, h("label", {}, "Daily tokens per person"), f.budget)),
-        h("label", {}, "Work sessions (Mon–Sat, the team works on its own)"), f.work_sessions),
-      h("div", {class: "row", style: "margin-top:12px"}, h("button", {class: "primary", onclick: save}, "Save & restart"), err)),
-    h("div", {},
-      h("div", {class: "card"}, h("h3", {}, "Telegram (optional)"), h("p", {class: "small muted"}, "Everything works in this console. Telegram adds phone access: a group plus 1:1 bots."),
-        h("div", {class: "row small"}, tg.connected ? chip("running", "ok") : chip("not running"), tg.manager_token ? chip("manager bot set", "ok") : chip("no manager bot"),
-          tg.owner_id ? chip("owner id " + tg.owner_id, "ok") : chip("owner id missing"), tg.group_id ? chip("group " + tg.group_id, "ok") : chip("no group")),
-        tg.error ? h("div", {class: "err"}, tg.error) : null,
-        h("label", {}, "1 · Manager bot token"), h("div", {class: "row"}, tgToken, h("button", {class: "sm", onclick: async () => { tgOut.textContent = "Checking…"; try { const r = await api("/api/telegram/manager", {token: tgToken.value}); tgOut.textContent = r.ok ? `✓ @${r.username}${r.reads_groups ? "" : " (turn privacy OFF: @BotFather → /setprivacy → Disable)"}` : r.error; S = await api("/api/state"); } catch (e) { tgOut.textContent = e.message; } }}, "Connect")),
-        h("label", {}, "2 · Press Start on the manager bot, then"), h("button", {class: "sm", onclick: async e => { tgOut.textContent = "Waiting up to 90s for your /start…"; try { const r = await api("/api/telegram/detect", {what: "owner"}); tgOut.textContent = r.found ? `✓ You: ${r.name} (${r.id})` : "Not detected, try again"; } catch (x) { tgOut.textContent = x.message; } }}, "Detect me"),
-        h("label", {}, "3 · Add the manager bot to a group and send a message, then"), h("button", {class: "sm", onclick: async () => { tgOut.textContent = "Waiting up to 90s for a message in the group…"; try { const r = await api("/api/telegram/detect", {what: "group"}); tgOut.textContent = r.found ? `✓ Group: ${r.name} (${r.id})` : "Not detected, try again"; } catch (x) { tgOut.textContent = x.message; } }}, "Detect group"),
-        h("div", {class: "two"}, h("div", {}, h("label", {}, "Owner Telegram id"), f.owner_telegram_id), h("div", {}, h("label", {}, "Group id"), f.group_chat_id)),
-        tgOut, h("div", {class: "row", style: "margin-top:8px"}, h("button", {onclick: async () => { await api("/api/restart", {}); toast("Restarted"); await refresh(); }}, "Restart to apply")),
-        h("p", {class: "small muted"}, "Bots for team members are added on the Team page.")),
-      h("div", {style: "height:12px"}),
-      h("div", {class: "card small"}, h("h3", {}, "Where things live"), h("div", {class: "muted"}, "Team repo: ", h("code", {}, S.workspace)), h("div", {class: "muted"}, "Model: ", h("code", {}, S.model))))));
+      card("Company", "overview", h("div", {class: "three"}, h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Name"), f.company), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Owner"), f.owner_name), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Timezone"), f.timezone))),
+      card("AI model", "bot", h("label", {class: "f", style: "margin-top:0"}, "Provider"), f.provider, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Model"), f.model), h("div", {}, h("label", {class: "f"}, "Base URL"), f.base_url)),
+        h("label", {class: "f"}, "API key"), f.api_key, h("label", {class: "f"}, "Coding tool for code tasks"), f.coding_tool),
+      card("Schedule & budget", "clock", h("div", {class: "two"}, h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Daily report"), f.daily_report), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Daily tokens per person"), f.budget)),
+        h("label", {class: "f"}, "Work sessions (Mon–Sat — the team works on its own)"), f.work_sessions)),
+      h("div", {},
+        card("Telegram", "send", h("p", {class: "small muted", style: "margin:0 0 10px"}, "Optional. Everything works in this console; Telegram adds phone access — a group plus 1:1 bots."),
+          h("div", {class: "row"}, tg.connected ? badge("Running", "success") : badge("Not running"), tg.manager_token ? badge("Manager bot set", "success") : badge("No manager bot"),
+            tg.owner_id ? badge("Owner id set", "success") : badge("Owner id missing", "warning"), tg.group_id ? badge("Group set", "success") : badge("No group", "warning")),
+          tg.error ? h("div", {class: "err", style: "margin-top:6px"}, tg.error) : null,
+          h("label", {class: "f"}, "1 · Manager bot token"), h("div", {class: "row", style: "flex-wrap:nowrap"}, tgToken, h("button", {class: "btn secondary sm", onclick: async () => { tgOut.textContent = "Checking…";
+            try { const r = await api("/api/telegram/manager", {token: tgToken.value}); tgOut.put(r.ok ? badge(`@${r.username}${r.reads_groups ? "" : " — turn privacy OFF: @BotFather → /setprivacy → Disable"}`, r.reads_groups ? "success" : "warning") : badge(r.error, "danger")); S = await api("/api/state"); } catch (e) { tgOut.textContent = e.message; } }}, "Connect")),
+          h("label", {class: "f"}, "2 · Press Start on the manager bot, then"), h("button", {class: "btn outline sm", onclick: detect("owner", "Waiting up to 90s for your /start…")}, "Detect me"),
+          h("label", {class: "f"}, "3 · Add the manager bot to a group and send a message, then"), h("button", {class: "btn outline sm", onclick: detect("group", "Waiting up to 90s for a message in the group…")}, "Detect group"),
+          h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Owner Telegram id"), f.owner_telegram_id), h("div", {}, h("label", {class: "f"}, "Group id"), f.group_chat_id)), tgOut,
+          h("div", {class: "row", style: "margin-top:10px"}, h("button", {class: "btn outline sm", onclick: async () => { await api("/api/restart", {}); toast("Restarted"); await refresh(); }}, icon("refresh"), "Restart to apply")),
+          h("p", {class: "xs muted", style: "margin:10px 0 0"}, "Bots for team members are added on the People page.")),
+        card("Where things live", "projects", h("div", {class: "small"}, h("div", {class: "muted"}, "Team repo"), h("div", {class: "mono xs", style: "margin-bottom:8px;word-break:break-all"}, S.workspace), h("div", {class: "muted"}, "Model"), h("div", {class: "mono xs"}, S.model))))));
 }
 
-document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
-boot().catch(e => $("#main").put(h("div", {class: "card err"}, e.message)));
+boot().catch(e => $("#app").put(h("div", {class: "setup"}, h("div", {class: "card card-b err"}, e.message))));
 </script>
 </body>
 </html>

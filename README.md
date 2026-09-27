@@ -42,11 +42,11 @@ jm run          # opens the console in your browser
 | Page | What you do there |
 |---|---|
 | **Setup** | First run only: company, you, timezone, goals, AI model (a Claude subscription works), team repo, manager's name |
-| **Dashboard** | Open / review / blocked / overdue counts, **Needs you** (approvals, reviews, decisions), critical path, people, token use, recent activity, "Work session now", "Write report now" |
-| **Chat** | A room per person (like a DM) and a **Team room** (`@all give status`, `@name …`, `/commands`). Approve 🔴 requests right in the chat. Telegram conversations show up here too |
-| **Board** | Kanban (To do · Doing · Blocked · Review · Done), filter by project or person, create and assign tasks, open a task to accept, give feedback, change owner, priority, due date or status |
-| **Projects** | Create projects with a description, lead and status (optionally a code repo). Each shows its tasks |
-| **Team** | Drop in all the `.skill` / `SKILL.md` files at once; names and roles fill in. Telegram bots are optional, with live ✓ checks. Edit roles and personas, see memory and activity, pause people |
+| **Overview** | Open / review / blocked / overdue counts, **Needs you** (approvals, reviews, decisions), project progress, critical path, people, token use, recent activity |
+| **Projects** | The heart of it. Each project has a brief, a lead, **its own team** (a person can be on several projects), and four tabs: **Overview** (progress, what needs attention, who is on it), **Room** (the project's chat: `@all` reaches only that project's people, no mention goes to the lead), **Board** (that project's kanban) and **Team** (add, remove, make lead). Your projects are listed in the sidebar |
+| **Chat** | Project rooms, **All hands** (the whole company, like the Telegram group) and a private chat with each person. Approve 🔴 requests right in the chat. Telegram conversations show up here too |
+| **All tasks** | The company-wide kanban (To do · Doing · Blocked · Review · Done), filter by project or person, drag to change status, open a task to accept, give feedback, change owner, priority, due date |
+| **People** | Drop in all the `.skill` / `SKILL.md` files at once; names and roles fill in. Telegram bots are optional, with live ✓ checks. Edit roles and personas, see memory and activity, pause people |
 | **Approvals** | Every permission request and its history |
 | **Reports** | Daily reports, and your open-decisions list (it appears in every report) |
 | **Settings** | Company, AI model, schedule (report time, work sessions), budget, coding tool, Telegram connection |

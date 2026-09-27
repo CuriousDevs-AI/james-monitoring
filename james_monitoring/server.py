@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,7 +23,7 @@ from pathlib import Path
 import yaml
 
 from .asks import AskError
-from .chat import TEAM_ROOM, ChatStore, MultiBus, WebBus
+from .chat import PROJECT_ROOM, TEAM_ROOM, ChatStore, MultiBus, WebBus
 from .commands import ack_assignment, run_command
 from .config import ConfigError, load_config
 from .llm import LLMError, LLMResult, make_llm
@@ -187,10 +188,63 @@ class App:
             "members": [{"id": m.id, "name": m.name, "role": m.role, "manager": m.monitor,
                          "projects": m.projects, "paused": m.id in s.get("paused", []),
                          "telegram": bool(m.bot_token)} for m in cfg.team],
-            "projects": [{"id": p.id, "name": p.name or p.id, "description": p.description, "lead": p.lead,
-                          "status": p.status, "repo": p.repo} for p in cfg.projects.values()],
+            "projects": [self._project_json(p) for p in cfg.projects.values()],
             "priorities": PRIORITIES, "workspace": str(cfg.workspace_path),
         }
+
+    def _project_json(self, p) -> dict:
+        tasks = [t for t in self.rt.tasks.all() if t.project == p.id]
+        tz = self.rt.cfg.timezone
+        return {"id": p.id, "name": p.name or p.id, "description": p.description, "lead": p.lead,
+                "status": p.status, "repo": p.repo, "members": [m.id for m in self.rt.cfg.project_members(p.id)],
+                "room": PROJECT_ROOM + p.id,
+                "counts": {"total": len(tasks), "done": sum(1 for t in tasks if t.status == "done"),
+                           "open": sum(1 for t in tasks if t.is_open),
+                           "blocked": sum(1 for t in tasks if t.status == "blocked"),
+                           "review": sum(1 for t in tasks if t.status == "review"),
+                           "overdue": sum(1 for t in tasks if t.is_open and t.overdue(tz))}}
+
+    def project_detail(self, pid: str) -> dict:
+        cfg = self.rt.cfg
+        p = cfg.projects.get(pid)
+        if not p:
+            raise ValueError(f"no project {pid}")
+        people = []
+        for m in cfg.project_members(pid):
+            mine = [t for t in self.rt.tasks.for_owner(m.id) if t.project == pid]
+            st = ("blocked" if any(t.status == "blocked" for t in mine) else
+                  "at risk" if any(t.overdue(cfg.timezone) for t in mine) else
+                  "on track" if any(t.status == "doing" for t in mine) else
+                  "not started" if not mine else "queued")
+            people.append({"id": m.id, "name": m.name, "role": m.role, "status": st, "open": len(mine),
+                           "lead": m.id == p.lead, "other_projects": [x for x in m.projects if x != pid]})
+        tasks = [self._task_json(t) for t in self.rt.tasks.all() if t.project == pid]
+        return {**self._project_json(p), "people": people, "tasks": tasks,
+                "last": (self.chat.since(PROJECT_ROOM + pid, -1) or [])[-3:]}
+
+    def project_members(self, pid: str, members: list[str]) -> dict:
+        raw = self.raw()
+        if pid not in (raw.get("projects") or {}):
+            raise ValueError(f"no project {pid}")
+        want = {str(x) for x in members}
+        for m in raw.get("team", []):
+            cur = [str(x) for x in (m.get("projects") or [])]
+            if str(m.get("id")) in want and pid not in cur:
+                cur.append(pid)
+            elif str(m.get("id")) not in want and pid in cur:
+                cur.remove(pid)
+            if cur:
+                m["projects"] = cur
+            else:
+                m.pop("projects", None)
+        lead = raw["projects"][pid].get("lead")
+        if lead and lead not in want:
+            raw["projects"][pid]["lead"] = ""
+        self.save_raw(raw)
+        names = [m.name for m in self.rt.cfg.team if m.id in want]
+        self.rt.ws.commit(f"project {pid}: team is {', '.join(names) or 'empty'}", author=self.rt.cfg.owner_name)
+        self.load()
+        return self._project_json(self.rt.cfg.projects[pid])
 
     def dashboard(self) -> dict:
         rt, cfg = self.rt, self.rt.cfg
@@ -219,6 +273,7 @@ class App:
             "critical": [self._task_json(t) for t in sorted(open_, key=lambda t: str(t.doc.meta.get("due") or "9999"))
                          if t.priority == "P0"][:5],
             "commits": rt.ws.git_log(12).splitlines(),
+            "projects": [self._project_json(p) for p in cfg.projects.values()],
             "budget": cfg.daily_tokens_per_agent, "push_error": rt.ws.state().get("push_error", ""),
         }
 
@@ -262,12 +317,17 @@ class App:
         if not text:
             raise ValueError("empty message")
         cfg = self.rt.cfg
-        if room != TEAM_ROOM and not cfg.member(room):
+        pid = room[len(PROJECT_ROOM):] if room.startswith(PROJECT_ROOM) else ""
+        if pid and pid not in cfg.projects:
+            raise ValueError(f"no such project {pid}")
+        if not pid and room != TEAM_ROOM and not cfg.member(room):
             raise ValueError(f"no such room {room}")
         owner = self.rt.owner_id
         self.chat.append(room, owner, text)
         if text.startswith("/"):
             self.submit(self._command(room, text), timeout=None)
+        elif pid:
+            self.submit(self._project_message(pid, text), timeout=None)
         elif room == TEAM_ROOM:
             self.submit(self._team_message(text), timeout=None)
         else:
@@ -304,12 +364,46 @@ class App:
                 self.pending[TEAM_ROOM] -= 1
         await asyncio.gather(*(one(t) for t in targets))
 
+    async def _project_message(self, pid: str, text: str) -> None:
+        """A project room: @all means everyone on the project; no mention goes to the lead (or the manager)."""
+        cfg, room = self.rt.cfg, PROJECT_ROOM + pid
+        members = [m.id for m in cfg.project_members(pid)]
+        is_all, targets = group_targets(text, cfg, self.gw.usernames if self.gw else None)
+        mentioned = bool(re.search(r"(?<!\w)@\w", text))
+        if is_all:
+            targets = members
+        elif not mentioned:
+            lead = cfg.projects[pid].lead
+            targets = [lead] if lead in members else [cfg.monitor.id]
+        if not targets:
+            self.chat.append(room, cfg.monitor.id, "Nobody is on this project yet — add people on the project page.",
+                             kind="notice")
+            return
+        if is_all and is_status_request(text):
+            for mid in targets:
+                mine = [t for t in self.rt.tasks.for_owner(mid) if t.project == pid]
+                line = "; ".join(t.line(cfg.timezone) for t in mine[:3]) or "nothing open on this project"
+                self.chat.append(room, mid, line)
+            return
+
+        async def one(mid):
+            self.pending[room] = self.pending.get(room, 0) + 1
+            try:
+                reply = await self.rt.dispatch(mid, Event("group", text, sender=self.rt.owner_id, project=pid))
+                self.chat.append(room, mid, reply)
+            except Exception as e:  # noqa: BLE001
+                self.chat.append(room, mid, f"⚠️ {e}", kind="notice")
+            finally:
+                self.pending[room] -= 1
+        await asyncio.gather(*(one(t) for t in targets))
+
     async def _command(self, room: str, text: str) -> None:
         cmd, _, args = text[1:].partition(" ")
-        speaker = room if room != TEAM_ROOM else self.rt.cfg.monitor.id
+        shared = room == TEAM_ROOM or room.startswith(PROJECT_ROOM)
+        speaker = self.rt.cfg.monitor.id if shared else room
         try:
             out = await run_command(self.rt, cmd.lower().split("@")[0], args.strip(), speaker,
-                                    private=room != TEAM_ROOM)
+                                    private=not shared)
         except (ValueError, TaskError, AskError) as e:
             out = f"⚠️ {e}"
         self.chat.append(room, speaker, out, kind="system")
@@ -320,6 +414,10 @@ class App:
         owner = str(b.get("owner", "")).lower()
         if not rt.cfg.member(owner):
             raise ValueError("Pick who owns this task.")
+        pid = str(b.get("project") or "")
+        if pid and pid in rt.cfg.projects and owner not in [m.id for m in rt.cfg.project_members(pid)]:
+            self.project_members(pid, [m.id for m in rt.cfg.project_members(pid)] + [owner])
+            rt = self.rt
         dm = [x.strip() for x in (b.get("done_means") or []) if str(x).strip()]
         t = rt.tasks.create(title=str(b.get("title", "")).strip() or "untitled", owner=owner,
                             created_by=rt.owner_id, priority=str(b.get("priority") or "P1"),
@@ -369,6 +467,12 @@ class App:
         for k in ("name", "description", "lead", "repo", "status"):
             if k in b:
                 p[k] = str(b[k]).strip()
+        members = [str(x) for x in b.get("members") or []]
+        if p.get("lead") and members and p["lead"] not in members:
+            members.append(p["lead"])
+        for m in raw.get("team", []):
+            if str(m.get("id")) in members and pid not in (m.get("projects") or []):
+                m.setdefault("projects", []).append(pid)
         if p.get("repo") and not (Path(p["repo"]).expanduser() / ".git").exists():
             raise ValueError(f"{p['repo']} is not a git repo (leave it blank if there is no code yet).")
         lead = p.get("lead")
@@ -540,6 +644,7 @@ def make_handler(app: App, key: str):
                     "/api/asks": lambda: [app._ask_json(a) for a in reversed(app.rt.asks.all())][:50],
                     "/api/chat": lambda: app.chat_since(q.get("room", TEAM_ROOM), int(q.get("after", -1))),
                     "/api/member": lambda: app.member_detail(q.get("id", "")),
+                    "/api/project": lambda: app.project_detail(q.get("id", "")),
                     "/api/team": lambda: app.admin.state(),
                     "/api/decisions": lambda: {"text": app.rt.ws.read("decisions/OPEN.md")},
                     "/api/reports": lambda: sorted((p.name for p in (app.rt.ws.root / "reports").glob("*.md")),
@@ -582,6 +687,7 @@ def make_handler(app: App, key: str):
                     "/api/ask": lambda: app.decide(str(b.get("id", "")), str(b.get("decision", "")),
                                                    str(b.get("note", ""))),
                     "/api/projects": lambda: app.project_save(b),
+                    "/api/project/members": lambda: app.project_members(str(b.get("id", "")), list(b.get("members") or [])),
                     "/api/member": lambda: app.member_update(b),
                     "/api/decisions": lambda: app.decisions_save(str(b.get("text", ""))),
                     "/api/settings": lambda: app.settings_save(b),

@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 TEAM_ROOM = "team"
+PROJECT_ROOM = "p-"                  # project rooms are "p-<project id>"
 
 
 class ChatStore:

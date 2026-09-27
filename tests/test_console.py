@@ -128,3 +128,51 @@ def test_scheduler_due_jobs():
     assert "report" in due_jobs(cfg, st, eve) and "work:15:00" in due_jobs(cfg, st, eve)
     sunday = datetime(2026, 9, 27, 15, 1, tzinfo=tz)
     assert not any(j.startswith("work") for j in due_jobs(cfg, {}, sunday))
+
+
+def test_projects_own_their_team_room_and_board(app):
+    app.setup({"company": "Acme", "owner": "Maria Lopez", "timezone": "UTC", "provider": "fake"})
+    for name, role in [("Riya", "Backend"), ("Omar", "Design"), ("Lena", "Sales")]:
+        app.admin.add(name=name, role=role, token="")
+    app.load()
+
+    # a project with a team; one person on two projects
+    app.project_save({"name": "Mobile", "description": "The iOS app", "lead": "riya", "members": ["riya", "omar"]})
+    app.project_save({"name": "Growth", "members": ["riya", "lena"]})
+    projects = {p["id"]: p for p in app.state()["projects"]}
+    assert sorted(projects["mobile"]["members"]) == ["omar", "riya"] and projects["mobile"]["room"] == "p-mobile"
+    assert sorted(app.rt.cfg.member("riya").projects) == ["growth", "mobile"]
+
+    # change the team from the project side; removing the lead clears the lead
+    app.project_members("mobile", ["omar"])
+    assert app.state()["projects"][0]["members"] == ["omar"] and app.rt.cfg.projects["mobile"].lead == ""
+    app.project_members("mobile", ["omar", "riya"])
+    app.project_save({"id": "mobile", "lead": "riya"})
+
+    # a task for someone outside the project adds them to it
+    fake = use_fake(app)
+    t = app.task_create({"title": "App store page", "owner": "lena", "project": "mobile", "notify": False})
+    assert "lena" in [m.id for m in app.rt.cfg.project_members("mobile")] and t["project"] == "mobile"
+    detail = app.project_detail("mobile")
+    assert [x["id"] for x in detail["tasks"]] == ["T-001"] and {p["id"] for p in detail["people"]} == {"riya", "omar", "lena"}
+
+    # the project room: @all reaches only the project's people, with the project as context
+    fake = use_fake(app)
+    for _ in range(2):
+        fake.push({"reply": "on it", "actions": []})
+    app.chat_send("p-growth", "@all what's the plan this week?")
+    wait_for(lambda: len([m for m in app.chat.since("p-growth", -1) if m["who"] != app.rt.owner_id]) == 2)
+    speakers = {m["who"] for m in app.chat.since("p-growth", -1)} - {app.rt.owner_id}
+    assert speakers == {"riya", "lena"}
+    system, messages = fake.calls[-1]
+    assert "#Growth project room" in system and "[project growth from Maria Lopez]" in messages[-1]["content"]
+
+    # no mention → the lead answers; a task created there lands in the project
+    fake.push({"reply": "Adding it.", "actions": [{"type": "create_task", "title": "Push notifications", "owner": "riya",
+                                                   "done_means": ["works on iOS"]}]})
+    app.chat_send("p-mobile", "we need push notifications")
+    wait_for(lambda: any(m["who"] == "riya" for m in app.chat.since("p-mobile", -1)))
+    assert app.rt.tasks.get("T-002").project == "mobile"
+
+    with pytest.raises(ValueError, match="no such project"):
+        app.chat_send("p-nope", "hi")

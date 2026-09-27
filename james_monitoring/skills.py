@@ -42,8 +42,14 @@ class ImportedSkill:
         m = re.search(r"^#\s+[^\n—–]+?\s*[—–]\s*(.+)$", self.persona, re.M)
         if m:
             return m.group(1).strip()
-        m = re.search(r"\bAct as [A-Z]\w+,\s*(?:the\s+)?(.+?)(?:\.|\s\(|$)", str(self.meta.get("description", "")))
-        return m.group(1).strip()[:120] if m else ""
+        if self.meta.get("role"):
+            return str(self.meta["role"]).strip()[:120]
+        desc = " ".join(str(self.meta.get("description", "")).split())
+        m = re.search(r"\bAct as [A-Z]\w+,\s*(?:the\s+)?(.+?)(?:\.|\s\(|$)", desc)
+        if m:
+            return m.group(1).strip()[:120]
+        first = re.split(r"(?<=[.!?])\s", desc, maxsplit=1)[0].rstrip(".")
+        return first if 0 < len(first) <= 80 else ""
 
 
 def _text(data: bytes, where: str) -> str:

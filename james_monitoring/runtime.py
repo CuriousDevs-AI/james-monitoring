@@ -61,6 +61,7 @@ class Event:
     hop: int = 0
     task: str = ""
     meta: dict = field(default_factory=dict)
+    project: str = ""            # set when the message comes from a project room
 
 
 def parse_model_output(text: str) -> tuple[str, list[dict]]:
@@ -212,8 +213,21 @@ class Runtime:
         for pid, p in self.cfg.projects.items():
             lead = self.cfg.member(p.lead).name if p.lead and self.cfg.member(p.lead) else "-"
             extra = f" — {p.description}" if p.description else ""
-            lines.append(f"- {pid}: {p.name or pid} [{p.status}] lead={lead}{' (code repo)' if p.repo else ''}{extra}")
+            team = ", ".join(x.id for x in self.cfg.project_members(pid)) or "-"
+            lines.append(f"- {pid}: {p.name or pid} [{p.status}] lead={lead} team={team}{' (code repo)' if p.repo else ''}{extra}")
         return "\n".join(lines)
+
+    def project_channel(self, pid: str) -> str:
+        """Channel description for a project room: the brief, who is on it and its slice of the board."""
+        p = self.cfg.projects.get(pid)
+        name = (p.name if p and p.name else pid)
+        people = ", ".join(f"{x.name} ({x.role})" for x in self.cfg.project_members(pid)) or "nobody yet"
+        lead = self.cfg.member(p.lead).name if p and p.lead and self.cfg.member(p.lead) else "-"
+        tasks = [t for t in self.tasks.all() if t.project == pid and t.is_open]
+        board = "\n".join(f"  {t.line(self.cfg.timezone)}" for t in tasks) or "  (no open tasks)"
+        return (f"the #{name} project room — everyone on project `{pid}` reads it, keep it short and about this project.\n"
+                f"Project brief: {(p.description if p else '') or '-'} · status {(p.status if p else 'active')} · lead {lead}\n"
+                f"On this project: {people}\nOpen tasks in this project (create new ones with project `{pid}`):\n{board}")
 
     def context_for(self, m: Member) -> str:
         tz = self.cfg.timezone
@@ -253,6 +267,11 @@ class Runtime:
                     f"- {a.id}: {a.summary} — {a.status}" for a in mine_asks))
             if self.cfg.projects:
                 parts.append("## Projects\n" + self.projects_text())
+            mine_p = [pid for pid in m.projects if pid in self.cfg.projects]
+            if mine_p:
+                parts.append("## Your projects and teammates\n" + "\n".join(
+                    f"- {pid}: " + (", ".join(x.name for x in self.cfg.project_members(pid) if x.id != m.id) or "just you")
+                    for pid in mine_p))
         docs = self.list_docs()
         if docs:
             parts.append("## Team documents (read with read_file)\n" + docs)
@@ -289,16 +308,19 @@ class Runtime:
                        "group": "the team HQ group (keep it short; the whole team reads it)",
                        "inbox": f"internal message from teammate `{ev.sender}` (not visible to the owner)",
                        "system": "a system event"}.get(ev.source, ev.source)
+            if ev.project:
+                channel = self.project_channel(ev.project)
             system = build_system(
                 company=self.cfg.company, today=today(self.cfg.timezone).isoformat(),
                 charter=self.ws.charter(), persona=self.ws.persona(m.id), memory=self.ws.memory(m.id),
                 member_name=m.name, member_role=m.role, roster=self.roster(), context=self.context_for(m),
                 owner_name=self.cfg.owner_name, can_run_code=self.executor.enabled and not m.monitor,
                 channel=channel)
-            hkey = f"{m.id}:{ev.source}"
+            hkey = f"{m.id}:project:{ev.project}" if ev.project else f"{m.id}:{ev.source}"
             hist = self._load_history(hkey)
             who = self.cfg.owner_name if ev.sender == self.owner_id else ev.sender
-            user_msg = f"[{ev.source} from {who}] {ev.text}"
+            where = f"project {ev.project}" if ev.project else ev.source
+            user_msg = f"[{where} from {who}] {ev.text}"
             messages = [*hist, {"role": "user", "content": user_msg}]
             reply, actions, raw = "", [], ""
             for _round in range(MAX_READ_ROUNDS + 1):
@@ -334,7 +356,10 @@ class Runtime:
                     notes.append(f"⚠️ {a.get('type')}: {e}")
             if ev.source == "inbox":
                 self.ws.log(m.id, f"replied to {ev.sender}: {reply[:300]}")
-            self.ws.commit(f"{m.name}: {ev.source} from {who}" + (f" ({len(actions)} action(s))" if actions else ""),
+            what = {"dm": f"replied to {who}", "group": f"replied to {who} in the group", "inbox": f"answered {who}",
+                    "system": "picked up an update"}.get(ev.source, f"{ev.source} from {who}")
+            n = len(actions)
+            self.ws.commit(what + (f" · {n} change{'s' if n != 1 else ''}" if n else ""),
                            author=m.name)
         out = reply
         if notes:
@@ -351,7 +376,7 @@ class Runtime:
             created_by = self.owner_id if (ev.sender == self.owner_id and ev.source in ("dm", "group")) else m.id
             task = self.tasks.create(title=a.get("title", "untitled"), owner=owner, created_by=created_by,
                                      priority=a.get("priority", "P1"), due=a.get("due"),
-                                     project=a.get("project", ""), goal=a.get("goal", ""),
+                                     project=a.get("project", "") or ev.project, goal=a.get("goal", ""),
                                      done_means=a.get("done_means") or [], description=a.get("description", ""))
             if owner not in (m.id, self.owner_id):
                 self._spawn(self._deliver(owner, Event("inbox", f"New task assigned to you: {task.line(self.cfg.timezone)}",

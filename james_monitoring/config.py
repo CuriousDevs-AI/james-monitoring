@@ -82,6 +82,10 @@ class Config:
     path: Path | None = None
 
     # -- helpers ---------------------------------------------------------
+    def project_members(self, pid: str) -> list[Member]:
+        """People assigned to a project (a person can be on several)."""
+        return [m for m in self.team if pid in m.projects]
+
     def member(self, member_id: str) -> Member | None:
         member_id = member_id.lower().lstrip("@")
         for m in self.team:

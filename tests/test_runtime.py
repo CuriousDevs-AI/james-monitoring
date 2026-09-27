@@ -13,7 +13,7 @@ async def test_dm_creates_task_commits_and_captures_feedback(rt):
     t = rt.tasks.get("T-001")
     assert t.owner == "sofia"
     log = subprocess.run(["git", "log", "--oneline"], cwd=rt.ws.root, capture_output=True, text=True).stdout
-    assert "Sofia: dm from Pankaj" in log
+    assert "replied to Pankaj" in log
 
     rt.llm.push({"reply": "Got it, fixing.", "actions": [{"type": "remember", "note": "Hero must use brand blue"}]})
     await rt.dispatch("sofia", Event("dm", "T-001 not like this — use brand blue", sender="pankaj"))
