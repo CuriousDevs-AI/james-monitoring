@@ -26,6 +26,17 @@ def team_status_lines(cfg: Config, tasks: TaskStore) -> list[tuple[str, str, str
     return rows
 
 
+def open_decisions(ws: Workspace) -> list[str]:
+    """Numbered or bulleted lines in decisions/OPEN.md — the owner's decision queue."""
+    import re
+    out = []
+    for line in ws.read("decisions/OPEN.md").splitlines():
+        m = re.match(r"\s*(?:\d+[.)]|[-*])\s+(.+)", line)
+        if m and not m.group(1).startswith("~~"):
+            out.append(m.group(1).strip())
+    return out
+
+
 def build_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -> str:
     tz = cfg.timezone
     d = today(tz)
@@ -47,15 +58,16 @@ def build_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -
     owner_blocks = [t for t in blocked if cfg.owner_name.lower() in t.blocked_on.lower()]
     p0 = sorted([t for t in open_tasks if t.priority == "P0"], key=lambda t: (t.due(tz) or d + timedelta(days=999)))
 
-    if not all_tasks:
-        headline = "No tasks on the board yet — nothing is being tracked."
-    elif pend or owner_blocks:
-        headline = (f"{len(pend)} decision(s) and {len(owner_blocks)} block(s) waiting on {cfg.owner_name} — "
+    if pend or owner_blocks or open_decisions(ws):
+        n_dec = len(pend) + len(open_decisions(ws))
+        headline = (f"{n_dec} decision(s) and {len(owner_blocks)} block(s) waiting on {cfg.owner_name} — "
                     f"that is the bottleneck.")
     elif blocked:
         headline = f"{len(blocked)} task(s) blocked; biggest: {blocked[0].line(tz)}"
     elif overdue:
         headline = f"{len(overdue)} task(s) overdue; biggest: {overdue[0].line(tz)}"
+    elif not all_tasks:
+        headline = "No tasks on the board yet — nothing is being tracked."
     else:
         headline = f"{len(open_tasks)} open task(s), none blocked or overdue."
 
@@ -68,6 +80,7 @@ def build_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -
              for a in pend]
     items += [f"- Unblock {t.id} ({t.owner}): {t.blocked_on}" for t in owner_blocks]
     items += [f"- Review {t.id} ({t.owner}): {t.title}" for t in in_review]
+    items += [f"- Decide: {d}" for d in open_decisions(ws)]
     L += items or ["- nothing"]
     L += ["", "## Blocked / at risk"]
     L += [f"- {t.line(tz)}" for t in blocked + overdue] or ["- none"]

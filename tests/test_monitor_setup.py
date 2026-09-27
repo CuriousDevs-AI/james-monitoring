@@ -37,3 +37,10 @@ def test_scaffold_imports_skill_persona(tmp_path):
     assert "TG_TOKEN_SOFIA=123:abc" in env and "ANTHROPIC_API_KEY=sk-test" in env
     again = load_config(tmp_path / "jm/config.yaml")
     assert again.member("sofia").bot_token == "123:abc"
+
+
+def test_open_decisions_reach_the_report(rt):
+    rt.ws.write("decisions/OPEN.md", "# Open\n\n1. Server + budget\n2. ~~done thing~~\n- Pick a vertical\n")
+    text = build_report(rt.cfg, rt.ws, rt.tasks, rt.asks)
+    assert "- Decide: Server + budget" in text and "- Decide: Pick a vertical" in text
+    assert "done thing" not in text and "waiting on Pankaj" in text

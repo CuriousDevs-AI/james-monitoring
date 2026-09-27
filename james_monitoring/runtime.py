@@ -217,6 +217,9 @@ class Runtime:
             pend = self.asks.pending()
             parts.append("## Pending permission requests\n" + ("\n".join(
                 f"- {a.id} from {a.requester}: {a.summary}" for a in pend) or "- none"))
+            od = self.ws.read("decisions/OPEN.md").strip()
+            if od:
+                parts.append("## Open decisions waiting on the owner (decisions/OPEN.md)\n" + od)
             parts.append("## Recent team repo commits\n" + (self.ws.git_log(15) or "- none"))
             for pid, p in self.cfg.projects.items():
                 if p.repo:
