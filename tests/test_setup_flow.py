@@ -120,3 +120,24 @@ def test_scripted_add_and_remove(tmp_path):
     assert load_config(cfg.path).member("riya_shah") is None
     with pytest.raises(ValueError, match="manager"):
         remove_member(cfg.path, "james")
+
+
+def test_persona_from_packaged_skill_and_bad_files(tmp_path):
+    import zipfile
+    from james_monitoring.setup import PersonaError
+    pkg = tmp_path / "james-delivery-manager.skill"
+    with zipfile.ZipFile(pkg, "w") as z:
+        z.writestr("james-delivery-manager/SKILL.md", "---\nname: james\n---\n# James — delivery\nBody\n")
+        z.writestr("james-delivery-manager/references/notes.md", "extra")
+        z.writestr("__MACOSX/james-delivery-manager/._SKILL.md", b"\xba\xba")
+    assert load_persona(str(pkg)) == "# James — delivery\nBody\n"
+    assert load_persona(f"'{pkg}' ") == "# James — delivery\nBody\n"          # dragged-in path with quotes
+    empty = tmp_path / "empty.zip"
+    with zipfile.ZipFile(empty, "w") as z:
+        z.writestr("readme.txt", "x")
+    with pytest.raises(PersonaError, match="no SKILL.md"):
+        load_persona(str(empty))
+    binary = tmp_path / "photo.png"
+    binary.write_bytes(bytes([0x89, 0xba, 0xff, 0x00, 0xfe]) * 50)
+    with pytest.raises(PersonaError, match="not a text file"):
+        load_persona(str(binary))
