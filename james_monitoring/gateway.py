@@ -10,8 +10,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from datetime import time as dtime
-from zoneinfo import ZoneInfo
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters, Update
 from telegram.constants import ChatAction, ChatType
@@ -25,7 +23,7 @@ from .config import Config
 from .router import group_targets, is_status_request
 from .runtime import Event, Runtime
 from .tasks import TaskError
-from .util import chunk, in_quiet_hours, parse_hhmm
+from .util import chunk, in_quiet_hours
 
 log = logging.getLogger("jm.telegram")
 
@@ -43,6 +41,7 @@ class TelegramGateway:
         self.apps: dict[str, Application] = {}
         self.usernames: dict[str, str] = {}
         self._stop: asyncio.Event | None = None
+        self.chat = None                  # optional ChatStore: Telegram conversations also show in the web console
 
     def stop(self) -> None:
         if self._stop:
@@ -111,6 +110,13 @@ class TelegramGateway:
         except TelegramError:
             pass
 
+    def _mirror(self, room: str, who: str, text: str) -> None:
+        if self.chat is not None:
+            try:
+                self.chat.append(room, who, text, via="telegram")
+            except Exception:  # noqa: BLE001
+                pass
+
     # -- handlers -----------------------------------------------------------------
     def _make_text_handler(self, member_id: str):
         is_monitor = member_id == self.cfg.monitor.id
@@ -123,8 +129,10 @@ class TelegramGateway:
             rt = self.rt
             if chat.type == ChatType.PRIVATE:
                 await self._typing(member_id, chat.id)
+                self._mirror(member_id, rt.owner_id, msg.text)
                 reply = await rt.dispatch(member_id, Event("dm", msg.text, sender=rt.owner_id))
                 await self._reply(update, member_id, reply)
+                self._mirror(member_id, member_id, reply)
                 return
             if not is_monitor or not self._in_our_group(update):
                 return   # only the manager's bot reads the group, so each message is handled exactly once
@@ -135,10 +143,13 @@ class TelegramGateway:
                     await self.post_group(m.id, f"{st} — {line}", reply_to=msg.message_id)
                 return
 
+            self._mirror("team", rt.owner_id, msg.text)
+
             async def one(mid: str) -> None:
                 await self._typing(mid, chat.id)
                 reply = await rt.dispatch(mid, Event("group", msg.text, sender=rt.owner_id))
                 await self.post_group(mid, reply, reply_to=msg.message_id)
+                self._mirror("team", mid, reply)
             await asyncio.gather(*(one(t) for t in targets))
         return handler
 
@@ -185,27 +196,6 @@ class TelegramGateway:
         except (ValueError, AskError) as e:
             await q.answer(str(e)[:190], show_alert=True)
 
-    # -- scheduled jobs (on the manager's bot) -------------------------------------------
-    async def _job_report(self, context: ContextTypes.DEFAULT_TYPE) -> None:
-        try:
-            await self.rt.run_daily_report()
-        except Exception:
-            log.exception("daily report failed")
-
-    async def _job_work(self, context: ContextTypes.DEFAULT_TYPE) -> None:
-        try:
-            digest = await self.rt.run_work_session()
-            if digest:
-                await self.send_owner(self.cfg.monitor.id, "🛠 Work session:\n" + digest)
-        except Exception:
-            log.exception("work session failed")
-
-    async def _job_checks(self, context: ContextTypes.DEFAULT_TYPE) -> None:
-        try:
-            await self.rt.run_checks()
-        except Exception:
-            log.exception("checks failed")
-
     # -- lifecycle ----------------------------------------------------------------
     def build(self) -> None:
         for m in self.cfg.team:
@@ -226,7 +216,8 @@ class TelegramGateway:
             raise RuntimeError(f"The monitor ({self.cfg.monitor.name}) needs a bot token "
                                f"(env {self.cfg.monitor.bot_token_env}).")
 
-    async def run(self, rt: Runtime) -> None:
+    async def start(self, rt: Runtime) -> None:
+        """Connect every bot and start polling. Scheduling lives in scheduler.py, not here."""
         self.rt = rt
         if not self.apps:
             self.build()
@@ -241,18 +232,21 @@ class TelegramGateway:
             await app.start()
             await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
             log.info("%s online as @%s", mid, me.username)
-        jq = self.apps[self.cfg.monitor.id].job_queue
-        tz = ZoneInfo(self.cfg.timezone)
-        rep = parse_hhmm(self.cfg.daily_report)
-        jq.run_daily(self._job_report, time=dtime(rep.hour, rep.minute, tzinfo=tz), name="daily-report")
-        for hhmm in self.cfg.work_sessions:
-            t = parse_hhmm(hhmm)
-            jq.run_daily(self._job_work, time=dtime(t.hour, t.minute, tzinfo=tz), days=(1, 2, 3, 4, 5, 6),  # PTB: 0=Sunday → Mon–Sat
-                         name=f"work-{hhmm}")
-        jq.run_repeating(self._job_checks, interval=self.cfg.check_every_minutes * 60, first=60, name="checks")
-        log.info("james-monitoring running: %d bot(s), daily report %s %s", len(self.apps),
-                 self.cfg.daily_report, self.cfg.timezone)
 
+    async def shutdown(self) -> None:
+        for app in self.apps.values():
+            try:
+                await app.updater.stop()
+                await app.stop()
+                await app.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
+
+    async def run(self, rt: Runtime, scheduler=None) -> None:
+        """Headless mode (no web console): bots + scheduler until Ctrl-C / SIGTERM."""
+        await self.start(rt)
+        if scheduler:
+            scheduler.start()
         stop = self._stop = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -263,11 +257,7 @@ class TelegramGateway:
         try:
             await stop.wait()
         finally:
-            for app in self.apps.values():
-                try:
-                    await app.updater.stop()
-                    await app.stop()
-                    await app.shutdown()
-                except Exception:
-                    pass
+            if scheduler:
+                await scheduler.stop()
+            await self.shutdown()
             await rt.drain()

@@ -19,7 +19,12 @@ mkdir -p /opt/my-team && cd /opt/my-team
 - **Bots:** you create one Telegram bot per person with **@BotFather** (`/newbot`). The wizard asks for each
   token at the right moment, so you can create them as you go.
 
-## 3. Run the wizard
+## 3. Set up (browser)
+
+The easiest way: in an empty folder run `jm run`. The browser opens the setup screen; after it, add people on the
+**Team** page and (optionally) connect Telegram in **Settings**. The terminal wizard below does the same.
+
+### Or: the terminal wizard
 
 ```bash
 jm init
@@ -71,7 +76,7 @@ decision and report is then pushed as it happens. `git pull` it anywhere to read
 
 ## Changing the team later
 
-The easiest way is `jm ui`. It opens a page on your machine (localhost only, protected by a key in the link).
+The easiest way is the **Team** page in the console (`jm run`).
 Drop in persona files (several at once), paste bot tokens, and watch the ✓ checks. The whole skill package is
 stored in `team/<id>/skill/`, so the original files can be deleted afterwards.
 

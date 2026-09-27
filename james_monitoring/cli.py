@@ -62,14 +62,23 @@ def cmd_remove_member(args) -> None:
 
 
 def cmd_run(args) -> None:
-    from .gateway import TelegramGateway
-    cfg = _cfg(args)
+    """The console (web) + team runtime + Telegram (if connected) + scheduler. Works in an empty folder too:
+    the browser then shows the setup screen."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    gw = TelegramGateway(cfg)
-    gw.build()
-    rt = _runtime(cfg, bus=gw)
-    asyncio.run(gw.run(rt))
+    cfg_path = Path(args.config).expanduser().resolve()
+    if args.no_web:
+        from .gateway import TelegramGateway
+        from .scheduler import Scheduler
+        cfg = _cfg(args)
+        gw = TelegramGateway(cfg)
+        gw.build()
+        rt = _runtime(cfg, bus=gw)
+        asyncio.run(gw.run(rt, scheduler=Scheduler(rt)))
+        return
+    from .server import serve
+    serve(cfg_path.parent, host=args.host, port=args.port, open_browser=not args.no_browser,
+          telegram=not args.no_telegram)
 
 
 def cmd_chat(args) -> None:
@@ -141,9 +150,8 @@ def cmd_work(args) -> None:
 
 
 def cmd_ui(args) -> None:
-    from .ui import serve
-    cfg = _cfg(args)
-    serve(cfg.path, host=args.host, port=args.port, open_browser=not args.no_browser)
+    args.no_web = False
+    cmd_run(args)
 
 
 def cmd_doctor(args) -> None:
@@ -244,7 +252,12 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("member")
     s.set_defaults(fn=cmd_remove_member)
 
-    s = sub.add_parser("run", help="start the Telegram team (all bots + the manager's schedule)")
+    s = sub.add_parser("run", help="start everything: web console + team + Telegram (if connected) + schedule")
+    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--no-browser", action="store_true")
+    s.add_argument("--no-telegram", action="store_true", help="console only")
+    s.add_argument("--no-web", action="store_true", help="Telegram + schedule only, no console")
     s.set_defaults(fn=cmd_run)
 
     s = sub.add_parser("chat", help="talk to a member locally, no Telegram")
@@ -262,10 +275,11 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("work", help="run one work session now (everyone moves their top task)")
     s.set_defaults(fn=cmd_work)
 
-    s = sub.add_parser("ui", help="web page to add/remove people, drop in .skill files, connect bots")
+    s = sub.add_parser("ui", help="same as `jm run` (the web console)")
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--no-browser", action="store_true")
+    s.add_argument("--no-telegram", action="store_true")
     s.set_defaults(fn=cmd_ui)
 
     s = sub.add_parser("doctor", help="check the setup")

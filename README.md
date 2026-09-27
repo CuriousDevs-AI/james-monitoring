@@ -28,53 +28,34 @@ You (Telegram)
  git workspace: team/charter.md · team/<id>/{persona,memory,log}.md · tasks/ · asks/ · docs/ · decisions/ · reports/
 ```
 
-## Set up a team in about 15 minutes
+## Start in 2 minutes
 
 ```bash
 git clone https://github.com/CuriousDevs-AI/james-monitoring.git
 cd james-monitoring && python -m venv .venv && . .venv/bin/activate && pip install -e ".[all]"
-mkdir -p ../my-team && cd ../my-team
-jm init
+mkdir -p ../my-company && cd ../my-company
+jm run          # opens the console in your browser
 ```
 
-`jm init` walks you through it and **checks every Telegram link live**. Nothing is assumed:
+**Everything happens in the console**, on your own machine at `localhost`, protected by a key in the link:
 
-1. **Basics:** company, your name, timezone (detected automatically), goals.
-2. **AI:** provider, model, key.
-3. **Workspace:** a new git repo, or clone an existing one.
-4. **Manager bot:** paste its token. The wizard then:
-   - **detects you** when you press Start on the bot,
-   - **detects your team group** when you add the bot to it,
-   - reminds you to switch off privacy mode, so the manager can read the group.
-5. **Each team member, one at a time:**
-   `name` → `role` → **persona / SKILL.md path** (a file or a folder) → projects → bot token →
-   waits until **the bot is in the group ✓** → waits until **you've pressed Start on it ✓** (you get a hello DM) →
-   the member introduces themselves in the group.
-6. **Monitoring:** daily report time, work sessions, token budget, and the coding tool (Claude Code / Codex / none).
+| Page | What you do there |
+|---|---|
+| **Setup** | First run only: company, you, timezone, goals, AI model (a Claude subscription works), team repo, manager's name |
+| **Dashboard** | Open / review / blocked / overdue counts, **Needs you** (approvals, reviews, decisions), critical path, people, token use, recent activity, "Work session now", "Write report now" |
+| **Chat** | A room per person (like a DM) and a **Team room** (`@all give status`, `@name …`, `/commands`). Approve 🔴 requests right in the chat. Telegram conversations show up here too |
+| **Board** | Kanban (To do · Doing · Blocked · Review · Done), filter by project or person, create and assign tasks, open a task to accept, give feedback, change owner, priority, due date or status |
+| **Projects** | Create projects with a description, lead and status (optionally a code repo). Each shows its tasks |
+| **Team** | Drop in all the `.skill` / `SKILL.md` files at once; names and roles fill in. Telegram bots are optional, with live ✓ checks. Edit roles and personas, see memory and activity, pause people |
+| **Approvals** | Every permission request and its history |
+| **Reports** | Daily reports, and your open-decisions list (it appears in every report) |
+| **Settings** | Company, AI model, schedule (report time, work sessions), budget, coding tool, Telegram connection |
 
-Then:
+**Telegram is optional.** Connect it in Settings to also run the team from your phone: a group plus one bot per person.
+You can keep working in the console as well; both stay in sync.
 
-```bash
-jm doctor --ping    # model, every bot, group membership, privacy mode
-jm run              # the team is live
-```
-
-**Adding people from a web page (easiest):**
-
-```bash
-jm ui     # opens a local page: drop in all the .skill / SKILL.md files at once → names and roles fill in →
-          # paste each bot token → live ✓ "in the group" and "DM works" → Save. Remove people with a button.
-```
-
-Each person's whole skill package is copied into the team repo (`team/<id>/skill/`), so you can delete or
-move the original files afterwards.
-
-From the terminal instead:
-
-```bash
-jm add-member                   # the same verified flow, for one person
-jm remove-member riya           # off the team; their files stay in git history
-```
+Terminal alternatives still exist: `jm init` (setup wizard), `jm add-member`, `jm chat <who>`, `jm status`, `jm report`,
+`jm work`, `jm doctor --ping`, and `jm run --no-web` (Telegram + schedule only).
 
 ## Day to day
 

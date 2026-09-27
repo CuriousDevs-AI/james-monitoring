@@ -63,3 +63,17 @@ def test_first_push_to_empty_remote_sets_upstream(tmp_path):
     assert not ws.state().get("push_error")
     heads = subprocess.run(["git", "ls-remote", "--heads", str(remote)], capture_output=True, text=True).stdout
     assert heads.strip(), "nothing reached the empty remote"
+
+
+def test_legacy_timezone_names_work(tmp_path):
+    from james_monitoring.config import parse_config
+    from james_monitoring.util import normalize_tz, today
+    from .conftest import make_raw
+    assert normalize_tz("Asia/Calcutta") == "Asia/Kolkata"
+    assert normalize_tz("Europe/Madrid") == "Europe/Madrid"
+    cfg = parse_config(make_raw(tmp_path, timezone="Asia/Calcutta"), base_dir=tmp_path)
+    assert cfg.timezone == "Asia/Kolkata" and today(cfg.timezone)
+    import pytest
+    from james_monitoring.config import ConfigError
+    with pytest.raises(ConfigError, match="Unknown timezone"):
+        parse_config(make_raw(tmp_path, timezone="Mars/Olympus"), base_dir=tmp_path)

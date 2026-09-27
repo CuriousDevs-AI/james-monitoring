@@ -207,6 +207,14 @@ class Runtime:
             lines.append(f"- {m.id}: {m.name} — {m.role}{proj}")
         return "\n".join(lines)
 
+    def projects_text(self) -> str:
+        lines = []
+        for pid, p in self.cfg.projects.items():
+            lead = self.cfg.member(p.lead).name if p.lead and self.cfg.member(p.lead) else "-"
+            extra = f" — {p.description}" if p.description else ""
+            lines.append(f"- {pid}: {p.name or pid} [{p.status}] lead={lead}{' (code repo)' if p.repo else ''}{extra}")
+        return "\n".join(lines)
+
     def context_for(self, m: Member) -> str:
         tz = self.cfg.timezone
         parts: list[str] = []
@@ -220,6 +228,8 @@ class Runtime:
             od = self.ws.read("decisions/OPEN.md").strip()
             if od:
                 parts.append("## Open decisions waiting on the owner (decisions/OPEN.md)\n" + od)
+            if self.cfg.projects:
+                parts.append("## Projects\n" + self.projects_text())
             parts.append("## Recent team repo commits\n" + (self.ws.git_log(15) or "- none"))
             for pid, p in self.cfg.projects.items():
                 if p.repo:
@@ -241,9 +251,8 @@ class Runtime:
             if mine_asks:
                 parts.append("## Your permission requests\n" + "\n".join(
                     f"- {a.id}: {a.summary} — {a.status}" for a in mine_asks))
-            projects = ", ".join(f"{pid}{' (repo)' if p.repo else ''}" for pid, p in self.cfg.projects.items())
-            if projects:
-                parts.append(f"## Projects\n{projects}")
+            if self.cfg.projects:
+                parts.append("## Projects\n" + self.projects_text())
         docs = self.list_docs()
         if docs:
             parts.append("## Team documents (read with read_file)\n" + docs)
@@ -265,7 +274,8 @@ class Runtime:
 
         async with self._locks[m.id]:
             # Owner messages that mention a task are feedback on that task — captured in git, not lost in chat.
-            if ev.sender == self.owner_id and ev.source in ("dm", "group"):
+            is_question = ev.text.rstrip().endswith("?")
+            if ev.sender == self.owner_id and ev.source in ("dm", "group") and not is_question:
                 for tid in set(TASK_ID.findall(ev.text)):
                     try:
                         self.tasks.add_feedback(tid, self.cfg.owner_name, ev.text)

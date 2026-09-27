@@ -11,7 +11,7 @@ import pytest
 
 from james_monitoring.config import load_config
 from james_monitoring.setup import scaffold
-from james_monitoring.ui import TeamAdmin, make_handler
+from james_monitoring.ui import TeamAdmin
 
 from .conftest import make_raw
 from .fake_telegram import FakeTelegram
@@ -76,27 +76,33 @@ def test_full_add_flow_and_skill_kept_after_original_deleted(setup, tmp_path):
         admin.remove("james")
 
 
-def test_http_requires_key_and_serves_page(setup):
-    admin, tg, cfg = setup
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(admin, "secret"))
+def test_console_http_requires_key_and_serves_page(tmp_path):
+    from james_monitoring.server import App, make_handler
+    app = App(tmp_path / "co", telegram=False)
+    app.base.mkdir()
+    app.load()
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app, "secret"))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
+    hdr = {"X-JM-Key": "secret", "Content-Type": "application/json"}
     try:
-        page = urllib.request.urlopen(base + "/").read().decode()
-        assert "Drop persona files here" in page
+        assert "Set up your company" in urllib.request.urlopen(base + "/").read().decode()
         with pytest.raises(urllib.error.HTTPError) as e:
             urllib.request.urlopen(base + "/api/state")
         assert e.value.code == 403
-        req = urllib.request.Request(base + "/api/state", headers={"X-JM-Key": "secret"})
-        assert json.loads(urllib.request.urlopen(req).read())["members"][0]["name"] == "James"
-        body = json.dumps({"filename": "riya.skill", "data": base64.b64encode(skill_zip()).decode()}).encode()
-        req = urllib.request.Request(base + "/api/upload", data=body, method="POST",
-                                     headers={"X-JM-Key": "secret", "Content-Type": "application/json"})
-        assert json.loads(urllib.request.urlopen(req).read())["name"] == "Riya"
-        bad = urllib.request.Request(base + "/api/add", data=b'{"name":"","role":"","token":""}', method="POST",
-                                     headers={"X-JM-Key": "secret"})
+        st = json.loads(urllib.request.urlopen(urllib.request.Request(base + "/api/state", headers=hdr)).read())
+        assert st["setup_needed"] is True
+        body = json.dumps({"company": "Acme", "owner": "Maria", "provider": "fake", "timezone": "Asia/Calcutta"}).encode()
+        urllib.request.urlopen(urllib.request.Request(base + "/api/setup", data=body, method="POST", headers=hdr))
+        st = json.loads(urllib.request.urlopen(urllib.request.Request(base + "/api/state", headers=hdr)).read())
+        assert st["company"] == "Acme" and st["timezone"] == "Asia/Kolkata"
+        up = json.dumps({"filename": "riya.skill", "data": base64.b64encode(skill_zip()).decode()}).encode()
+        r = urllib.request.urlopen(urllib.request.Request(base + "/api/upload", data=up, method="POST", headers=hdr))
+        assert json.loads(r.read())["name"] == "Riya"
+        bad = urllib.request.Request(base + "/api/tasks", data=b'{"title":"x","owner":"nobody"}', method="POST", headers=hdr)
         with pytest.raises(urllib.error.HTTPError) as e:
             urllib.request.urlopen(bad)
         assert e.value.code == 400
     finally:
         srv.shutdown()
+        app.submit(app._stop_services(), timeout=10)

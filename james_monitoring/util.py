@@ -5,6 +5,33 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 
+# Old names some systems (macOS, older Linux) still report, mapped to the names Python's tz database knows.
+TZ_ALIASES = {
+    "Asia/Calcutta": "Asia/Kolkata", "Asia/Saigon": "Asia/Ho_Chi_Minh", "Asia/Katmandu": "Asia/Kathmandu",
+    "Asia/Rangoon": "Asia/Yangon", "Asia/Dacca": "Asia/Dhaka", "Asia/Thimbu": "Asia/Thimphu",
+    "Asia/Ulan_Bator": "Asia/Ulaanbaatar", "Asia/Chongqing": "Asia/Shanghai", "Asia/Macao": "Asia/Macau",
+    "Europe/Kiev": "Europe/Kyiv", "America/Buenos_Aires": "America/Argentina/Buenos_Aires",
+    "America/Indianapolis": "America/Indiana/Indianapolis", "America/Louisville": "America/Kentucky/Louisville",
+    "Pacific/Truk": "Pacific/Chuuk", "Pacific/Ponape": "Pacific/Pohnpei", "Atlantic/Faeroe": "Atlantic/Faroe",
+    "US/Eastern": "America/New_York", "US/Central": "America/Chicago", "US/Mountain": "America/Denver",
+    "US/Pacific": "America/Los_Angeles", "IST": "Asia/Kolkata",
+}
+
+
+def normalize_tz(name: str) -> str:
+    """Return a timezone name that ZoneInfo accepts, or raise ValueError."""
+    name = (name or "UTC").strip()
+    for candidate in (name, TZ_ALIASES.get(name, "")):
+        if not candidate:
+            continue
+        try:
+            ZoneInfo(candidate)
+            return candidate
+        except Exception:  # noqa: BLE001 - ZoneInfoNotFoundError / ValueError
+            continue
+    raise ValueError(f"Unknown timezone '{name}'. Use a name like Asia/Kolkata, Europe/Madrid, America/New_York.")
+
+
 def now(tz: str) -> datetime:
     return datetime.now(ZoneInfo(tz))
 

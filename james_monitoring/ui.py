@@ -1,20 +1,10 @@
-"""`jm ui` — a local web page to build and manage the team.
-
-Drop in persona/skill files (many at once) → names and roles are filled in → paste each bot token →
-live ✓ for "bot is in the group" and "DM works" → Save. Remove people with a button.
-
-Runs on 127.0.0.1 only, and every API call needs the secret key that is in the URL `jm ui` prints.
-"""
+"""Team operations behind the console's Team page: import personas, check bot tokens and Telegram links,
+add and remove people."""
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
-import secrets
 import threading
 import uuid
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from importlib import resources
 from pathlib import Path
 
 import yaml
@@ -132,8 +122,6 @@ class TeamAdmin:
         name, role = name.strip(), role.strip()
         if not name or not role:
             raise ValueError("Name and role are required.")
-        if not token.strip():
-            raise ValueError("A bot token is required.")
         with self.lock:
             raw = self.raw()
             mid = slug(name)
@@ -148,9 +136,9 @@ class TeamAdmin:
                     raw.setdefault("projects", {}).setdefault(p, {"repo": "", "main_branch": "main"})
             raw.setdefault("team", []).append(member)
             sk = self.uploads.pop(upload_id, None) if upload_id else None
-            cfg = scaffold(raw, skills={mid: sk} if sk else None, tokens={mid: token.strip()},
-                           base_dir=self.cfg_path.parent)
-        if cfg.group_chat_id:
+            cfg = scaffold(raw, skills={mid: sk} if sk else None,
+                           tokens={mid: token.strip()} if token.strip() else None, base_dir=self.cfg_path.parent)
+        if cfg.group_chat_id and token.strip():
             async def intro():
                 async with self._probe(token.strip()) as p:
                     await p.post(cfg.group_chat_id, f"👋 {name} joined the team — {role}.")
@@ -163,93 +151,3 @@ class TeamAdmin:
     def remove(self, member_id: str) -> dict:
         with self.lock:
             return {"removed": remove_member(self.cfg_path, member_id)}
-
-
-# -- HTTP --------------------------------------------------------------------------------
-def make_handler(admin: TeamAdmin, key: str):
-    page = resources.files("james_monitoring").joinpath("templates", "ui.html").read_text()
-
-    class H(BaseHTTPRequestHandler):
-        def log_message(self, *a):
-            pass
-
-        def _send(self, status: int, body: bytes, ctype: str) -> None:
-            self.send_response(status)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.end_headers()
-            self.wfile.write(body)
-
-        def _json(self, status: int, obj) -> None:
-            self._send(status, json.dumps(obj).encode(), "application/json")
-
-        def _authorized(self) -> bool:
-            return secrets.compare_digest(self.headers.get("X-JM-Key", ""), key)
-
-        def do_GET(self):
-            path = self.path.split("?", 1)[0]
-            if path == "/":
-                return self._send(200, page.encode(), "text/html; charset=utf-8")
-            if not self._authorized():
-                return self._json(403, {"error": "forbidden"})
-            if path == "/api/state":
-                return self._json(200, admin.state())
-            return self._json(404, {"error": "not found"})
-
-        def do_POST(self):
-            if not self._authorized():
-                return self._json(403, {"error": "forbidden"})
-            n = int(self.headers.get("Content-Length") or 0)
-            if n > 30_000_000:
-                return self._json(413, {"error": "too large"})
-            try:
-                body = json.loads(self.rfile.read(n) or b"{}")
-            except json.JSONDecodeError:
-                return self._json(400, {"error": "bad json"})
-            path = self.path.split("?", 1)[0]
-            try:
-                if path == "/api/upload":
-                    out = admin.upload(str(body.get("filename", "SKILL.md")), base64.b64decode(body.get("data", "")))
-                elif path == "/api/token":
-                    out = admin.check_token(str(body.get("token", "")).strip())
-                elif path == "/api/links":
-                    out = admin.check_links(str(body.get("token", "")).strip(), body.get("name", ""), body.get("role", ""))
-                elif path == "/api/member_status":
-                    out = admin.member_status(str(body.get("id", "")))
-                elif path == "/api/add":
-                    out = admin.add(name=str(body.get("name", "")), role=str(body.get("role", "")),
-                                    token=str(body.get("token", "")), projects=list(body.get("projects") or []),
-                                    upload_id=str(body.get("upload_id", "")))
-                elif path == "/api/remove":
-                    out = admin.remove(str(body.get("id", "")))
-                else:
-                    return self._json(404, {"error": "not found"})
-            except (ValueError, FileNotFoundError) as e:
-                return self._json(400, {"error": str(e)})
-            except Exception as e:  # noqa: BLE001 - show the error on the page instead of a dead request
-                return self._json(500, {"error": f"{type(e).__name__}: {e}"})
-            return self._json(200, out)
-    return H
-
-
-def serve(cfg_path: Path, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
-    admin = TeamAdmin(cfg_path)
-    admin.cfg()                                   # fail early on a broken config
-    key = secrets.token_urlsafe(18)
-    srv = ThreadingHTTPServer((host, port), make_handler(admin, key))
-    url = f"http://{host}:{srv.server_address[1]}/?k={key}"
-    print(f"Team page: {url}\n(Ctrl-C to stop. Restart `jm run` after adding or removing people.)")
-    if open_browser:
-        try:
-            import webbrowser
-            webbrowser.open(url)
-        except Exception:  # noqa: BLE001
-            pass
-    try:
-        srv.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        srv.server_close()

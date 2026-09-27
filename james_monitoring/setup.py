@@ -65,6 +65,14 @@ def slug(name: str) -> str:
 
 
 def detect_timezone() -> str:
+    from .util import normalize_tz
+    try:
+        return normalize_tz(_detect_timezone_raw())
+    except ValueError:
+        return "UTC"
+
+
+def _detect_timezone_raw() -> str:
     tz = os.environ.get("TZ", "")
     if "/" in tz:
         return tz
@@ -319,7 +327,13 @@ async def wizard(base_dir: Path, io: IO | None = None, *, api_base: str = "", ti
     io.say("\nStep 1/6 — Basics")
     company = io.ask("  Company / project name", required=True)
     owner = io.ask("  Your name (the founder/owner)", required=True)
-    tz = io.ask("  Timezone", detect_timezone())
+    from .util import normalize_tz
+    while True:
+        try:
+            tz = normalize_tz(io.ask("  Timezone", detect_timezone()))
+            break
+        except ValueError as e:
+            io.say(f"  ❌ {e}")
     goals = [g.strip() for g in io.ask("  Top goals, separated by ';' (optional)", "").split(";") if g.strip()]
 
     io.say("\nStep 2/6 — AI model (switch any time in config.yaml)")

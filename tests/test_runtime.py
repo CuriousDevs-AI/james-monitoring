@@ -105,3 +105,11 @@ async def test_agent_can_add_done_means_then_start(rt):
     out = await rt.dispatch("sofia", Event("dm", "start it", sender="pankaj"))
     assert "⚠️" not in out and rt.tasks.get(t.id).status == "doing"
     assert "- [ ] 3 options compared" in rt.tasks.get(t.id).doc.sections["Done means"]
+
+
+async def test_questions_about_a_task_are_not_saved_as_feedback(rt):
+    t = rt.tasks.create(title="x", owner="sofia", created_by="pankaj")
+    await rt.dispatch("sofia", Event("dm", f"what's the plan for {t.id}?", sender="pankaj"))
+    assert not rt.tasks.get(t.id).doc.sections.get("Feedback", "").strip()
+    await rt.dispatch("sofia", Event("dm", f"{t.id} use the blue theme", sender="pankaj"))
+    assert "blue theme" in rt.tasks.get(t.id).doc.sections["Feedback"]

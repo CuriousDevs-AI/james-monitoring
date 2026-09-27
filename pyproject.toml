@@ -28,7 +28,7 @@ jm = "james_monitoring.cli:main"
 include = ["james_monitoring*"]
 
 [tool.setuptools.package-data]
-james_monitoring = ["templates/*.md"]
+james_monitoring = ["templates/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -34,6 +34,10 @@ class Project:
     repo: str = ""                 # local path of the project's git repo (optional)
     main_branch: str = "main"
     push: bool = False
+    name: str = ""
+    description: str = ""
+    lead: str = ""                 # member id
+    status: str = "active"         # active | paused | done
 
 
 @dataclass
@@ -164,7 +168,9 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         p = p or {}
         projects[str(pid)] = Project(id=str(pid), repo=str(p.get("repo") or ""),
                                      main_branch=str(p.get("main_branch") or "main"),
-                                     push=bool(p.get("push", False)))
+                                     push=bool(p.get("push", False)), name=str(p.get("name") or pid),
+                                     description=str(p.get("description") or ""), lead=str(p.get("lead") or ""),
+                                     status=str(p.get("status") or "active"))
 
     llm = raw.get("llm") or {}
     provider = str(llm.get("provider") or "anthropic")
@@ -181,9 +187,14 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         import shlex
         cmd = shlex.split(cmd)
 
+    from .util import normalize_tz
+    try:
+        tz = normalize_tz(str(raw.get("timezone") or "UTC"))
+    except ValueError as e:
+        raise ConfigError(f"config: {e}") from None
     return Config(
         company=str(raw.get("company") or "My Company"),
-        timezone=str(raw.get("timezone") or "UTC"),
+        timezone=tz,
         owner_name=str(_get(raw, "owner.name", "Owner")),
         owner_user_id=int(_get(raw, "owner.telegram_user_id", 0) or 0),
         extra_user_ids=[int(x) for x in (_get(raw, "owner.extra_user_ids", []) or [])],
