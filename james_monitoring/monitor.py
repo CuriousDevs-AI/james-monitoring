@@ -129,6 +129,8 @@ def checks(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -> list
         elif t.overdue(tz):
             alerts.append(Alert(f"overdue:{t.id}", f"⚠️ {t.id} ({t.owner}) is overdue (due {t.doc.meta.get('due')}): "
                                                     f"{t.title}"))
+    if ws.state().get("push_error"):
+        alerts.append(Alert("push", f"⚠️ Team repo can't push to its remote: {ws.state()['push_error']}"))
     for agent, hb in ws.state().get("heartbeat", {}).items():
         if hb.get("error"):
             alerts.append(Alert(f"err:{agent}", f"🚨 {agent} is failing: {hb['error']}", incident=True))

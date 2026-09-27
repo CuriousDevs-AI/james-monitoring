@@ -41,8 +41,15 @@ class ConsoleIO:
 
     def confirm(self, prompt, default=True):
         d = "Y/n" if default else "y/N"
-        raw = input(f"{prompt} [{d}]: ").strip().lower()
-        return default if not raw else raw.startswith("y")
+        while True:
+            raw = input(f"{prompt} [{d}]: ").strip().lower()
+            if not raw:
+                return default
+            if raw in ("y", "yes", "haan", "ha", "han"):
+                return True
+            if raw in ("n", "no", "nahi", "na"):
+                return False
+            print("  Please answer y or n.")
 
     def say(self, text):
         print(text)

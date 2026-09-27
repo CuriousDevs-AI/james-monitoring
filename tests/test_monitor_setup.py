@@ -44,3 +44,22 @@ def test_open_decisions_reach_the_report(rt):
     text = build_report(rt.cfg, rt.ws, rt.tasks, rt.asks)
     assert "- Decide: Server + budget" in text and "- Decide: Pick a vertical" in text
     assert "done thing" not in text and "waiting on Pankaj" in text
+
+
+def test_first_push_to_empty_remote_sets_upstream(tmp_path):
+    import subprocess
+    from james_monitoring.config import parse_config
+    from james_monitoring.workspace import Workspace
+    from .conftest import make_raw
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    subprocess.run(["git", "clone", "-q", str(remote), str(tmp_path / "ws")], check=True, capture_output=True)
+    raw = make_raw(tmp_path)
+    raw["workspace"]["push"] = True
+    ws = Workspace(parse_config(raw, base_dir=tmp_path))
+    ws.ensure()
+    ws.write("team/charter.md", "x")
+    assert ws.commit("first")
+    assert not ws.state().get("push_error")
+    heads = subprocess.run(["git", "ls-remote", "--heads", str(remote)], capture_output=True, text=True).stdout
+    assert heads.strip(), "nothing reached the empty remote"

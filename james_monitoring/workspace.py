@@ -111,11 +111,22 @@ class Workspace:
             self._git("-c", f"user.name={author}", "-c", "user.email=jm@localhost",
                       "commit", "-q", "-m", message)
             if self.cfg.workspace_push:
-                try:
-                    self._git("push", "-q")
-                except RuntimeError:
-                    pass  # push failures must never stop the team; monitor reports them
+                self.push()
             return True
+
+    def push(self) -> bool:
+        """Push to the remote. First push to an empty remote sets the upstream. Failures never stop the
+        team; they are recorded in state and shown by the manager's checks."""
+        err = ""
+        try:
+            self._git("push", "-q")
+        except RuntimeError:
+            try:
+                self._git("push", "-q", "-u", "origin", "HEAD")
+            except RuntimeError as e:
+                err = str(e)[:200]
+        self.update_state(lambda s: s.__setitem__("push_error", err))
+        return not err
 
     def git_log(self, n: int = 20, path: Path | None = None, since: str | None = None) -> str:
         args = ["log", f"-{n}", "--date=short", "--pretty=format:%h %ad %an: %s"]
