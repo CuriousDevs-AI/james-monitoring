@@ -208,6 +208,8 @@ class Runtime:
         self.tasks = TaskStore(self.ws.root, cfg.timezone, owner_id=self.owner_id)
         self.asks = AskStore(self.ws.root, cfg.timezone, cfg.ask_default_hours)
         self.executor = Executor(cfg)
+        self.executor.title_of = lambda tid: self.tasks.get(tid).title
+        self._github = None
         self.chat = ChatStore(self.ws.root)
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._history: dict[str, deque] = defaultdict(lambda: deque(maxlen=HISTORY_TURNS * 2))
@@ -1028,9 +1030,19 @@ class Runtime:
             self.ws.commit(f"{task_id}: coding run, no changes", author=m.name)
             await self.bus.send_owner(m.id, f"ℹ️ Coding run for {task_id} made no changes.\n{r.output_tail[-600:]}")
             return
-        ask = self.asks.create(requester=m.id, summary=f"Merge {r.branch} into {project_id} main ({task_id})",
-                               details=f"{r.diffstat}\n\nWorktree: {r.worktree}", level="red", task=task_id,
-                               kind="merge", payload={"project": project_id, "branch": r.branch})
+        pr = ""
+        if self.cfg.github.prs:
+            try:
+                pr = await asyncio.to_thread(self.executor.open_pr, project_id, task_id, r.branch,
+                                             f"{task.title}\n\nDone means:\n{task.doc.sections.get('Done means', '')}\n\n"
+                                             f"Coded by {m.name} (AI) for {task_id}.\n\n```\n{r.diffstat}\n```")
+                self.tasks.set_output(task_id, m.id, f"pull request {pr}")
+            except ExecutorError as e:
+                self.tasks.add_log(task_id, m.id, f"no pull request: {e}")
+        ask = self.asks.create(requester=m.id, summary=f"Merge {pr or r.branch} into {project_id} main ({task_id})",
+                               details=f"{r.diffstat}\n\n" + (f"Pull request: {pr}" if pr else f"Worktree: {r.worktree}"),
+                               level="red", task=task_id, kind="merge",
+                               payload={"project": project_id, "branch": r.branch, "pr": pr})
         self.tasks.set_status(task_id, "review", by=m.id, note=f"code ready on {r.branch}")
         self.ws.commit(f"{task_id}: code ready on {r.branch}", author=m.name)
         await self.bus.send_owner(m.id, ask.summary, ask=ask, urgent=True)
@@ -1044,7 +1056,10 @@ class Runtime:
             # and the request stays open.
             p = pre.doc.meta.get("payload") or {}
             try:
-                sha = await asyncio.to_thread(self.executor.merge, p["project"], p["branch"])
+                if p.get("pr"):
+                    sha = await asyncio.to_thread(self.executor.merge_pr, p["project"], p["pr"])
+                else:
+                    sha = await asyncio.to_thread(self.executor.merge, p["project"], p["branch"])
             except (ExecutorError, KeyError) as e:
                 raise AskError(f"{pre.id} is still open — the merge didn't happen: {e}. Fix it and approve again, "
                                f"or reject.") from None
@@ -1057,6 +1072,14 @@ class Runtime:
                     pass
         ask = self.asks.decide(ask_id, decision, by=by, note=note)
         result = f"{ask.id} {decision}{merged}"
+        pr = (ask.doc.meta.get("payload") or {}).get("pr")
+        if ask.kind == "merge" and decision == "rejected" and pr:
+            try:
+                await asyncio.to_thread(self.executor.close_pr, ask.doc.meta["payload"]["project"], pr,
+                                        f"Rejected by {by}" + (f": {note}" if note else ""))
+                result += " — pull request closed"
+            except (ExecutorError, KeyError) as e:
+                result += f" — couldn't close the PR: {e}"
         if not merged:
             self._release_task_for(ask)
         if ask.kind == "action" and decision == "approved":
@@ -1197,6 +1220,90 @@ class Runtime:
 
     def cmd_report(self) -> str:
         return build_report(self.cfg, self.ws, self.tasks, self.asks)
+
+    # -- GitHub Project mirror ------------------------------------------------------------
+    @property
+    def github(self):
+        if self._github is None:
+            from .github import GitHubSync
+            self._github = GitHubSync(self.cfg, self.tasks, self.ws)
+        return self._github
+
+    async def sync_github(self) -> dict:
+        """Your edits on the GitHub board come in (through the rules), then every changed task goes out."""
+        from .github import GitHubError
+        if not self.cfg.github.enabled:
+            return {"pulled": 0, "pushed": 0}
+        try:
+            changes = await asyncio.to_thread(self.github.pull)
+            applied = []
+            for c in changes:
+                applied.append(await self._apply_github(c))
+            pushed = await asyncio.to_thread(self.github.push)
+        except GitHubError as e:
+            self.ws.update_state(lambda s: s.setdefault("github", {}).__setitem__("error", str(e)[:300]))
+            log.error("github sync failed: %s", e)
+            return {"error": str(e)}
+        self.ws.update_state(lambda s: s.setdefault("github", {}).update(
+            error="", last_sync=now(self.cfg.timezone).isoformat(timespec="seconds")))
+        if applied:
+            await asyncio.to_thread(self.ws.commit, "changes from the GitHub board", self.cfg.owner_name)
+        return {"pulled": len(applied), "pushed": pushed, "notes": [x for x in applied if x]}
+
+    async def _apply_github(self, c) -> str:
+        """One change you made on GitHub, applied exactly as if you had done it in the console."""
+        from .github import STAGES
+        gh = self.github
+        try:
+            t = self.tasks.get(c.task)
+        except TaskError:
+            return ""
+        try:
+            if c.field == "comment":
+                return await self.feedback(t.id, c.value)
+            if c.field == "stage":
+                if c.value == t.status:
+                    note = ""
+                elif c.value == "done":
+                    note = await self.accept(t.id, "accepted on GitHub")
+                elif c.value == "cut":
+                    self.tasks.set_status(t.id, "cut", by=self.owner_id, note="cut on GitHub")
+                    note = f"✂️ {t.id} cut"
+                elif c.value == "doing" and t.status == "review":
+                    note = await self.request_changes(t.id, "Moved back to Doing on GitHub — see the issue for what "
+                                                            "to change, or ask me.")
+                elif c.value == "blocked":
+                    t2, _ = self.tasks.set_status(t.id, "blocked", by=self.owner_id,
+                                                  blocked_on=t.blocked_on or f"{self.cfg.owner_name} — see GitHub")
+                    await self.on_blocked(t2, self.owner_id)
+                    note = f"🔄 {t.id} → blocked"
+                else:
+                    self.tasks.set_status(t.id, c.value, by=self.owner_id, note="moved on GitHub")
+                    note = f"🔄 {t.id} → {c.value}"
+                gh.mark_pulled(t.id, "stage", STAGES.get(c.value, ""))
+                return note
+            if c.field == "owner":
+                m = self.cfg.member(c.value.strip()) or next(
+                    (x for x in self.cfg.team if x.name.lower() == c.value.strip().lower()), None)
+                if not m:
+                    raise ValueError(f"nobody called {c.value!r} on the team")
+                self.tasks.update_fields(t.id, self.owner_id, owner=m.id)
+            elif c.field == "project":
+                if c.value and c.value not in self.cfg.projects:
+                    raise ValueError(f"no project {c.value!r}")
+                self.tasks.update_fields(t.id, self.owner_id, project=c.value)
+            elif c.field == "blocker":
+                if t.status == "blocked" and c.value:
+                    t2, _ = self.tasks.set_status(t.id, "blocked", by=self.owner_id, blocked_on=c.value)
+                    await self.on_blocked(t2, self.owner_id)
+            elif c.field in ("priority", "due") and c.value:
+                self.tasks.update_fields(t.id, self.owner_id, **{c.field: c.value})
+            gh.mark_pulled(t.id, c.field, c.value)
+            return f"{t.id} {c.field} → {c.value}"
+        except (TaskError, ValueError) as e:
+            gh.mark_pulled(t.id, c.field, c.value)       # don't retry forever; the next push restores the real value
+            self.ws.log(self.cfg.monitor.id, f"GitHub change refused on {t.id} ({c.field}={c.value}): {e}")
+            return f"⚠️ {t.id}: {e}"
 
     def backup_runtime(self, keep: int = 14) -> str:
         """.jm/ (chats, conversation memory, state) isn't in git: snapshot it daily (last `keep` days)."""

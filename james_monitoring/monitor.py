@@ -199,6 +199,8 @@ def checks(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -> list
     if state.get("commit_error"):
         alerts.append(Alert("commit", f"⚠️ Team repo commits are failing (changes are saved, not committed): "
                                       f"{state['commit_error']}"))
+    if (state.get("github") or {}).get("error"):
+        alerts.append(Alert("github", f"⚠️ GitHub sync is failing: {state['github']['error']}"))
     for agent, hb in state.get("heartbeat", {}).items():
         if hb.get("error"):
             fails = int(hb.get("fails", 1) or 1)

@@ -32,7 +32,7 @@ from .llm import LLMError, LLMResult, make_llm
 from .monitor import open_decisions, team_status_lines
 from .runtime import Runtime
 from .scheduler import Scheduler
-from .setup import detect_timezone, scaffold, slug
+from .setup import detect_git_identity, detect_timezone, scaffold, slug
 from .tasks import PRIORITIES, TaskError
 from .ui import TeamAdmin
 from .util import normalize_tz, today
@@ -202,7 +202,9 @@ class App:
         mid = slug(mgr_name)
         raw = {
             "company": company, "timezone": normalize_tz(str(b.get("timezone") or detect_timezone())),
-            "owner": {"name": owner, "telegram_user_id": 0},
+            "owner": {"name": owner, "telegram_user_id": 0,
+                      "git_name": str(b.get("git_name") or "").strip() or detect_git_identity()[0],
+                      "git_email": str(b.get("git_email") or "").strip() or detect_git_identity()[1]},
             "llm": {"provider": provider, "model": str(b.get("model") or ""), "base_url": str(b.get("base_url") or ""),
                     "api_key_env": key_env, "max_tokens": 8000},
             "workspace": {"path": str(b.get("workspace") or "./team-workspace"), "push": bool(b.get("push"))},
@@ -226,7 +228,9 @@ class App:
     # -- read views ----------------------------------------------------------------------
     def state(self) -> dict:
         if not self.ready:
-            return {"setup_needed": True, "timezone": detect_timezone(), "folder": str(self.base)}
+            gn, ge = detect_git_identity()
+            return {"setup_needed": True, "timezone": detect_timezone(), "folder": str(self.base),
+                    "git_name": gn, "git_email": ge}
         cfg = self.rt.cfg
         s = self.rt.ws.state()
         return {
@@ -249,6 +253,10 @@ class App:
             "projects": [self._project_json(p) for p in cfg.projects.values()],
             "priorities": PRIORITIES, "workspace": str(cfg.workspace_path),
             "permissions": cfg.permissions, "action_types": ACTION_TYPES, "backchannel": BACKCHANNEL,
+            "git": {"name": cfg.git_author[0], "email": cfg.git_author[1]},
+            "github": {"enabled": cfg.github.enabled, "owner": cfg.github.owner, "repo": cfg.github.repo,
+                       "project": cfg.github.project, "prs": cfg.github.prs, **{k: v for k, v in (s.get("github") or {}).items()
+                                                                                if k in ("error", "last_sync", "url")}},
         }
 
     def _project_json(self, p) -> dict:
@@ -400,7 +408,48 @@ class App:
 
     def task_detail(self, tid: str) -> dict:
         t = self.rt.tasks.get(tid)
-        return {**self._task_json(t), "sections": t.doc.sections, "meta": {k: str(v) for k, v in t.doc.meta.items()}}
+        return {**self._task_json(t), "sections": t.doc.sections, "meta": {k: str(v) for k, v in t.doc.meta.items()},
+                "github": self.rt.github.url_of(t.id) if self.rt.cfg.github.enabled else ""}
+
+    # -- GitHub ---------------------------------------------------------------------------------
+    def github_status(self) -> dict:
+        from .github import Gh, GitHubError, GitHubSync
+        try:
+            return GitHubSync(self.rt.cfg, None, None, gh=Gh()).auth()
+        except GitHubError as e:
+            return {"ok": False, "error": str(e)}
+
+    @config_txn
+    def github_connect(self, b: dict) -> dict:
+        """Point the mirror at a Project (or create one) and a repo for the task issues."""
+        from .github import GitHubError, GitHubSync
+        owner, repo = str(b.get("owner") or "").strip(), str(b.get("repo") or "").strip()
+        if not owner or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+            raise ValueError("Give the owner (your login or org) and the repo for task issues as owner/name.")
+        number = int(str(b.get("project") or "0").strip() or 0)
+        url = ""
+        try:
+            probe = GitHubSync(self.rt.cfg, None, None)
+            if not number:
+                made = probe.create_project(owner, str(b.get("title") or f"{self.rt.cfg.company} team"))
+                number, url = made["number"], made["url"]
+        except GitHubError as e:
+            raise ValueError(f"GitHub said: {e}") from None
+        raw = self.raw()
+        raw["github"] = {**(raw.get("github") or {}), "owner": owner, "repo": repo, "project": number,
+                         "prs": bool(b.get("prs"))}
+        self.save_raw(raw)
+        self.load()
+        try:
+            proj = self.rt.github.project()                    # creates our fields on the board
+            url = url or proj.get("url", "")
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(f"Connected, but GitHub refused the Project: {e}") from None
+        self.rt.ws.update_state(lambda s: s.setdefault("github", {}).__setitem__("url", url))
+        return {"project": number, "url": url}
+
+    def github_sync(self) -> dict:
+        return self.submit(self.rt.sync_github(), timeout=600)
 
     def member_detail(self, mid: str) -> dict:
         m = self.rt.cfg.member(mid)
@@ -603,6 +652,12 @@ class App:
             raw["timezone"] = normalize_tz(str(b["timezone"]))
         if b.get("owner_name"):
             raw.setdefault("owner", {})["name"] = str(b["owner_name"]).strip()
+        for k in ("git_name", "git_email"):
+            if k in b:
+                v = str(b[k] or "").strip()
+                if k == "git_email" and v and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v):
+                    raise ValueError("That git email doesn't look right.")
+                raw.setdefault("owner", {})[k] = v
         mon = raw.setdefault("monitor", {})
         if b.get("daily_report"):
             mon["daily_report"] = str(b["daily_report"])
@@ -637,6 +692,8 @@ class App:
             if any(not re.fullmatch(r"[UW][A-Z0-9]{6,}", x) for x in ids):
                 raise ValueError("Slack member ids look like U012AB3CD (Profile → ⋮ → Copy member ID).")
             raw.setdefault("slack", {})["owner_user_ids"] = ids
+        if "github_prs" in b and raw.get("github"):
+            raw["github"]["prs"] = bool(b["github_prs"])
         if "mirror_owner" in b:
             raw.setdefault("sync", {})["mirror_owner"] = bool(b["mirror_owner"])
         self.save_raw(raw)
@@ -806,6 +863,7 @@ def make_handler(app: App, key: str):
                     "/api/chat": lambda: app.chat_since(q.get("room", TEAM_ROOM), int(q.get("after", -1))),
                     "/api/rooms": lambda: app.rooms(),
                     "/api/pulse": lambda: app.pulse(),
+                    "/api/github/status": lambda: app.github_status(),
                     "/api/member": lambda: app.member_detail(q.get("id", "")),
                     "/api/project": lambda: app.project_detail(q.get("id", "")),
                     "/api/team": lambda: app.admin.state(),
@@ -880,6 +938,8 @@ def make_handler(app: App, key: str):
                     "/api/telegram/manager": lambda: app.telegram_manager(str(b.get("token", "")).strip()),
                     "/api/telegram/detect": lambda: app.telegram_detect(str(b.get("what", "owner"))),
                     "/api/telegram/code": lambda: app.telegram_code(),
+                    "/api/github/connect": lambda: app.github_connect(b),
+                    "/api/github/sync": lambda: app.github_sync(),
                     "/api/slack/code": lambda: {"code": setattr(app, "_slack_code", f"{secrets.randbelow(900000) + 100000}")
                                                or app._slack_code},
                     "/api/slack/connect": lambda: app.slack_connect(str(b.get("bot_token", "")), str(b.get("app_token", ""))),

@@ -481,7 +481,8 @@ function renderSetup() {
     provider: h("select", {}, PROVIDERS.map(([v, t]) => h("option", {value: v}, t))),
     model: h("input", {placeholder: "blank = default · e.g. sonnet"}), base_url: h("input", {placeholder: "only for Ollama / OpenRouter"}), api_key: h("input", {type: "password", placeholder: "only for API providers"}),
     workspace: h("input", {value: "./team-workspace"}), clone_url: h("input", {placeholder: "optional · https://github.com/you/team.git"}), push: h("input", {type: "checkbox"}),
-    manager_name: h("input", {value: "James"}), manager_role: h("input", {value: "Delivery manager and chief of staff"})};
+    manager_name: h("input", {value: "James"}), manager_role: h("input", {value: "Delivery manager and chief of staff"}),
+    git_name: h("input", {value: S.git_name || "", placeholder: "your GitHub username"}), git_email: h("input", {type: "email", value: S.git_email || "", placeholder: "the email on your GitHub account"})};
   const err = h("div", {class: "err"}), go_ = h("button", {class: "btn primary"}, "Create the team", icon("arrow"));
   go_.onclick = async () => { err.textContent = "";
     if (!f.company.value.trim() || !f.owner.value.trim()) { err.textContent = "Company and your name are required."; return (f.company.value.trim() ? f.owner : f.company).focus(); }
@@ -493,7 +494,9 @@ function renderSetup() {
     h("div", {class: "row", style: "margin-bottom:18px"}, h("span", {class: "logo"}, "J"), h("b", {}, "james-monitoring")),
     h("div", {class: "ph"}, h("div", {}, h("h1", {}, "Set up your company"), h("p", {}, `Folder ${S.folder} · everything can be changed later in Settings.`))),
     step("1", "Company", "who and why", h("div", {class: "two"}, h("div", {}, h("label", {class: "f req"}, "Company / project"), f.company), h("div", {}, h("label", {class: "f req"}, "Your name"), f.owner)),
-      h("label", {class: "f"}, "Timezone"), f.timezone, h("label", {class: "f"}, "Goals"), f.goals),
+      h("label", {class: "f"}, "Timezone"), f.timezone, h("label", {class: "f"}, "Goals"), f.goals,
+      h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Your git name"), f.git_name), h("div", {}, h("label", {class: "f"}, "Your git email"), f.git_email)),
+      h("div", {class: "xs muted", style: "margin-top:4px"}, "Every commit and pull request the team makes is yours — filled in from your git config.")),
     step("2", "AI model", "any provider, switch any time — and per person later", h("label", {class: "f req"}, "Provider"), f.provider, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Model"), f.model), h("div", {}, h("label", {class: "f"}, "API base URL"), f.base_url)), h("label", {class: "f"}, "API key"), f.api_key,
       h("div", {class: "row", style: "margin-top:8px"}, (() => { const out = h("span", {class: "small"}); const b = h("button", {class: "btn outline sm", onclick: async () => { b.disabled = true; out.put(h("span", {class: "spin"}), " asking the model…");
         const r = await api("/api/test_model", {provider: f.provider.value, model: f.model.value, base_url: f.base_url.value, api_key: f.api_key.value}).catch(e => ({ok: false, error: e.message}));
@@ -760,7 +763,8 @@ async function taskSheet(id, preset = {}) {
   };
   openSheet(t.id,
     h("div", {class: "row"}, badge(t.priority, PRI_TONE[t.priority]), badge(t.status, TASK_TONE[t.status]), t.overdue ? badge(dueText(t.due), "danger") : t.due && !["done", "cut"].includes(t.status) ? badge(dueText(t.due)) : null,
-      t.project ? h("span", {class: "badge outline click", onclick: () => openProject(t.project)}, "# " + (projOf(t.project)?.name || t.project)) : null, t.meta?.rework === "True" ? badge("Rework requested", "warning") : null),
+      t.project ? h("span", {class: "badge outline click", onclick: () => openProject(t.project)}, "# " + (projOf(t.project)?.name || t.project)) : null, t.meta?.rework === "True" ? badge("Rework requested", "warning") : null,
+      t.github ? h("a", {class: "badge outline", href: t.github, target: "_blank", rel: "noopener"}, "GitHub ↗") : null),
     h("h2", {style: "font-size:17px;margin:10px 0 4px"}, t.title), h("div", {class: "row small muted"}, avatar(nameOf(t.owner), "sm"), nameOf(t.owner), t.due ? [" · due ", h("span", {class: "mono", title: t.due}, t.due)] : null),
     t.status === "review" ? h("div", {class: "card card-b", style: "margin-top:12px;background:var(--warning-muted);border-color:rgba(217,119,6,.3)"}, h("div", {class: "row"}, h("b", {class: "grow"}, "Ready for your review"),
       h("button", {class: "btn outline sm", onclick: () => changesSheet(t)}, "Request changes"), h("button", {class: "btn primary sm", onclick: () => confirm(`Accept ${t.id} as done?`) && act({action: "accept"}, "Accepted")}, icon("check"), "Accept"))) : null,
@@ -1061,6 +1065,26 @@ async function vReports() {
 }
 
 // ------------------------------------------------------------------ settings
+function githubCard() {
+  const g = S.github, out = h("div", {class: "small", style: "min-height:18px;margin-top:8px"}), who = h("span", {}, badge("Checking gh…"));
+  api("/api/github/status").then(r => who.put(r.ok ? [badge("gh: @" + r.login, "success"), r.projects_ok ? null : badge("needs Projects access", "warning")] : badge(r.error || "gh not signed in", "danger"),
+    r.ok && !r.projects_ok ? h("div", {class: "xs", style: "margin-top:6px"}, "Run in a terminal: ", h("code", {class: "mono"}, r.fix)) : null)).catch(() => {});
+  const owner = h("input", {value: g.owner || S.git.name || "", placeholder: "login or org, e.g. CuriousDevs-AI"}), repo = h("input", {value: g.repo || "", placeholder: "owner/repo for task issues"});
+  const number = h("input", {class: "mono", value: g.project || "", placeholder: "blank = create a new Project"}), prs = h("input", {type: "checkbox", checked: !!g.prs});
+  const connect = h("button", {class: "btn secondary sm", onclick: async () => { connect.disabled = true; out.put(h("span", {class: "spin"}), " connecting…");
+    try { const r = await api("/api/github/connect", {owner: owner.value, repo: repo.value, project: number.value, prs: prs.checked}); out.put(badge(`Project #${r.project} connected`, "success"), " ", r.url ? h("a", {href: r.url, target: "_blank", rel: "noopener"}, "open it") : null); S = await api("/api/state"); }
+    catch (e) { out.put(badge(e.message, "danger")); } connect.disabled = false; }}, g.enabled ? "Save" : "Connect");
+  const sync = h("button", {class: "btn outline sm", "data-busy": "gh", onclick: () => busy("gh", "Syncing", async () => { try { const r = await api("/api/github/sync", {}); out.put(badge(r.error ? r.error : `↓ ${r.pulled} from GitHub · ↑ ${r.pushed} to GitHub`, r.error ? "danger" : "success")); } catch (e) { out.put(badge(e.message, "danger")); } })}, icon("refresh"), "Sync now");
+  return h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon("board"), h("h3", {}, "GitHub")),
+    h("div", {class: "card-b"}, h("p", {class: "small muted", style: "margin:0 0 10px"}, "Optional. Every task becomes an issue on a GitHub Project board you can run from github.com or the GitHub app — moving a card, editing its fields or commenting comes back here through the same rules (Done = you accept). Code tasks can open real pull requests. All of it as your account (", h("code", {class: "mono"}, "gh"), ")."),
+      h("div", {class: "row"}, who, g.enabled ? badge(`Project #${g.project}`, "success") : badge("Not connected"), g.last_sync ? badge("synced " + new Date(g.last_sync).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})) : null, g.url ? h("a", {class: "small", href: g.url, target: "_blank", rel: "noopener"}, "open board ↗") : null),
+      g.error ? h("div", {class: "err", style: "margin-top:6px"}, g.error) : null,
+      h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Owner"), owner), h("div", {}, h("label", {class: "f"}, "Repo for task issues"), repo)),
+      h("label", {class: "f"}, "Project number"), number,
+      h("label", {class: "f row", style: "gap:6px;flex-wrap:nowrap"}, prs, h("span", {}, "Open code changes as pull requests (approve = merge the PR)")),
+      h("div", {class: "row", style: "margin-top:8px"}, connect, g.enabled ? sync : null), out));
+}
+
 function slackCard(slackIds) {
   const sl = S.slack, out = h("div", {class: "small", style: "min-height:18px;margin-top:8px"});
   const bot = h("input", {type: "password", placeholder: "Bot token · xoxb-…"}), app = h("input", {type: "password", placeholder: "App-level token · xapp-… (connections:write)"});
@@ -1093,7 +1117,8 @@ async function vSettings() {
     daily_report: h("input", {type: "time", value: m.daily_report || "18:30"}), work_sessions: h("input", {value: (m.work_sessions || []).join(", "), placeholder: "e.g. 10:00, 15:00 · blank = only when asked"}),
     budget: h("input", {type: "number", value: s.budget?.daily_tokens_per_agent || 300000}),
     coding_tool: h("select", {}, [["none", "None"], ["claude", "Claude Code"], ["codex", "Codex CLI"]].map(([v, t]) => h("option", {value: v, selected: v === ((s.executor?.command || [])[0] || "none")}, t))),
-    owner_telegram_id: h("input", {class: "mono", value: s.owner?.telegram_user_id || ""}), group_chat_id: h("input", {class: "mono", value: s.telegram?.group_chat_id || ""})};
+    owner_telegram_id: h("input", {class: "mono", value: s.owner?.telegram_user_id || ""}), group_chat_id: h("input", {class: "mono", value: s.telegram?.group_chat_id || ""}),
+    git_name: h("input", {value: s.owner?.git_name || S.git.name || ""}), git_email: h("input", {type: "email", value: s.owner?.git_email || S.git.email || ""})};
   const err = h("div", {class: "err"});
   const perms = Object.fromEntries(S.action_types.map(a => [a, h("select", {}, ["green", "yellow", "red"].map(lv => h("option", {value: lv, selected: (s.permissions || {})[a] === lv}, LEVEL_TXT[lv])))]));
   const mirror = h("input", {type: "checkbox", checked: s.sync?.mirror_owner !== false});
@@ -1119,7 +1144,8 @@ async function vSettings() {
   $("#main").put(pageHeader("Settings", "Changes apply when you save — the team reloads in the background (work in progress keeps going).", dirty, h("button", {class: "btn primary", onclick: save}, icon("check"), "Save & restart")),
     S.llm_error ? h("div", {class: "card card-b", style: "margin-bottom:12px;border-color:rgba(220,38,38,.3);color:var(--danger)"}, "Model problem: " + S.llm_error) : null, err,
     h("div", {class: "cols"}, h("div", {},
-      card("Company", "overview", h("div", {class: "three"}, h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Name"), f.company), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Owner"), f.owner_name), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Timezone"), f.timezone))),
+      card("Company", "overview", h("div", {class: "three"}, h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Name"), f.company), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Owner"), f.owner_name), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Timezone"), f.timezone)),
+        h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Your git name (commits & PRs are yours)"), f.git_name), h("div", {}, h("label", {class: "f"}, "Your git email"), f.git_email))),
       card("AI model", "bot", h("label", {class: "f", style: "margin-top:0"}, "Provider"), f.provider, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Model"), f.model), h("div", {}, h("label", {class: "f"}, "Base URL"), f.base_url)),
         h("label", {class: "f"}, "API key"), f.api_key, h("label", {class: "f"}, "Coding tool for code tasks"), f.coding_tool),
       card("Permissions", "approvals", h("p", {class: "small muted", style: "margin:0 0 10px"}, "What people may do on their own. “Ask me first” turns the action into an Approve/Reject card — it runs only after you approve. Money, anything public, production, deleting and legal always ask. Override per person in their profile."),
@@ -1139,6 +1165,7 @@ async function vSettings() {
           h("label", {class: "f"}, "3 · Add the manager bot to a group and send a message, then"), h("button", {class: "btn outline sm", onclick: detect("group", "Waiting up to 90s for a message in the group…")}, "Detect group"),
           h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Owner Telegram id"), f.owner_telegram_id), h("div", {}, h("label", {class: "f"}, "Group id"), f.group_chat_id)), tgOut,
           h("p", {class: "xs muted", style: "margin:10px 0 0"}, "Bots for team members are added on the People page.")),
+        githubCard(),
         slackCard(slackIds),
         card("Where things live", "projects", h("div", {class: "small"}, h("div", {class: "muted"}, "Team repo"), h("div", {class: "mono xs", style: "margin-bottom:8px;word-break:break-all"}, S.workspace), h("div", {class: "muted"}, "Model"), h("div", {class: "mono xs"}, S.model))))));
 }

@@ -26,6 +26,11 @@ def due_jobs(cfg, state: dict, at: datetime) -> list[str]:
     last = ran.get("checks")
     if not last or (at - datetime.fromisoformat(last)).total_seconds() >= cfg.check_every_minutes * 60:
         jobs.append("checks")
+    gh = getattr(cfg, "github", None)
+    if gh is not None and gh.enabled:
+        last = ran.get("github")
+        if not last or (at - datetime.fromisoformat(last)).total_seconds() >= gh.sync_minutes * 60:
+            jobs.append("github")
     return jobs
 
 
@@ -76,6 +81,9 @@ class Scheduler:
                             except Exception:  # noqa: BLE001
                                 log.exception("work session failed")
                         self.rt._spawn(session())
+                elif job == "github":
+                    self._mark("github", at.isoformat(timespec="seconds"))
+                    self.rt._spawn(self.rt.sync_github())
                 elif job == "checks":
                     self._mark("checks", at.isoformat(timespec="seconds"))
                     await self.rt.run_checks()
