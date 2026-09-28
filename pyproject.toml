@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "james-monitoring"
 version = "0.1.0"
-description = "Run an AI team like a real team: Telegram HQ group + 1:1 DMs, git-backed tasks, permissions and James as delivery manager. Model-agnostic."
+description = "Run a company of AI employees like a real team: web console, Telegram and Slack in sync, git-backed tasks and memory, approvals, and a manager who reports daily. Any model."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -18,8 +18,9 @@ dependencies = [
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.40"]
-all = ["anthropic>=0.40", "openai>=1.40"]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "anthropic>=0.40", "openai>=1.40"]
+slack = ["slack_sdk>=3.27"]
+all = ["anthropic>=0.40", "openai>=1.40", "slack_sdk>=3.27"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "anthropic>=0.40", "openai>=1.40", "slack_sdk>=3.27"]
 
 [project.scripts]
 jm = "james_monitoring.cli:main"
