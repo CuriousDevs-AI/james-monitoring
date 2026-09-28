@@ -29,6 +29,13 @@ if TYPE_CHECKING:  # pragma: no cover
 log = logging.getLogger("jm.hub")
 
 
+def is_command(text: str) -> bool:
+    """/status, /assign … — but not "/Users/me/app.log is broken" or a path someone pastes."""
+    from .commands import HELP
+    m = re.match(r"^/([a-zA-Z]+)(?:@\w+)?(?:\s|$)", text or "")
+    return bool(m) and (m.group(1).lower() in {c for c, _ in HELP} | {"stop", "start", "rework", "changes"})
+
+
 class Transport(Protocol):
     """A channel the team is reachable on (Telegram, Slack). The console needs none: it reads the chat store."""
     name: str
@@ -156,6 +163,8 @@ class Hub:
 
     async def inbound(self, room: str, text: str, via: str) -> None:
         """For transports: receive + handle in one go. A room that lives on the other channel says where to go."""
+        if self.successor is not None:                    # arrived during a reload: the new hub handles it
+            return await self.successor.inbound(room, text, via)
         if via in ("telegram", "slack") and not self.delivers_to(room, via):
             home = self.home(room) or "the console"
             name = self.rt.room_title(room)
@@ -171,7 +180,7 @@ class Hub:
     async def route(self, room: str, text: str) -> None:
         from .runtime import Event
         rt, cfg = self.rt, self.rt.cfg
-        if text.startswith("/"):
+        if is_command(text):
             return await self._command(room, text)
         m = re.match(r"^\s*(approve|approved|reject|rejected)\s+(ASK-\d+)\b[\s:,.-]*(.*)$", text, re.I | re.S)
         if m:                                   # "approve ASK-3 go ahead" typed anywhere = the button
@@ -196,15 +205,16 @@ class Hub:
         source = "dm" if room not in (TEAM_ROOM,) and not pid else "group"
         # One after the other, like people in a meeting: each reads what the previous ones just said
         # (the room's recent messages are in their context), instead of parallel monologues.
-        for mid in targets:
-            await self._answer(room, mid, Event(source, text, sender=rt.owner_id, project=pid, room=room))
+        for i, mid in enumerate(targets):                  # the task feedback in it is recorded once, not per person
+            await self._answer(room, mid, Event(source, text, sender=rt.owner_id, project=pid, room=room,
+                                                meta={"primary": i == 0}))
 
     async def _answer(self, room: str, mid: str, ev) -> None:
         self.pending[room] = self.pending.get(room, 0) + 1
         try:
             for t in self.transports:
                 typing = getattr(t, "typing", None)
-                if typing:
+                if typing and self.delivers_to(room, t.name):
                     try:
                         await typing(room, mid)
                     except Exception:  # noqa: BLE001

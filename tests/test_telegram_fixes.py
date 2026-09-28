@@ -1,6 +1,8 @@
 """Telegram hardening (audit H29–H32 and the Telegram Medium items), with fake bots — no network."""
 from types import SimpleNamespace
 
+import pytest
+
 from telegram.error import ChatMigrated, Forbidden, RetryAfter
 
 from james_monitoring.gateway import TelegramGateway, to_html
@@ -142,3 +144,30 @@ async def test_project_on_telegram_without_its_own_group_uses_hq_with_a_label(cf
     rt.llm.push({"reply": "On it.", "actions": []})
     await gw._make_text_handler("james")(upd("#site what's next?", chat_type="supergroup", chat_id=-100, msg_id=9), None)
     assert [m["text"] for m in rt.chat.since("p-site")][-2:] == ["what's next?", "On it."]
+
+
+
+async def test_same_message_number_on_two_bots_is_two_messages(cfg):
+    gw, rt, sent = setup(cfg)
+    rt.llm.push({"reply": "sofia here", "actions": []})
+    rt.llm.push({"reply": "marcus here", "actions": []})
+    await gw._make_text_handler("sofia")(upd("hi sofia", msg_id=5), None)
+    await gw._make_text_handler("marcus")(upd("hi marcus", msg_id=5), None)      # ids are per bot in DMs
+    assert [m["text"] for m in rt.chat.since("marcus")] == ["hi marcus", "marcus here"]
+
+
+async def test_commands_for_someone_elses_bot_are_ignored(cfg):
+    gw, rt, sent = setup(cfg)
+    await gw._make_command_handler("james")(upd("/stop@some_ci_bot", chat_type="supergroup", chat_id=-100), None)
+    assert not rt.ws.state().get("paused_all") and sent == []
+
+
+async def test_rate_limit_that_never_ends_fails_loudly_and_bad_requests_arent_retried(cfg):
+    from telegram.error import BadRequest
+    gw, rt, sent = setup(cfg, fails={"sofia": [RetryAfter(0)] * 9})
+    with pytest.raises(RetryAfter):
+        await gw._send(gw._bot("sofia"), 111, "hello")
+    bot = Bot("x", sent, fail=[BadRequest("Chat not found")] * 3)
+    with pytest.raises(BadRequest):
+        await gw._send(bot, 111, "hello")
+    assert len(bot.fail) == 2                              # tried once, not three times

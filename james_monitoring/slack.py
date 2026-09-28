@@ -52,6 +52,13 @@ def _client(token: str):
     return WebClient(token=token)
 
 
+def slack_text(text: str) -> str:
+    """Our markdown → Slack mrkdwn, safely: &, <, > escaped (so text can never ping <!channel> or fake a link),
+    **bold** → *bold*."""
+    t = (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return re.sub(r"\*\*([^*\n]+)\*\*", r"*\1*", t)
+
+
 def channel_name(company: str, room: str) -> str:
     """Slack channel names: lowercase, no spaces, ≤ 80 chars."""
     def clean(s: str) -> str:
@@ -126,6 +133,7 @@ class SlackTransport:
             icon = ":briefcase:" if m and m.monitor else ":robot_face:"
             if kind == "internal":
                 text = f"_(teammates)_ {text}"
+        text = slack_text(text)
         kw = {"channel": ch, "text": text[:39000], "username": username, "icon_emoji": icon}
         if ask is not None and kind == "ask":
             kw["blocks"] = [
@@ -139,6 +147,9 @@ class SlackTransport:
             r = await asyncio.to_thread(self.web.chat_postMessage, **kw)
             if ask is not None and kind == "ask":
                 self.cards[ask.id] = (kw["channel"], (r or {}).get("ts", ""), text)
+                if self.rt:
+                    self.rt.ws.update_state(lambda s: s.setdefault("slack_cards", {}).__setitem__(
+                        ask.id, [kw["channel"], (r or {}).get("ts", ""), text]))
             self._remember(kw["channel"], (r or {}).get("ts", ""), who)
         except Exception as e:  # noqa: BLE001
             self.error = str(e)[:200]
@@ -146,6 +157,10 @@ class SlackTransport:
 
     async def ask_decided(self, ask: "Ask", result: str) -> None:
         where = self.cards.pop(ask.id, None)
+        if not where and self.rt:
+            where = (self.rt.ws.state().get("slack_cards") or {}).get(ask.id)
+        if self.rt:
+            self.rt.ws.update_state(lambda s: (s.get("slack_cards") or {}).pop(ask.id, None))
         if not where or not where[1] or not self.web:
             return
         channel, ts, text = where
@@ -184,7 +199,7 @@ class SlackTransport:
 
     def event_room(self, ev: dict) -> tuple[str | None, str]:
         """A Slack message event → (room, text) — None when it isn't ours to handle. Pure: easy to test."""
-        if ev.get("type") != "message" or ev.get("subtype") or ev.get("bot_id"):
+        if ev.get("type") != "message" or ev.get("bot_id") or ev.get("subtype") not in (None, "file_share", "thread_broadcast"):
             return None, ""
         user = ev.get("user", "")
         if user not in self.cfg.slack.owner_user_ids:
@@ -195,12 +210,16 @@ class SlackTransport:
         text = self.clean(ev.get("text", ""))
         if not text:
             return None, ""
-        if text.startswith("!"):
+        if re.match(r"^![a-zA-Z]", text):                  # "!status" = /status (but not "!!! server down")
             text = "/" + text[1:]
         if ev.get("channel_type") == "im":
             m = _AT.match(text)
             if m and self.cfg.member(m.group(1)):
                 return self.cfg.member(m.group(1)).id, text[m.end():].strip()
+            parent = ev.get("thread_ts")
+            who = self.authors.get((ev.get("channel", ""), parent)) if parent and parent != ev.get("ts") else None
+            if who and self.cfg.member(who):              # a thread reply in the app DM goes to that message's author
+                return who, text
             return self.cfg.monitor.id, text
         room = self.room_of_channel(ev.get("channel", ""))
         if not room or room == BACKCHANNEL:
@@ -228,10 +247,21 @@ class SlackTransport:
         except Exception:  # noqa: BLE001
             log.exception("slack: event handling failed")
 
+    def _watch(self, fut, what: str):
+        """Futures from the Slack thread: errors are logged and shown, never lost silently."""
+        def done(f):
+            e = f.exception()
+            if e:
+                self.error = f"{what}: {e}"[:200]
+                log.error("slack: %s failed: %s", what, e)
+        fut.add_done_callback(done)
+        return fut
+
     def on_event(self, ev: dict) -> None:
         room, text = self.event_room(ev)
         if room and self.loop and self.hub:
-            asyncio.run_coroutine_threadsafe(self.hub.inbound(room, text, via="slack"), self.loop)
+            self._watch(asyncio.run_coroutine_threadsafe(self.hub.inbound(room, text, via="slack"), self.loop),
+                        f"message in {room}")
 
     def slash_room(self, payload: dict) -> tuple[str | None, str]:
         """/jm status · /jm assign riya "…" · /jm approve ASK-3 — in any of our channels or the app's DM."""
@@ -246,7 +276,8 @@ class SlackTransport:
     def on_slash(self, payload: dict):
         room, text = self.slash_room(payload)
         if room and self.loop and self.hub:
-            return asyncio.run_coroutine_threadsafe(self.hub.inbound(room, text, via="slack"), self.loop)
+            return self._watch(asyncio.run_coroutine_threadsafe(self.hub.inbound(room, text, via="slack"), self.loop),
+                               "/jm command")
         return None
 
     def on_action(self, payload: dict):
@@ -260,7 +291,8 @@ class SlackTransport:
         decision = {"jm_approve": "approved", "jm_reject": "rejected"}.get(act.get("action_id"))
         if not decision or not self.loop:
             return None
-        return asyncio.run_coroutine_threadsafe(self._decide(act.get("value", ""), decision, payload), self.loop)
+        return self._watch(asyncio.run_coroutine_threadsafe(self._decide(act.get("value", ""), decision, payload),
+                                                            self.loop), "approval button")
 
     async def _decide(self, ask_id: str, decision: str, payload: dict) -> str:
         from .asks import AskError

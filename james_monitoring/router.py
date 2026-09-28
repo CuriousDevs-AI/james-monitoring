@@ -5,8 +5,12 @@ import re
 
 from .config import Config
 
-_MENTION = re.compile(r"@([A-Za-z0-9_]+)")
-_STATUS = re.compile(r"\b(status|update|updates|standup|kya\s+chal\s+raha)\b", re.I)
+_MENTION = re.compile(r"(?<![\w.+-])@([A-Za-z0-9_]+)")        # not the "@" inside an email address
+# The whole message must *be* a status request ("@all status", "give me an update", "standup?") — "@all update the
+# README by Friday" is an instruction and goes to the agents.
+_STATUS = re.compile(r"^(?:(?:please|pls|quick|give|share|post|send|me|us|your|an?|the|daily)\s+)*"
+                     r"(?:status(?:\s+update)?|updates?|standup|progress|kya\s+chal\s+raha(?:\s+hai)?)"
+                     r"(?:\s+(?:please|pls|update|report|now|today))*$", re.I)
 ALL_WORDS = ("all", "everyone", "team", "here", "channel")
 
 
@@ -56,6 +60,6 @@ def room_targets(room: str, text: str, cfg: Config, usernames: dict[str, str] | 
 
 
 def is_status_request(text: str) -> bool:
-    """Short '@all status' style messages get an instant answer from the task board (no model call)."""
-    stripped = _MENTION.sub("", text).strip(" ?!.,")
-    return bool(_STATUS.search(stripped)) and len(stripped) <= 60
+    """'@all status' style messages get an instant answer from the task board (no model call)."""
+    stripped = " ".join(_MENTION.sub("", text).strip(" ?!.,:-").split())
+    return bool(_STATUS.match(stripped))

@@ -140,3 +140,17 @@ async def test_here_threads_and_slash_commands(tmp_path):
     assert sl.slash_room({"user_id": "U0OWNER1", "channel_id": "C_HQ", "text": "status"}) == ("team", "/status")
     assert sl.slash_room({"user_id": "U0OWNER1", "channel_id": "D9", "text": ""}) == ("james", "/help")
     assert sl.slash_room({"user_id": "U0X", "channel_id": "C_HQ", "text": "pause all"}) == (None, "")
+
+
+
+async def test_slack_text_is_escaped_and_app_dm_threads_reach_the_author(tmp_path):
+    from james_monitoring.slack import slack_text
+    assert slack_text("if <500ms & **ship** <!channel>") == "if &lt;500ms &amp; *ship* &lt;!channel&gt;"
+    rt, hub, sl, web = make(tmp_path, channels={"team": "C_HQ"})
+    await hub.send_owner("marcus", "Drop the legacy endpoint?")
+    sl.authors[("D_OWNER", "7.1")] = "marcus"
+    ev = {"type": "message", "user": "U0OWNER1", "channel": "D_OWNER", "channel_type": "im", "text": "yes drop it",
+          "ts": "8.0", "thread_ts": "7.1"}
+    assert sl.event_room(ev) == ("marcus", "yes drop it")
+    assert sl.event_room({**ev, "thread_ts": None, "subtype": "file_share"})[0] == "james"   # files with text count
+    assert sl.event_room({**ev, "thread_ts": None, "text": "!!! server down"}) == ("james", "!!! server down")

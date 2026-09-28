@@ -21,7 +21,7 @@ import signal
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters, Update
 from telegram.constants import ChatAction, ChatType
-from telegram.error import BadRequest, ChatMigrated, Forbidden, NetworkError, RetryAfter, TelegramError
+from telegram.error import BadRequest, ChatMigrated, Forbidden, NetworkError, RetryAfter, TelegramError, TimedOut
 from telegram.ext import (Application, ApplicationBuilder, CallbackQueryHandler, ContextTypes,
                           MessageHandler, filters)
 
@@ -56,6 +56,7 @@ class TelegramGateway:
         self._stop: asyncio.Event | None = None
         self.health: dict[str, str] = {}
         self.cards: dict[str, tuple[str, int, int]] = {}      # ask id → (member bot, chat, message) to edit later
+        self.extra_chats: dict[str, int] = {}                  # room → private chat of an extra user who wrote there
         self._seen: dict[tuple[int, int], float] = {}         # (chat, message) already handled — no double answers
 
     def stop(self) -> None:
@@ -107,7 +108,7 @@ class TelegramGateway:
         for i, part in enumerate(parts):
             kw = dict(disable_notification=silent, reply_parameters=_rp(reply_to),
                       reply_markup=reply_markup if i == len(parts) - 1 else None)
-            for attempt in range(4):
+            for attempt in range(5):
                 try:
                     try:
                         sent = await bot.send_message(chat_id, to_html(part), parse_mode="HTML", **kw)
@@ -117,10 +118,14 @@ class TelegramGateway:
                         sent = await bot.send_message(chat_id, part, **kw)          # formatting problem → plain
                     break
                 except RetryAfter as e:
+                    if attempt == 4:
+                        raise                                  # still rate-limited: fail loudly, never silently
                     wait = e.retry_after.total_seconds() if hasattr(e.retry_after, "total_seconds") else float(e.retry_after)
                     await asyncio.sleep(min(wait, 60) + 0.5)
                 except ChatMigrated as e:
                     chat_id = self._migrated(chat_id, e.new_chat_id)
+                except (BadRequest, Forbidden, TimedOut):
+                    raise      # permanent — or it may have been delivered already: retrying would send it twice
                 except NetworkError:
                     if attempt >= 2:
                         raise
@@ -194,6 +199,12 @@ class TelegramGateway:
             sent = await self._send(self._bot(speaker), chat_id, text, reply_markup=markup, silent=silent)
             if ask is not None and sent is not None:
                 self.cards[ask.id] = (speaker, chat_id, sent.message_id)
+                if self.rt:                                   # kept across reloads, so the card can still be updated
+                    self.rt.ws.update_state(lambda s: s.setdefault("tg_cards", {}).__setitem__(
+                        ask.id, [speaker, chat_id, sent.message_id]))
+            extra = self.extra_chats.get(room)
+            if dm_member and extra and extra != chat_id and who != owner:
+                await self._send(self._bot(speaker), extra, text, silent=silent)   # the teammate-user who asked
             if self.health.get(speaker):
                 self._health(speaker, "")
         except Forbidden as e:
@@ -205,6 +216,10 @@ class TelegramGateway:
     async def ask_decided(self, ask: Ask, result: str) -> None:
         """Decided somewhere else (console, Slack, a typed "approve ASK-3"): update the card here too."""
         where = self.cards.pop(ask.id, None)
+        if not where and self.rt:
+            where = (self.rt.ws.state().get("tg_cards") or {}).get(ask.id)
+        if self.rt:
+            self.rt.ws.update_state(lambda s: (s.get("tg_cards") or {}).pop(ask.id, None))
         if not where:
             return
         speaker, chat_id, message_id = where
@@ -249,13 +264,13 @@ class TelegramGateway:
                 return PROJECT_ROOM + pid, m.group(2).strip()
         return room, text
 
-    def _first_time(self, update: Update) -> bool:
+    def _first_time(self, update: Update, member: str = "") -> bool:
         """Each Telegram message is handled once (edits and redeliveries don't make agents act twice)."""
         import time
         msg, chat = update.effective_message, update.effective_chat
         if not msg or not chat:
             return True
-        key = (chat.id, msg.message_id)
+        key = (member, chat.id, msg.message_id)          # message ids are per bot in private chats
         now_ = time.monotonic()
         if len(self._seen) > 2000:
             self._seen = {k: v for k, v in self._seen.items() if now_ - v < 3600}
@@ -281,8 +296,11 @@ class TelegramGateway:
             if not msg or not msg.text or not msg.text.strip() or not self._authorized(update):
                 return
             room, text = self._inbound_room(member_id, update, msg.text)
-            if not room or not text or not self._first_time(update):   # only the bot that handles it records it
+            if not room or not text or not self._first_time(update, member_id):   # only the handling bot records it
                 return
+            u = update.effective_user
+            if update.effective_chat.type == ChatType.PRIVATE and u and u.id != self.cfg.owner_user_id:
+                self.extra_chats[room] = update.effective_chat.id   # replies reach this extra user too
             if update.effective_chat.type != ChatType.PRIVATE:
                 text = self._reply_target(update, text)
             await self.hub.inbound(room, text, via="telegram")
@@ -291,7 +309,8 @@ class TelegramGateway:
     def _make_other_handler(self, member_id: str):
         async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             chat = update.effective_chat
-            if not chat or chat.type != ChatType.PRIVATE or not self._authorized(update) or not self._first_time(update):
+            if not chat or chat.type != ChatType.PRIVATE or not self._authorized(update) \
+                    or not self._first_time(update, member_id):
                 return
             await self._send(self._bot(member_id), chat.id, "I can only read text for now — send it as a message "
                                                             "(or paste a link to the file).")
@@ -315,6 +334,8 @@ class TelegramGateway:
                 return   # in groups only the manager's bot answers commands
             by_username = {v.lower(): k for k, v in self.usernames.items()}
             target = by_username.get(addressed.lower()) if addressed else None
+            if addressed and not target:
+                return   # "/stop@some_other_bot": a command for someone else's bot, not for the team
             if target and target != self.cfg.monitor.id and not args.strip() and \
                     cmd in ("pause", "stop", "resume", "start", "log"):
                 args = target        # /pause@marcus_bot in the group pauses Marcus, not everyone
@@ -327,7 +348,7 @@ class TelegramGateway:
             if not self._authorized(update):
                 return
             room, _ = self._inbound_room(member_id, update, msg.text)
-            if not room or not self._first_time(update):
+            if not room or not self._first_time(update, member_id):
                 return
             await self.hub.inbound(room, f"/{cmd} {args.strip()}".strip(), via="telegram")
         return handler
@@ -353,9 +374,9 @@ class TelegramGateway:
         except (ValueError, AskError) as e:
             result = f"⚠️ {e}"
         try:
-            await q.edit_message_text((q.message.text or "") + f"\n\n→ {result}")
-        except TelegramError:
-            pass
+            await q.edit_message_text((getattr(q.message, "text", None) or "") + f"\n\n→ {result}")
+        except (TelegramError, AttributeError):
+            pass                                          # a card older than 48h can't be edited — the decision stands
 
     # -- lifecycle ----------------------------------------------------------------
     def build(self) -> None:

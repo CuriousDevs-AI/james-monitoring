@@ -88,9 +88,16 @@ class TelegramProbe:
                 if u.message and u.message.chat.type in ("group", "supergroup"):
                     m = u.message
                     self._take(u)
-                    if m.migrate_to_chat_id:             # group upgraded to supergroup → new id
-                        chat = await self.bot.get_chat(m.migrate_to_chat_id)
-                        return Group(chat.id, chat.title or "")
+                    if m.migrate_to_chat_id:             # group upgraded to supergroup → new id (only yours)
+                        try:
+                            me = await self.bot.get_chat_member(m.migrate_to_chat_id, owner_id)
+                            mine = me.status in ("member", "administrator", "creator")
+                        except Exception:  # noqa: BLE001
+                            mine = False
+                        if mine:
+                            chat = await self.bot.get_chat(m.migrate_to_chat_id)
+                            return Group(chat.id, chat.title or "")
+                        continue
                     if m.from_user and m.from_user.id == owner_id:
                         return Group(m.chat.id, m.chat.title or "")
                 cm = u.my_chat_member
