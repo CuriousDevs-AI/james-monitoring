@@ -30,11 +30,12 @@ class RunResult:
     output_tail: str
 
 
-def _git(repo: Path, *args: str) -> str:
-    r = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True)
-    if r.returncode != 0:
-        raise ExecutorError(f"git {' '.join(args)}: {r.stderr.strip() or r.stdout.strip()}")
-    return r.stdout.strip()
+def _git(repo: Path, *args: str, timeout: float = 120) -> str:
+    from .workspace import run_git
+    try:
+        return run_git(repo, *args, timeout=timeout).strip()
+    except RuntimeError as e:
+        raise ExecutorError(str(e)) from None
 
 
 class Executor:
@@ -78,18 +79,25 @@ class Executor:
         if not any("{prompt}" in c for c in self.cfg.executor_command):
             cmd.append(prompt)
         proc = await asyncio.create_subprocess_exec(*cmd, cwd=wt, stdout=asyncio.subprocess.PIPE,
-                                                    stderr=asyncio.subprocess.STDOUT)
+                                                    stderr=asyncio.subprocess.STDOUT, stdin=asyncio.subprocess.DEVNULL,
+                                                    start_new_session=True)
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=self.cfg.executor_timeout_minutes * 60)
         except asyncio.TimeoutError:
-            proc.kill()
+            import os
+            import signal
+            try:                                               # the whole process group: no orphans left behind
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
+            await proc.wait()
             raise ExecutorError(f"coding agent timed out after {self.cfg.executor_timeout_minutes} min")
         text = (out or b"").decode(errors="replace")
         _git(wt, "add", "-A")
         commit = ""
         if _git(wt, "status", "--porcelain"):
-            _git(wt, "-c", "user.name=james-monitoring", "-c", "user.email=jm@localhost",
-                 "commit", "-q", "-m", f"{task_id}: changes by coding agent")
+            _git(wt, "-c", "user.name=james-monitoring", "-c", "user.email=jm@localhost", "-c", "commit.gpgsign=false",
+                 "commit", "-q", "--no-verify", "-m", f"{task_id}: changes by coding agent")
         try:
             commit = _git(wt, "rev-parse", "--short", "HEAD")
             diffstat = _git(repo, "diff", "--stat", f"{p.main_branch}...{branch}")
@@ -106,9 +114,20 @@ class Executor:
             raise ExecutorError(f"{repo} is on `{current}`, expected `{p.main_branch}` — not merging")
         if _git(repo, "status", "--porcelain", "--untracked-files=no"):
             raise ExecutorError(f"{repo} has uncommitted changes — not merging")
-        _git(repo, "-c", "user.name=james-monitoring", "-c", "user.email=jm@localhost",
-             "merge", "--no-ff", "-m", f"Merge {branch} (approved)", branch)
+        before = _git(repo, "rev-parse", "HEAD")
+        try:
+            _git(repo, "-c", "user.name=james-monitoring", "-c", "user.email=jm@localhost", "-c", "commit.gpgsign=false",
+                 "merge", "--no-ff", "--no-verify", "-m", f"Merge {branch} (approved)", branch)
+        except ExecutorError as e:
+            try:                                              # never leave the real repo half-merged
+                _git(repo, "merge", "--abort")
+            except ExecutorError:
+                _git(repo, "reset", "--hard", before)
+            raise ExecutorError(f"merge conflict or error, rolled back: {str(e)[:300]}") from None
         sha = _git(repo, "rev-parse", "--short", "HEAD")
         if p.push:
-            _git(repo, "push", "-q")
+            try:
+                _git(repo, "push", "-q")
+            except ExecutorError as e:
+                raise ExecutorError(f"merged locally ({sha}) but the push failed: {e}") from None
         return sha

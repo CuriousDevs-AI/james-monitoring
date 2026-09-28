@@ -14,13 +14,34 @@ Layout:
 from __future__ import annotations
 
 import json
+import logging
+import os
 import subprocess
 import threading
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .config import Config
+from .fileio import atomic_write, path_lock
+
+log = logging.getLogger("jm.workspace")
+
+# Git must never wait for a human: no password prompts, no SSH questions, no editors, no signing pinentry.
+GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "echo", "SSH_ASKPASS": "echo", "GCM_INTERACTIVE": "never",
+           "GIT_SSH_COMMAND": "ssh -oBatchMode=yes -oConnectTimeout=15", "GIT_EDITOR": "true"}
+
+
+def run_git(cwd: Path, *args: str, timeout: float = 60) -> str:
+    env = {**os.environ, **GIT_ENV}
+    try:
+        r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env,
+                           stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"git {' '.join(args[:2])} timed out after {int(timeout)}s") from None
+    if r.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed: {r.stderr.strip() or r.stdout.strip()}")
+    return r.stdout
 
 GITIGNORE = ".jm/\n.env\n"
 
@@ -29,8 +50,9 @@ class Workspace:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.root: Path = cfg.workspace_path
-        self._git_lock = threading.Lock()
-        self._state_lock = threading.Lock()
+        self._push_guard = threading.Lock()
+        self._pushing = False
+        self._push_again = False
 
     # -- layout ------------------------------------------------------------
     def ensure(self) -> None:
@@ -58,15 +80,18 @@ class Workspace:
         return p.read_text() if p.exists() else default
 
     def write(self, rel: str, text: str) -> None:
-        p = self.root / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text)
+        atomic_write(self.root / rel, text)
 
     def append(self, rel: str, line: str) -> None:
         p = self.root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a") as f:
             f.write(line.rstrip("\n") + "\n")
+
+    def _now(self) -> datetime:
+        """The company's clock (config timezone), not the server's — logs and reports agree on what "today" is."""
+        from .util import now
+        return now(self.cfg.timezone)
 
     # -- team files --------------------------------------------------------
     def persona(self, member_id: str) -> str:
@@ -77,18 +102,59 @@ class Workspace:
     def charter(self) -> str:
         return self.read("team/charter.md")
 
-    def memory(self, member_id: str, max_chars: int = 6000) -> str:
-        text = self.read(f"team/{member_id}/memory.md")
-        return text[-max_chars:]
+    # Memory file: "## Corrections" (from the owner — binding, never trimmed) and "## Notes" (newest kept).
+    CORR, NOTES = "## Corrections (binding — never trimmed)", "## Notes"
 
-    def remember(self, member_id: str, note: str) -> None:
+    def _memory_parts(self, member_id: str) -> tuple[str, list[str], list[str]]:
+        text = self.read(f"team/{member_id}/memory.md")
+        head, corr, notes, cur = [], [], [], None
+        for line in text.splitlines():
+            if line.startswith("## Corrections"):
+                cur = corr
+            elif line.startswith("## Notes"):
+                cur = notes
+            elif line.startswith("- "):
+                (cur if cur is not None else notes).append(line)
+            elif cur is None and line.strip():
+                head.append(line)
+            elif cur is not None and line.strip() and (cur[-1:] or [None])[0] is not None:
+                cur[-1] += " " + line.strip()           # a wrapped line belongs to the entry above
+        return "\n".join(head) or f"# Memory — {member_id}", corr, notes
+
+    def memory(self, member_id: str, max_chars: int = 6000) -> str:
+        """What goes in the prompt: every correction, then as many of the newest notes as fit — whole lines."""
+        head, corr, notes = self._memory_parts(member_id)
+        out = [self.CORR, *corr] if corr else []
+        budget = max_chars - sum(len(x) + 1 for x in out)
+        kept: list[str] = []
+        for line in reversed(notes):
+            if len(line) + 1 > budget:
+                break
+            kept.insert(0, line)
+            budget -= len(line) + 1
+        if kept:
+            out += [self.NOTES + (f" (newest {len(kept)} of {len(notes)})" if len(kept) < len(notes) else ""), *kept]
+        return "\n".join(out)
+
+    def remember(self, member_id: str, note: str, pinned: bool = False) -> None:
+        note = " ".join(str(note or "").split())
+        if not note:
+            return
         rel = f"team/{member_id}/memory.md"
-        if not (self.root / rel).exists():
-            self.write(rel, f"# Memory — {member_id}\n\nNewest last. Corrections from the owner are binding.\n\n")
-        self.append(rel, f"- {date.today().isoformat()} — {note.strip()}")
+        with path_lock(self.root / rel):
+            head, corr, notes = self._memory_parts(member_id)
+            line = f"- {self._now().date().isoformat()} — {note}"
+            if pinned:
+                if not any(note in c for c in corr):
+                    corr.append(line)
+            else:
+                notes.append(line)
+            text = (f"{head}\n\nNewest last. Corrections from the owner are binding.\n\n"
+                    if "Newest last" not in head else f"{head}\n\n")
+            self.write(rel, text + f"{self.CORR}\n" + "\n".join(corr) + f"\n\n{self.NOTES}\n" + "\n".join(notes) + "\n")
 
     def log(self, member_id: str, line: str) -> None:
-        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        stamp = self._now().strftime("%Y-%m-%d %H:%M")
         self.append(f"team/{member_id}/log.md", f"- {stamp} — {line.strip()}")
 
     def tail_log(self, member_id: str, n: int = 15) -> str:
@@ -96,33 +162,66 @@ class Workspace:
         return "\n".join(lines[-n:])
 
     # -- git ---------------------------------------------------------------
-    def _git(self, *args: str, cwd: Path | None = None) -> str:
-        r = subprocess.run(["git", *args], cwd=cwd or self.root, capture_output=True, text=True)
-        if r.returncode != 0:
-            raise RuntimeError(f"git {' '.join(args)} failed: {r.stderr.strip() or r.stdout.strip()}")
-        return r.stdout
+    def _git(self, *args: str, cwd: Path | None = None, timeout: float = 60) -> str:
+        return run_git(cwd or self.root, *args, timeout=timeout)
 
     def commit(self, message: str, author: str = "james-monitoring") -> bool:
-        """Stage everything and commit. Returns True if a commit was made."""
-        with self._git_lock:
-            self._git("add", "-A")
-            if not self._git("status", "--porcelain").strip():
-                return False
-            self._git("-c", f"user.name={author}", "-c", "user.email=jm@localhost",
-                      "commit", "-q", "-m", message)
-            if self.cfg.workspace_push:
+        """Stage everything and commit. Returns True if a commit was made.
+
+        One lock per repo (threads *and* processes), no prompts, no signing. A failed commit never breaks the
+        caller: the change is on disk, the error is recorded and shown by the manager's checks, and the next
+        commit picks it up."""
+        try:
+            with path_lock(self.root / ".jm" / "git"):
+                self._git("add", "-A")
+                if not self._git("status", "--porcelain").strip():
+                    return False
+                self._git("-c", f"user.name={author}", "-c", "user.email=jm@localhost", "-c", "commit.gpgsign=false",
+                          "commit", "-q", "--no-verify", "-m", message)
+        except RuntimeError as e:
+            log.error("commit failed: %s", e)
+            self.update_state(lambda s: s.__setitem__("commit_error", str(e)[:300]))
+            return False
+        if self.state().get("commit_error"):
+            self.update_state(lambda s: s.pop("commit_error", None))
+        if self.cfg.workspace_push:
+            self.push_later()
+        return True
+
+    def push_later(self) -> None:
+        """Push in the background, one push at a time: a slow or dead remote never freezes the team."""
+        with self._push_guard:
+            if self._pushing:
+                self._push_again = True
+                return
+            self._pushing = True
+
+        def run():
+            while True:
                 self.push()
-            return True
+                with self._push_guard:
+                    if not self._push_again:
+                        self._pushing = False
+                        return
+                    self._push_again = False
+        threading.Thread(target=run, daemon=True, name="jm-push").start()
+
+    def wait_push(self, timeout: float = 30) -> None:
+        """Wait for a background push to finish (shutdown, tests)."""
+        import time
+        end = time.time() + timeout
+        while self._pushing and time.time() < end:
+            time.sleep(0.05)
 
     def push(self) -> bool:
         """Push to the remote. First push to an empty remote sets the upstream. Failures never stop the
         team; they are recorded in state and shown by the manager's checks."""
         err = ""
         try:
-            self._git("push", "-q")
+            self._git("push", "-q", timeout=120)
         except RuntimeError:
             try:
-                self._git("push", "-q", "-u", "origin", "HEAD")
+                self._git("push", "-q", "-u", "origin", "HEAD", timeout=120)
             except RuntimeError as e:
                 err = str(e)[:200]
         self.update_state(lambda s: s.__setitem__("push_error", err))
@@ -143,18 +242,30 @@ class Workspace:
 
     def state(self) -> dict[str, Any]:
         p = self._state_path()
-        if not p.exists():
-            return {}
-        try:
-            return json.loads(p.read_text())
-        except json.JSONDecodeError:
-            return {}
+        for candidate in (p, p.with_name("state.json.bak")):
+            if not candidate.exists():
+                continue
+            try:
+                data = json.loads(candidate.read_text())
+                if isinstance(data, dict):
+                    if candidate != p:
+                        log.error("state.json was unreadable; recovered from state.json.bak")
+                    return data
+            except (json.JSONDecodeError, OSError):
+                log.error("%s is unreadable", candidate)
+        return {}
 
     def update_state(self, fn) -> dict[str, Any]:
-        with self._state_lock:
+        p = self._state_path()
+        with path_lock(p):
             s = self.state()
             fn(s)
-            p = self._state_path()
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps(s, indent=2, sort_keys=True))
+            text = json.dumps(s, indent=2, sort_keys=True)
+            if p.exists():
+                try:
+                    json.loads(p.read_text())
+                    atomic_write(p.with_name("state.json.bak"), p.read_text())
+                except (json.JSONDecodeError, OSError):
+                    pass                                     # never back up a broken file over a good one
+            atomic_write(p, text)
             return s
