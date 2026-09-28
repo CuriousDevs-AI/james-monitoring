@@ -1,5 +1,14 @@
-"""Chat rooms for the web console: one room per team member (like a DM) and a 'team' room (like the group).
-Stored in .jm/chat/<room>.jsonl (runtime data, not committed)."""
+"""Chat rooms: the one record of every conversation, whichever channel it happened in.
+
+Rooms:
+    team            All hands (the whole company; the Telegram group / a Slack channel)
+    p-<project>     a project's room (its team only)
+    <member id>     the owner's 1:1 chat with that person
+    backchannel     teammates talking to each other when it isn't about one project (read-only for the owner)
+
+Stored in .jm/chat/<room>.jsonl (runtime data, not committed). Each message:
+    {"i", "ts", "who", "text", "kind": msg|notice|ask|system|internal, "via"?: console|telegram|slack, "ask_id"?}
+"""
 from __future__ import annotations
 
 import json
@@ -7,13 +16,17 @@ import threading
 import time
 from pathlib import Path
 
+_CACHE: dict[str, tuple[int, list[dict]]] = {}
+_CACHE_LOCK = threading.Lock()
+
 TEAM_ROOM = "team"
 PROJECT_ROOM = "p-"                  # project rooms are "p-<project id>"
+BACKCHANNEL = "backchannel"
 
 
 class ChatStore:
     def __init__(self, root: Path):
-        self.dir = root / ".jm" / "chat"
+        self.dir = Path(root) / ".jm" / "chat"
         self.dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._counts: dict[str, int] = {}
@@ -23,72 +36,66 @@ class ChatStore:
         return self.dir / f"{safe}.jsonl"
 
     def _count(self, room: str) -> int:
-        if room not in self._counts:
-            p = self._path(room)
-            self._counts[room] = sum(1 for _ in p.open()) if p.exists() else 0
-        return self._counts[room]
+        msgs = self._messages(room)                       # always from the file: several writers stay consistent
+        return (msgs[-1].get("i", len(msgs) - 1) + 1) if msgs else 0
 
     def append(self, room: str, who: str, text: str, kind: str = "msg", **extra) -> dict:
-        with self._lock:
+        from .fileio import path_lock
+        with self._lock, path_lock(self._path(room)):
             n = self._count(room)
-            msg = {"i": n, "ts": time.time(), "who": who, "text": text, "kind": kind, **extra}
+            msg = {"i": n, "ts": time.time(), "who": who, "text": text, "kind": kind,
+                   **{k: v for k, v in extra.items() if v not in (None, "")}}
             with self._path(room).open("a") as f:
                 f.write(json.dumps(msg, ensure_ascii=False) + "\n")
             self._counts[room] = n + 1
             return msg
 
-    def since(self, room: str, after: int = -1, limit: int = 200) -> list[dict]:
+    def _messages(self, room: str) -> list[dict]:
+        """All messages of a room, read incrementally: only bytes added since the last read are parsed
+        (shared by every ChatStore on the file, so a reload or `jm chat` next to `jm run` stays in sync)."""
         p = self._path(room)
         if not p.exists():
             return []
-        out = []
-        with p.open() as f:
-            for line in f:
-                try:
-                    m = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if m.get("i", -1) > after:
-                    out.append(m)
-        return out[-limit:]
+        key = str(p)
+        with _CACHE_LOCK:
+            size = p.stat().st_size
+            offset, msgs = _CACHE.get(key, (0, []))
+            if size < offset:                                 # file replaced/truncated: start over
+                offset, msgs = 0, []
+            if size > offset:
+                with p.open("rb") as f:
+                    f.seek(offset)
+                    chunk = f.read(size - offset)
+                end = chunk.rfind(b"\n") + 1                  # only complete lines
+                for line in chunk[:end].splitlines():
+                    try:
+                        msgs.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+                offset += end
+                _CACHE[key] = (offset, msgs)
+            return msgs
+
+    def since(self, room: str, after: int = -1, limit: int = 200) -> list[dict]:
+        msgs = self._messages(room)
+        if after < 0:
+            return msgs[-limit:]
+        lo, hi = 0, len(msgs)                                 # messages are in index order: binary search
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if msgs[mid].get("i", -1) > after:
+                hi = mid
+            else:
+                lo = mid + 1
+        return msgs[lo:][-limit:]
+
+    def recent(self, room: str, n: int = 20, max_age_hours: float | None = None) -> list[dict]:
+        msgs = self.since(room, -1, limit=n)
+        if max_age_hours is not None:
+            cut = time.time() - max_age_hours * 3600
+            msgs = [m for m in msgs if m.get("ts", 0) >= cut]
+        return msgs
 
     def last_index(self, room: str) -> int:
         with self._lock:
             return self._count(room) - 1
-
-
-class WebBus:
-    """Delivers what agents send to the owner into the console's chat rooms."""
-
-    def __init__(self, chat: ChatStore):
-        self.chat = chat
-
-    async def send_owner(self, from_id: str, text: str, ask=None, urgent: bool = False) -> None:
-        if ask is not None:
-            self.chat.append(from_id, from_id, ask.card(), kind="ask", ask_id=ask.id)
-        else:
-            self.chat.append(from_id, from_id, text, kind="notice" if urgent else "msg")
-
-    async def post_group(self, from_id: str, text: str, reply_to: int | None = None) -> None:
-        self.chat.append(TEAM_ROOM, from_id, text)
-
-
-class MultiBus:
-    """Send to every connected channel (web console + Telegram). One failing channel never blocks the others."""
-
-    def __init__(self, *buses):
-        self.buses = [b for b in buses if b is not None]
-
-    async def send_owner(self, from_id, text, ask=None, urgent=False):
-        for b in self.buses:
-            try:
-                await b.send_owner(from_id, text, ask=ask, urgent=urgent)
-            except Exception:  # noqa: BLE001
-                pass
-
-    async def post_group(self, from_id, text, reply_to=None):
-        for b in self.buses:
-            try:
-                await b.post_group(from_id, text, reply_to=reply_to)
-            except Exception:  # noqa: BLE001
-                pass

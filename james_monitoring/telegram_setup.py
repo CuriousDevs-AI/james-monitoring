@@ -65,13 +65,15 @@ class TelegramProbe:
     def _take(self, u) -> None:
         self._buffer = [x for x in self._buffer if x.update_id > u.update_id]
 
-    async def wait_for_owner(self, timeout: float = 300) -> Person | None:
-        """The first private message the bot receives identifies the owner."""
+    async def wait_for_owner(self, timeout: float = 300, code: str = "") -> Person | None:
+        """The owner is whoever sends the bot a private message — with `code`, only a message containing that
+        one-time code counts (so a stranger who finds the bot during setup can't become the owner)."""
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             for u in await self._updates():
                 m = u.message
-                if m and m.chat.type == "private" and m.from_user and not m.from_user.is_bot:
+                if m and m.chat.type == "private" and m.from_user and not m.from_user.is_bot \
+                        and (not code or code in (m.text or "")):
                     self._take(u)
                     fu = m.from_user
                     return Person(fu.id, fu.full_name, fu.username or "")
