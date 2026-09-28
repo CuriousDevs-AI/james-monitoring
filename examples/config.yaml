@@ -8,6 +8,8 @@ owner:
   name: Maria Lopez
   telegram_user_id: 0            # jm init detects it; or DM any team bot /whoami
   extra_user_ids: []             # other humans allowed to command the team (optional)
+  git_name: ""                   # your git identity: every team commit / PR is yours (setup fills it from git config)
+  git_email: ""
 
 llm:                             # the company default; anyone can have their own (see team below)
   provider: anthropic            # claude-code (Claude subscription, `claude` CLI) | codex-cli (ChatGPT subscription,
@@ -52,6 +54,12 @@ permissions:                     # what people may do on their own: green = do i
 
 sync:
   mirror_owner: true             # my messages appear in every channel (console ↔ Telegram ↔ Slack)
+
+github:                          # optional — see docs/GITHUB.md (uses the `gh` CLI, signed in as you)
+  owner: ""                      # your login or org
+  repo: ""                       # owner/name for task issues
+  project: 0                     # GitHub Project number; tasks are mirrored there both ways
+  prs: false                     # code tasks open real PRs; approve = merge
 
 slack:                           # optional — see docs/SLACK.md; the console fills this in
   owner_user_ids: []

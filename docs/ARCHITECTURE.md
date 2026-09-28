@@ -37,6 +37,7 @@ model all come from `config.yaml` and the workspace.
 | `monitor.py` | Deterministic report and checks (overdue, blocked too long, asks past deadline, failures) |
 | `router.py` | Who answers: `@all`, `@name`, `@bot_username`; project rooms default to the lead, All hands to the manager |
 | `gateway.py` | Telegram transport: one bot per member, the manager reads groups, approval buttons |
+| `github.py` | Task board mirrored into a GitHub Project (issues + fields) both ways through the rules, and PRs for code tasks — via `gh`, as the owner |
 | `slack.py` | Slack transport: one app (Socket Mode), everyone posts as themselves, channel ↔ room mapping, approval buttons |
 | `commands.py` | Owner commands, shared by Telegram and `jm chat` |
 | `llm/` | `claude-code` and `codex-cli` (subscriptions, via their CLIs), `anthropic`, `openai` (any OpenAI-compatible API), `fake`. Per person: `team[].llm` |

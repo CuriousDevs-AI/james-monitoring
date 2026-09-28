@@ -9,7 +9,10 @@ Run a team of AI agents the way you'd run a real team. Any founder, any startup,
 - **A manager (James by default, any name you like)** who watches the board, chases blockers and reports to you daily.
 - **You stay in the loop.** Risky things arrive as Approve/Reject cards, and you choose what else needs approval,
   per action and per person. Nothing approves itself.
-- **Everything lives in git:** personas, tasks, memory, deliverables, decisions, reports.
+- **Everything lives in git:** personas, tasks, memory, deliverables, decisions, reports. Every commit is made with
+  **your** git identity, and code tasks can open **real pull requests as you**.
+- **A GitHub Project board, too:** tasks are mirrored as issues on a GitHub Project. Move cards, edit fields or
+  comment on github.com or in the GitHub app, and it comes back through the same rules ([docs/GITHUB.md](docs/GITHUB.md)).
 - **Any model, per person:** a **Claude subscription** (`claude` CLI), a **ChatGPT/Codex subscription** (`codex` CLI),
   the Claude or OpenAI APIs, or a local model through Ollama. Riya can run on Codex while Omar runs on Claude.
 
@@ -55,7 +58,7 @@ jm run          # opens the console in your browser
 | **People** | Drop in all the `.skill` / `SKILL.md` files at once; names and roles fill in. Telegram bots are optional, with live ✓ checks. Edit roles and personas, **pick each person's AI model**, set what they may do on their own, see memory and activity, pause people |
 | **Approvals** | Every permission request and its history |
 | **Reports** | Daily reports, and your open-decisions list (it appears in every report) |
-| **Settings** | Company, default AI model, **permissions**, sync, schedule (report time, work sessions), budget, coding tool, Telegram and **Slack** connections |
+| **Settings** | Company and your git identity, default AI model, **permissions**, sync, schedule (report time, work sessions), budget, coding tool, **GitHub**, Telegram and **Slack** connections |
 
 **Telegram and Slack are optional.** Connect either or both in Settings to run the team from your phone or your
 workspace. Telegram is a group plus one bot per person; Slack is one app where everyone posts under their own name
