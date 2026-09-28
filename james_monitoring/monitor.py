@@ -68,14 +68,18 @@ def build_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -
     all_tasks = tasks.all()
     open_tasks = [t for t in all_tasks if t.is_open]
     rows = team_status_lines(cfg, tasks)
-    counts = {k: sum(1 for r in rows if r[1] == k) for k in ["on track", "at risk", "blocked", "not started"]}
+    workers = {m.name for m in cfg.team if not m.monitor}   # the manager coordinates; he isn't "not started"
+    counts = {k: sum(1 for r in rows if r[1] == k and r[0] in workers)
+              for k in ["on track", "at risk", "blocked", "not started"]}
     stale_cut = d - timedelta(days=cfg.stale_days)
     stale = [t for t in open_tasks if (t.date_field("updated") or d) < stale_cut]
 
     state = ws.state()
     last = state.get("last_report_date")
     since = datetime.fromisoformat(last).date() if last else d - timedelta(days=1)
-    shipped = [t for t in all_tasks if t.status == "done" and (t.date_field("done_on") or d) >= since]
+    already = set(state.get("reported_shipped") or [])       # each shipped task is in exactly one report
+    shipped = [t for t in all_tasks if t.status == "done" and (t.date_field("done_on") or d) >= since
+               and t.id not in already]
     in_review = [t for t in all_tasks if t.status == "review"]
     blocked = [t for t in open_tasks if t.status == "blocked"]
     overdue = [t for t in open_tasks if t.overdue(tz) and t.status != "blocked"]
@@ -113,7 +117,7 @@ def build_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -
     L += ["", "## Shipped since last report"]
     L += [f"- {t.owner}: {t.id} {t.title} — {t.doc.meta.get('done_on')}" for t in shipped] or ["- nothing"]
     L += ["", "## People"]
-    L += [f"- {n}: {st} — {line}" for n, st, line in rows]
+    L += [f"- {n}: {st} — {line}" for n, st, line in rows if n in workers or st != "not started"]
     did = activity(cfg, ws, tasks, d.isoformat())
     L += ["", "## Today's work (from task logs and saved documents)"]
     worked = [(m, did.get(m.id) or []) for m in cfg.team if not m.monitor]
@@ -154,7 +158,13 @@ def write_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -
     text = build_report(cfg, ws, tasks, asks)
     rel = f"reports/{today(cfg.timezone).isoformat()}.md"
     ws.write(rel, text)
-    ws.update_state(lambda s: s.__setitem__("last_report_date", today(cfg.timezone).isoformat()))
+    shipped = [line.split(" ", 3)[2] for line in text.split("## Shipped since last report", 1)[-1].split("##", 1)[0]
+               .splitlines() if line.startswith("- ") and " T-" in line]
+
+    def mark(s):
+        s["last_report_date"] = today(cfg.timezone).isoformat()
+        s["reported_shipped"] = sorted(set(s.get("reported_shipped") or []) | set(shipped))[-2000:]
+    ws.update_state(mark)
     ws.commit(f"report: {today(cfg.timezone).isoformat()}", author=cfg.monitor.name)
     return rel, text
 
@@ -202,6 +212,11 @@ def checks(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -> list
     if (state.get("github") or {}).get("error"):
         alerts.append(Alert("github", f"⚠️ GitHub sync is failing: {state['github']['error']}"))
     for agent, hb in state.get("heartbeat", {}).items():
+        m = cfg.member(agent)
+        c = cfg.llm_for(m) if m else None
+        current = (c.provider + (f"/{c.model}" if c.model else "")) if c else ""
+        if hb.get("model") and current and hb["model"] != current:
+            continue                                    # that error was from a model they no longer use
         if hb.get("error"):
             fails = int(hb.get("fails", 1) or 1)
             alerts.append(Alert(f"err:{agent}:{'incident' if fails >= INCIDENT_AFTER_FAILS else 'warn'}",

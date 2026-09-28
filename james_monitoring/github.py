@@ -72,6 +72,8 @@ class Change:
     task: str
     field: str        # stage | priority | due | owner | project | comment
     value: str
+    source: str = ""  # for stage changes: "stage" (our field) or "status" (GitHub's built-in column)
+    raw: str = ""     # the value as shown on GitHub
 
 
 class GitHubSync:
@@ -173,19 +175,25 @@ class GitHubSync:
             if entry and entry.get("fp") == fp:
                 continue
             vals = self.values(t)
-            if not entry:
+            if not entry or not entry.get("url"):
                 url = self.gh("issue", "create", "--repo", self.g.repo, "--title", f"[{t.id}] {t.title}",
                               "--body-file", "-", input=self.body(t)).strip().splitlines()[-1]
-                item = self.gh.json("project", "item-add", str(self.g.project), "--owner", self.g.owner, "--url", url,
-                                    "--format", "json")
-                entry = {"url": url, "number": int(url.rstrip("/").rsplit("/", 1)[-1]), "item": item["id"],
-                         "closed": False}
-            else:
+                entry = {"url": url, "number": int(url.rstrip("/").rsplit("/", 1)[-1]), "item": "", "closed": False,
+                         "pushed": {}}
+                self._save(t.id, entry)                   # saved at once: a later failure can't duplicate the issue
+            if not entry.get("item"):
+                item = self.gh.json("project", "item-add", str(self.g.project), "--owner", self.g.owner,
+                                    "--url", entry["url"], "--format", "json")
+                entry["item"] = item["id"]
+                self._save(t.id, entry)
+            if entry.get("fp"):
                 self.gh("issue", "edit", str(entry["number"]), "--repo", self.g.repo, "--title", f"[{t.id}] {t.title}",
                         "--body-file", "-", input=self.body(t))
             for name, value in vals.items():
                 if entry.get("pushed", {}).get(name) != value:
                     self._set_field(proj, entry["item"], name, value)
+                    entry.setdefault("pushed", {})[name] = value
+                    self._save(t.id, entry)
             closed = t.status in ("done", "cut")
             if closed != entry.get("closed", False):
                 if closed:
@@ -232,10 +240,11 @@ class GitHubSync:
             pushed = known[tid].get("pushed", {})
             stage = vals.get("stage", pushed.get("stage", ""))
             if stage and stage != pushed.get("stage"):
-                out.append(Change(tid, "stage", FROM_STAGE.get(stage.lower(), "")))
+                out.append(Change(tid, "stage", FROM_STAGE.get(stage.lower(), ""), source="stage"))
             elif vals.get("status") and vals["status"] != pushed.get("status"):
+                # moved on the default board (built-in Status): map it, and remember it came from Status
                 out.append(Change(tid, "stage", {"todo": "todo", "in progress": "doing", "done": "done"}.get(
-                    vals["status"].lower(), "")))
+                    vals["status"].lower(), ""), source="status", raw=vals["status"]))
             for f in ("priority", "owner", "project", "blocker"):
                 if f in vals and vals[f] != pushed.get(f, ""):
                     out.append(Change(tid, f, vals[f]))
@@ -270,6 +279,16 @@ class GitHubSync:
         e = known.get(tid)
         if e:
             e.setdefault("pushed", {})[field] = value
+            self._save(tid, e)
+
+    def restore(self, tid: str, field: str, shown: str) -> None:
+        """A change the rules refused: record what GitHub shows now and force the next push to put the real value
+        back (the fingerprint alone wouldn't notice — the task itself didn't change)."""
+        known = self._state()
+        e = known.get(tid)
+        if e:
+            e.setdefault("pushed", {})[field] = shown
+            e["fp"] = ""
             self._save(tid, e)
 
     def url_of(self, tid: str) -> str:

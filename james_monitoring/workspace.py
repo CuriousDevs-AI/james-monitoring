@@ -43,7 +43,7 @@ def run_git(cwd: Path, *args: str, timeout: float = 60) -> str:
         raise RuntimeError(f"git {' '.join(args)} failed: {r.stderr.strip() or r.stdout.strip()}")
     return r.stdout
 
-GITIGNORE = ".jm/\n.env\n"
+GITIGNORE = ".jm/\n.env\n*.lock\n"
 
 
 class Workspace:
@@ -61,8 +61,17 @@ class Workspace:
         gi = self.root / ".gitignore"
         if not gi.exists():
             gi.write_text(GITIGNORE)
-        elif ".jm/" not in gi.read_text():
-            gi.write_text(gi.read_text().rstrip("\n") + "\n" + GITIGNORE)
+        else:
+            have = gi.read_text().splitlines()
+            missing = [x for x in GITIGNORE.splitlines() if x not in have]
+            if missing:
+                gi.write_text(gi.read_text().rstrip("\n") + "\n" + "\n".join(missing) + "\n")
+        for stray in self.root.glob("team/*/*.lock"):        # left by older versions
+            stray.unlink(missing_ok=True)
+            try:
+                self._git("rm", "-q", "--cached", "--ignore-unmatch", str(stray.relative_to(self.root)))
+            except RuntimeError:
+                pass
         for m in self.cfg.team:
             (self.root / "team" / m.id).mkdir(parents=True, exist_ok=True)
         if not (self.root / ".git").exists():
@@ -102,29 +111,35 @@ class Workspace:
     def charter(self) -> str:
         return self.read("team/charter.md")
 
-    # Memory file: "## Corrections" (from the owner — binding, never trimmed) and "## Notes" (newest kept).
+    # Memory file: "## Corrections" (from the owner — binding, never trimmed), "## Notes" (newest kept), and
+    # anything the owner writes by hand (other headings, paragraphs) — kept verbatim and always in the prompt.
     CORR, NOTES = "## Corrections (binding — never trimmed)", "## Notes"
 
-    def _memory_parts(self, member_id: str) -> tuple[str, list[str], list[str]]:
-        text = self.read(f"team/{member_id}/memory.md")
-        head, corr, notes, cur = [], [], [], None
-        for line in text.splitlines():
+    def _memory_sections(self, member_id: str) -> tuple[list[str], list[str], list[str]]:
+        """(corrections, notes, everything else verbatim) — nothing in the file is ever dropped."""
+        corr, notes, other, cur = [], [], [], None
+        for line in self.read(f"team/{member_id}/memory.md").splitlines():
             if line.startswith("## Corrections"):
                 cur = corr
-            elif line.startswith("## Notes"):
+                continue
+            if line.startswith("## Notes"):
                 cur = notes
-            elif line.startswith("- "):
-                (cur if cur is not None else notes).append(line)
-            elif cur is None and line.strip():
-                head.append(line)
-            elif cur is not None and line.strip() and (cur[-1:] or [None])[0] is not None:
-                cur[-1] += " " + line.strip()           # a wrapped line belongs to the entry above
-        return "\n".join(head) or f"# Memory — {member_id}", corr, notes
+                continue
+            if line.startswith("## ") or line.startswith("# "):
+                cur = None
+            target = other if cur is None else cur
+            if cur is not None and not line.startswith("- ") and cur and line.strip():
+                cur[-1] += "\n" + line                    # a wrapped line belongs to the entry above
+            elif cur is None or line.strip():
+                target.append(line)
+        return corr, notes, other
 
     def memory(self, member_id: str, max_chars: int = 6000) -> str:
-        """What goes in the prompt: every correction, then as many of the newest notes as fit — whole lines."""
-        head, corr, notes = self._memory_parts(member_id)
-        out = [self.CORR, *corr] if corr else []
+        """What goes in the prompt: every correction and everything written by hand, then as many of the newest
+        notes as fit — whole entries only."""
+        corr, notes, other = self._memory_sections(member_id)
+        extra = "\n".join(x for x in other if not x.startswith("# Memory") and "Newest last." not in x).strip()
+        out = ([self.CORR, *corr] if corr else []) + ([extra] if extra else [])
         budget = max_chars - sum(len(x) + 1 for x in out)
         kept: list[str] = []
         for line in reversed(notes):
@@ -137,21 +152,28 @@ class Workspace:
         return "\n".join(out)
 
     def remember(self, member_id: str, note: str, pinned: bool = False) -> None:
+        """Add one entry: the file is only ever *inserted into*, so hand-written parts are never touched."""
         note = " ".join(str(note or "").split())
         if not note:
             return
         rel = f"team/{member_id}/memory.md"
         with path_lock(self.root / rel):
-            head, corr, notes = self._memory_parts(member_id)
-            line = f"- {self._now().date().isoformat()} — {note}"
-            if pinned:
-                if not any(note in c for c in corr):
-                    corr.append(line)
+            lines = self.read(rel).splitlines() or [f"# Memory — {member_id}", "",
+                                                    "Newest last. Corrections from the owner are binding.", ""]
+            head = self.CORR if pinned else self.NOTES
+            prefix = "## Corrections" if pinned else "## Notes"
+            if pinned and any(ln.split(" — ", 1)[-1].strip() == note for ln in lines if ln.startswith("- ")):
+                return                                    # exactly this correction is already pinned
+            entry = f"- {self._now().date().isoformat()} — {note}"
+            idx = next((i for i, ln in enumerate(lines) if ln.startswith(prefix)), None)
+            if idx is None:
+                lines += ["", head, entry]
             else:
-                notes.append(line)
-            text = (f"{head}\n\nNewest last. Corrections from the owner are binding.\n\n"
-                    if "Newest last" not in head else f"{head}\n\n")
-            self.write(rel, text + f"{self.CORR}\n" + "\n".join(corr) + f"\n\n{self.NOTES}\n" + "\n".join(notes) + "\n")
+                end = next((j for j in range(idx + 1, len(lines)) if lines[j].startswith("#")), len(lines))
+                while end > idx + 1 and not lines[end - 1].strip():
+                    end -= 1
+                lines.insert(end, entry)
+            self.write(rel, "\n".join(lines).rstrip("\n") + "\n")
 
     def log(self, member_id: str, line: str) -> None:
         stamp = self._now().strftime("%Y-%m-%d %H:%M")

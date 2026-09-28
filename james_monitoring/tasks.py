@@ -142,7 +142,8 @@ class TaskStore:
     def create(self, *, title: str, owner: str, created_by: str, priority: str = "P1",
                due: str | None = None, project: str = "", goal: str = "", done_means: list[str] | None = None,
                description: str = "", depends_on: list[str] | None = None, reviewer: str | None = None) -> Task:
-        with self._lock:
+        from .fileio import path_lock
+        with self._lock, path_lock(self.dir / ".ids"):     # ids stay unique across processes (jm chat + jm run)
             priority = (priority or "P1").upper()
             if priority not in PRIORITIES:
                 raise TaskError(f"priority must be one of {PRIORITIES}")
@@ -184,6 +185,8 @@ class TaskStore:
             msg = ""
             if status == "cut" and not is_owner:
                 raise TaskError(f"Only {self.owner_id} can cut a task — say why in a log note or ask them.")
+            if t.status in ("done", "cut") and status in ("done", "cut"):
+                raise TaskError(f"{t.id} is already {t.status}.")
             if status == "done" and by not in (reviewer, self.owner_id):
                 status = "review"
                 msg = f"Only {reviewer} can mark done — moved to review instead."
@@ -229,8 +232,8 @@ class TaskStore:
     def add_log(self, task_id: str, by: str, text: str) -> Task:
         with self._lock:
             t = self.get(task_id)
-            t.doc.add_line("Log", f"- {today(self.tz).isoformat()} — {by}: {' '.join(clean_text(text).split())}",
-                           newest_first=True)
+            body = re.sub(r"^\d{4}-\d{2}-\d{2}\s*[—-]\s*", "", " ".join(clean_text(text).split()))   # no double dates
+            t.doc.add_line("Log", f"- {today(self.tz).isoformat()} — {by}: {body}", newest_first=True)
             self.save(t)
             return t
 
@@ -254,8 +257,20 @@ class TaskStore:
     def set_output(self, task_id: str, by: str, text: str) -> Task:
         with self._lock:
             t = self.get(task_id)
-            t.doc.add_line("Output", f"- {today(self.tz).isoformat()} — {by}: {' '.join(clean_text(text).split())}")
+            body = " ".join(clean_text(text).split())
+            if any(line.endswith(f"{by}: {body}") for line in t.doc.sections.get("Output", "").splitlines()):
+                return t                                  # the same output twice is one line
+            t.doc.add_line("Output", f"- {today(self.tz).isoformat()} — {by}: {body}")
             self.save(t)
+            return t
+
+    def clear_due(self, task_id: str, by: str) -> Task:
+        with self._lock:
+            t = self.get(task_id)
+            if t.doc.meta.get("due"):
+                t.doc.meta["due"] = ""
+                t.doc.add_line("Log", f"- {today(self.tz).isoformat()} — {by}: due date removed", newest_first=True)
+                self.save(t)
             return t
 
     def update_fields(self, task_id: str, by: str, **fields) -> Task:

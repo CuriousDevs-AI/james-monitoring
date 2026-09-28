@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -29,7 +30,8 @@ log = logging.getLogger("jm.runtime")
 MAX_READ_ROUNDS = 2
 MAX_FILE_CHARS = 60_000
 READABLE_DIRS = ("docs", "tasks", "reports", "team", "asks", "decisions")
-HISTORY_TURNS = 8                 # own recent exchanges per channel (the room transcript adds everyone else)
+HISTORY_TURNS = 8
+TURN_SECONDS = 420                # model calls in one turn (retries, file reads, repair) stop after this                 # own recent exchanges per channel (the room transcript adds everyone else)
 ROOM_CONTEXT = 16                 # recent messages of the current room shown to the agent
 ELSEWHERE = 4                     # recent messages from each other room the agent is part of
 ELSEWHERE_HOURS = 72
@@ -72,7 +74,9 @@ class Event:
     room: str = ""               # chat room it came from (see chat.py); derived when empty
 
 
-_FILE_BLOCK = re.compile(r"<<<FILE[ \t]+(\S+)[ \t]*>>>[ \t]*\n(.*?)\n?<<<END(?:[ \t]+FILE)?>>>", re.S)
+# A document after the JSON: the path may contain spaces; the end marker must be alone on its line (so a document
+# that merely mentions it isn't cut short).
+_FILE_BLOCK = re.compile(r"^<<<FILE[ \t]+([^\n>]+?)[ \t]*>>>[ \t]*\n(.*?)\n?^<<<END(?:[ \t]+FILE)?>>>[ \t]*$", re.S | re.M)
 _STR_FIELDS = ("title", "owner", "text", "summary", "details", "note", "path", "id", "task", "project", "to",
                "description", "log", "output", "blocked_on", "instructions", "recommendation", "goal", "due",
                "priority", "status", "level", "default", "why")
@@ -99,16 +103,29 @@ def parse_reply(text: str) -> Parsed:
         return ""
     t = _FILE_BLOCK.sub(keep, text or "").strip()
     t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t, flags=re.S).strip()
-    obj = None
+    # Every {"reply"/"actions"} object in the text is a candidate; a model sometimes quotes the format before its
+    # real answer ('Format is {"reply": "..."}. Answer: {...}'), so the answer is the *last* one, and a placeholder
+    # reply like "..." never beats a real one.
     dec = json.JSONDecoder()
-    for i in [0] + [k for k, c in enumerate(t) if c == "{"][:20]:
+    found: list[dict] = []
+    i = 0
+    while i < len(t):
+        k = t.find("{", i)
+        if k < 0:
+            break
         try:
-            cand, _ = dec.raw_decode(t[i:].lstrip())
+            cand, end = dec.raw_decode(t, k)
         except json.JSONDecodeError:
+            i = k + 1
             continue
         if isinstance(cand, dict) and ("reply" in cand or "actions" in cand):
-            obj = cand
-            break
+            found.append(cand)
+            i = end
+        else:
+            i = k + 1
+    real = [c for c in found if str(c.get("reply", "")).strip() not in ("", "...", "…", "<reply>")
+            or c.get("actions")]
+    obj = (real or found)[-1] if found else None
     if obj is None:
         m = re.search(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)', t)
         if m and t.lstrip().startswith("{"):
@@ -215,8 +232,12 @@ class Runtime:
         self._history: dict[str, deque] = defaultdict(lambda: deque(maxlen=HISTORY_TURNS * 2))
         self._bg: set[asyncio.Task] = set()
         self._llms: dict[str, LLM] = {}
+        self._coding: set[str] = set()                    # tasks with a coding run in progress
+        self._gh_lock = asyncio.Lock()
+        self._ask_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         if shared is not None:
             self._locks, self._bg = shared._locks, shared._bg
+            self._coding, self._ask_locks, self._gh_lock = shared._coding, shared._ask_locks, shared._gh_lock
 
     def llm_for(self, m: Member) -> LLM:
         """Each person can run on their own model (Claude, Codex, a local model…); default: the company's."""
@@ -225,6 +246,14 @@ class Runtime:
         if m.id not in self._llms:
             self._llms[m.id] = make_llm(m.llm)
         return self._llms[m.id]
+
+    def model_error(self, member_id: str) -> str:
+        """The last model error for this person — only if it came from the model they use *now*."""
+        hb = (self.ws.state().get("heartbeat") or {}).get(member_id) or {}
+        m = self.cfg.member(member_id)
+        if not hb.get("error") or not m or hb.get("model", self.model_name(m)) != self.model_name(m):
+            return ""
+        return hb["error"]
 
     def model_name(self, m: Member) -> str:
         c = self.cfg.llm_for(m)
@@ -272,17 +301,22 @@ class Runtime:
 
     def _heartbeat(self, member_id: str, error: str = "") -> None:
         """Last contact per person; `fails` counts consecutive model failures (one timeout isn't an incident)."""
+        m = self.cfg.member(member_id)
+        model = self.model_name(m) if m else ""
+
         def fn(s):
             hb = s.setdefault("heartbeat", {})
             prev = hb.get(member_id) or {}
+            same = prev.get("model", model) == model
             hb[member_id] = {"last": now(self.cfg.timezone).isoformat(timespec="minutes"), "error": error,
-                             "fails": (int(prev.get("fails", 0)) + 1) if error else 0}
+                             "model": model, "fails": (int(prev.get("fails", 0)) + 1 if same else 1) if error else 0}
         self.ws.update_state(fn)
 
     # -- messages that arrive while someone can't work (paused, over budget) -----------
     def _enqueue(self, m: Member, ev: Event, why: str) -> None:
         item = {"member": m.id, "why": why, "event": {k: getattr(ev, k) for k in
-                                                      ("source", "text", "sender", "hop", "task", "project", "room")}}
+                                                      ("source", "text", "sender", "hop", "task", "project", "room",
+                                                       "meta")}}
         self.ws.update_state(lambda s: s.setdefault("queue", []).append(item))
 
     def queued(self) -> list[dict]:
@@ -307,11 +341,17 @@ class Runtime:
 
     async def _answer_queued(self, it: dict) -> None:
         ev = Event(**it["event"])
+        ev.meta = {**(ev.meta or {}), "queued": True}
         m = self.cfg.member(it["member"])
+        if not m:
+            return
+        if ev.source == "inbox":                          # a teammate's question: the answer goes back to them
+            await self._deliver(m.id, ev)
+            return
         reply = await self.dispatch(m.id, ev)
         room = self.room_of(m, ev)
         post = getattr(self.bus, "post_room", None)
-        if ev.source == "inbox":
+        if ev.source == "system" and not post:
             return
         if post:
             await post(room, m.id, f"(queued while I was {it.get('why', 'away')}) {reply}")
@@ -357,11 +397,12 @@ class Runtime:
         rel = (rel or "").strip().lstrip("/")
         if not rel.startswith("docs/"):
             rel = "docs/" + rel
-        p = (self.ws.root / rel).resolve()
-        docs = (self.ws.root / "docs").resolve()
+        root = self.ws.root.resolve()                     # /tmp → /private/tmp etc.: compare resolved paths
+        p = (root / rel).resolve()
+        docs = (root / "docs").resolve()
         if docs not in p.parents:
             raise ValueError("files must stay inside docs/")
-        return p, str(p.relative_to(self.ws.root))
+        return p, str(p.relative_to(root))
 
     def _resolve_readable(self, rel: str):
         """The file an agent may read, or None. Checked on the *resolved* path: `docs/../.git/config` is refused,
@@ -462,7 +503,8 @@ class Runtime:
             parts.append("## Your open tasks\n" + ("\n".join(t.summary() for t in open_) or "- none"))
             if done:
                 parts.append("## Your recently closed tasks\n" + "\n".join(t.line(tz) for t in done))
-            waiting = [t for t in self.tasks.all() if t.is_open and m.id in t.blocked_on.lower()]
+            waiting = [t for t in self.tasks.all() if t.is_open and t.status == "blocked"
+                       and any(x.id == m.id for x in self.people_in(t.blocked_on))]
             if waiting:
                 parts.append("## Others blocked on you\n" + "\n".join(t.line(tz) for t in waiting))
             mine_asks = [a for a in self.asks.all() if a.requester == m.id][-5:]
@@ -557,25 +599,28 @@ class Runtime:
         if not m:
             return f"Unknown team member `{member_id}`."
         cap = self.cfg.daily_tokens_per_agent
-        if ev.source != "system" and not ev.meta.get("queued"):
-            why = "paused" if self.paused(m.id) else "over today's budget" if cap and self._usage_today(m.id) >= cap else ""
-            if why:
-                self._enqueue(m, ev, why)                 # never lost: answered when they can work again
-                return ("⏸ I'm paused — your message is queued and I'll answer it when you /resume me."
-                        if why == "paused" else
-                        f"💸 I've used today's budget ({cap:,} tokens) — your message is queued; I'll answer when "
-                        f"the budget resets or you raise it.")
-        elif cap and self._usage_today(m.id) >= cap:
-            return f"💸 I've used today's budget ({cap:,} tokens)."
+        why = "paused" if self.paused(m.id) else "over today's budget" if cap and self._usage_today(m.id) >= cap else ""
+        if why:
+            # Paused means paused — owner messages, teammates' questions and system follow-ups all wait in the
+            # queue and are handled on /resume (or when the budget resets). Nothing is lost, nothing runs.
+            self._enqueue(m, ev, why)
+            return ("⏸ I'm paused — your message is queued and I'll answer it when you /resume me."
+                    if why == "paused" else
+                    f"💸 I've used today's budget ({cap:,} tokens) — your message is queued; I'll answer when "
+                    f"the budget resets or you raise it.")
 
         async with self._locks[m.id]:
+            if cap and self._usage_today(m.id) >= cap:    # re-checked: others may have spent it while we waited
+                self._enqueue(m, ev, "over today's budget")
+                return f"💸 I've used today's budget ({cap:,} tokens) — your message is queued."
             return await self._turn(m, ev)
 
     async def _turn(self, m: Member, ev: Event) -> str:
         cap = self.cfg.daily_tokens_per_agent
         # Owner messages that mention a task are feedback on that task — captured in git, not lost in chat.
         is_question = ev.text.rstrip().endswith("?")
-        if ev.sender == self.owner_id and ev.source in ("dm", "group") and not is_question:
+        if ev.sender == self.owner_id and ev.source in ("dm", "group") and not is_question \
+                and ev.meta.get("primary", True):
             for tid in set(TASK_ID.findall(ev.text)):
                 try:
                     self.tasks.add_feedback(tid, self.cfg.owner_name, ev.text)
@@ -620,9 +665,13 @@ class Runtime:
         messages = [*hist, {"role": "user", "content": user_msg}]
 
         last_error = ""
+        deadline = time.monotonic() + TURN_SECONDS           # one turn never holds this person's lock for long
 
         async def call(msgs):
             nonlocal last_error
+            if time.monotonic() > deadline:
+                last_error = f"the turn took longer than {TURN_SECONDS // 60} minutes"
+                return None
             try:
                 res = await asyncio.to_thread(llm.complete, system, msgs)
             except LLMError as e:
@@ -774,9 +823,13 @@ class Runtime:
     async def _do(self, m: Member, a: dict, ev: Event) -> str:
         t = a["type"]
         if t == "create_task":
-            owner = (a.get("owner") or m.id).lower()
-            if owner != self.owner_id and not self.cfg.member(owner):
-                raise ValueError(f"unknown owner `{owner}`")
+            owner = (a.get("owner") or m.id).lower().lstrip("@")
+            if owner != self.owner_id:
+                om = self.cfg.member(owner) or next((x for x in self.cfg.team if x.name.lower() == owner or
+                                                     x.name.lower().split()[0] == owner.split()[0]), None)
+                if not om:
+                    raise ValueError(f"unknown owner `{owner}` (team: {', '.join(x.id for x in self.cfg.team)})")
+                owner = om.id                              # always the id: "Marcus Chen" → marcus
             if a.get("project") and a["project"] not in self.cfg.projects:
                 raise ValueError(f"unknown project `{a['project']}` (projects: {', '.join(self.cfg.projects) or 'none'})")
             created_by = self.owner_id if (ev.sender == self.owner_id and ev.source in ("dm", "group")) else m.id
@@ -822,9 +875,9 @@ class Runtime:
                                                     f"Output: {a.get('output') or 'see task file'}\n"
                                                     f"Accept with /accept {task.id} or reply with feedback.")
                 if task.status == "blocked":
-                    await self.on_blocked(task, m.id)
+                    await self.on_blocked(task, m.id, hop=ev.hop + 1)
                 if task.status == "done":
-                    await self.on_done(task)
+                    await self.on_done(task, hop=ev.hop + 1)
             return " · ".join(msgs)
         if t == "ask_permission":
             summary = a.get("summary", "").strip()
@@ -845,10 +898,13 @@ class Runtime:
             note = a.get("note", "")
             if not note.strip():
                 raise ValueError("remember needs a note")
-            pinned = str(a.get("correction", "")).lower() in ("true", "1", "yes") or \
-                (ev.sender == self.owner_id and ev.source in ("dm", "group") and bool(a.get("correction", True))
-                 and bool(re.search(r"\b(don'?t|do not|never|always|instead|wrong|not like|stop|use)\b",
-                                    ev.text, re.I)))
+            # Only the founder's own words can become a pinned, binding correction — never a teammate's message,
+            # a document or a GitHub comment (that would let injected text make itself permanent).
+            from_owner = ev.sender == self.owner_id and ev.source in ("dm", "group")
+            flag = str(a.get("correction", "")).strip().lower()
+            pinned = from_owner and (flag in ("true", "1", "yes") or (
+                flag not in ("false", "0", "no") and
+                bool(re.search(r"\b(don'?t|do not|never|always|instead|wrong|not like|stop|use)\b", ev.text, re.I))))
             self.ws.remember(m.id, note, pinned=pinned)
             return ""
         if t == "message_agent":
@@ -883,6 +939,9 @@ class Runtime:
                 await post(PROJECT_ROOM + pid, m.id, str(a.get("text", "")))
             return ""
         if t == "write_file":
+            if not str(a.get("content", "")).strip():
+                raise ValueError("write_file had no content — put the document in a <<<FILE path>>> … <<<END>>> "
+                                 "block after the JSON (the existing file was left as it was)")
             content = str(a.get("content", ""))
             if len(content) > MAX_FILE_CHARS:
                 raise ValueError(f"file too large (max {MAX_FILE_CHARS} chars)")
@@ -899,6 +958,9 @@ class Runtime:
             tid, pid = a.get("task", ""), a.get("project", "")
             self.executor.project(pid)            # validate now, run in background
             self.tasks.get(tid)
+            if tid in self._coding:
+                raise ValueError(f"a coding run for {tid} is already going — wait for it")
+            self._coding.add(tid)
             self._spawn(self._run_code(m, tid, pid, a.get("instructions", "")))
             return f"🛠 coding started on branch {self.executor.branch_for(tid)} ({pid})"
         raise ValueError(f"unknown action `{t}`")
@@ -910,30 +972,35 @@ class Runtime:
         return [x for x in self.cfg.team
                 if re.search(rf"\b({re.escape(x.id)}|{re.escape(x.name.lower())})\b", low)]
 
-    async def on_blocked(self, task, by: str) -> None:
-        """Whoever a task is blocked on hears about it at once — and their answer comes back (see _deliver)."""
+    async def on_blocked(self, task, by: str, hop: int = 0) -> None:
+        """Whoever a task is blocked on hears about it at once — and their answer comes back (see _deliver).
+        Once per blocker per task per day, and within the hop limit, so two agents can't ping-pong forever."""
         if self.owner_id in task.blocked_on.lower() or self.cfg.owner_name.lower() in task.blocked_on.lower():
             await self.bus.send_owner(task.owner if self.cfg.member(task.owner) else self.cfg.monitor.id,
                                       f"🚧 {task.id} is blocked on you: {task.blocked_on}")
         for x in self.people_in(task.blocked_on):
-            if x.id == task.owner:
+            if x.id == task.owner or x.id == self.owner_id:
                 continue
+            key, day = f"{task.id}:{x.id}", today(self.cfg.timezone).isoformat()
+            if (self.ws.state().get("blocked_told") or {}).get(key) == day:
+                continue
+            self.ws.update_state(lambda s: s.setdefault("blocked_told", {}).__setitem__(key, day))
             owner = self._who(task.owner)
             self._spawn(self._deliver(x.id, Event(
                 "inbox", f"{owner} is blocked on you for {task.id} ({task.title}): {task.blocked_on}. "
                          f"Unblock them now — give them what they need (your reply goes straight to them), or "
                          f"say when you will.", sender=task.owner if self.cfg.member(task.owner) else by,
-                task=task.id, project=task.project,
+                task=task.id, project=task.project, hop=hop,
                 room=PROJECT_ROOM + task.project if task.project in self.cfg.projects else BACKCHANNEL,
                 meta={"reply_to": task.owner if self.cfg.member(task.owner) else ""})))
 
-    async def on_done(self, task) -> None:
+    async def on_done(self, task, hop: int = 0) -> None:
         """A task is done: tasks that waited on it go back to todo and their owners are told."""
         for t in self.tasks.unblock_dependents(task.id, by=self.owner_id):
             if self.cfg.member(t.owner):
                 self._spawn(self._deliver(t.owner, Event(
                     "inbox", f"{task.id} ({task.title}) is done, so {t.id} is unblocked and back in todo. "
-                             f"Pick it up.", sender=self.cfg.monitor.id, task=t.id, project=t.project)))
+                             f"Pick it up.", sender=self.cfg.monitor.id, task=t.id, project=t.project, hop=hop)))
 
     async def _hold_task_for(self, ask: Ask) -> None:
         """While a request waits, its task shows as blocked on the owner (and goes back when decided)."""
@@ -962,8 +1029,11 @@ class Runtime:
             return
         if t.status == "blocked" and ask.id in t.blocked_on:
             prev = (ask.doc.meta.get("payload") or {}).get("prev_status") or "todo"
-            self.tasks.set_status(tid, prev if prev in ("todo", "doing", "review") else "todo", by=self.owner_id,
-                                  note=f"{ask.id} {ask.status}")
+            prev = prev if prev in ("todo", "doing", "review") else "todo"
+            try:                                          # back under the owner's own rules (WIP ≤ 2, Done means)
+                self.tasks.set_status(tid, prev, by=t.owner, note=f"{ask.id} {ask.status}")
+            except TaskError:
+                self.tasks.set_status(tid, "todo", by=self.owner_id, note=f"{ask.id} {ask.status}")
 
     async def request_changes(self, task_id: str, text: str, by: str | None = None) -> str:
         """The owner sends reviewed work back: feedback saved (task + binding memory), task back to doing,
@@ -1018,6 +1088,12 @@ class Runtime:
             self._heartbeat(to, error=str(e)[:200])
 
     async def _run_code(self, m: Member, task_id: str, project_id: str, instructions: str) -> None:
+        try:
+            await self._run_code_inner(m, task_id, project_id, instructions)
+        finally:
+            self._coding.discard(task_id)
+
+    async def _run_code_inner(self, m: Member, task_id: str, project_id: str, instructions: str) -> None:
         task = self.tasks.get(task_id)
         prompt = (f"You are working on task {task.id}: {task.title}\n"
                   f"Goal: {task.doc.sections.get('Goal', '')}\n"
@@ -1028,13 +1104,13 @@ class Runtime:
             r = await self.executor.run(project_id=project_id, task_id=task_id, prompt=prompt)
         except ExecutorError as e:
             self.tasks.add_log(task_id, m.id, f"coding run failed: {e}")
-            self.ws.commit(f"{task_id}: coding run failed", author=m.name)
+            await asyncio.to_thread(self.ws.commit, f"{task_id}: coding run failed", m.name)
             await self.bus.send_owner(m.id, f"⚠️ Coding run for {task_id} failed: {e}")
             return
         self.tasks.set_output(task_id, m.id, f"branch {r.branch} @ {r.commit} ({project_id})")
         if r.diffstat == "(no changes)":
             self.tasks.add_log(task_id, m.id, "coding run produced no changes")
-            self.ws.commit(f"{task_id}: coding run, no changes", author=m.name)
+            await asyncio.to_thread(self.ws.commit, f"{task_id}: coding run, no changes", m.name)
             await self.bus.send_owner(m.id, f"ℹ️ Coding run for {task_id} made no changes.\n{r.output_tail[-600:]}")
             return
         pr = ""
@@ -1051,12 +1127,19 @@ class Runtime:
                                level="red", task=task_id, kind="merge",
                                payload={"project": project_id, "branch": r.branch, "pr": pr})
         self.tasks.set_status(task_id, "review", by=m.id, note=f"code ready on {r.branch}")
-        self.ws.commit(f"{task_id}: code ready on {r.branch}", author=m.name)
+        await asyncio.to_thread(self.ws.commit, f"{task_id}: code ready on {r.branch}", m.name)
         await self.bus.send_owner(m.id, ask.summary, ask=ask, urgent=True)
 
     # -- decisions ----------------------------------------------------------------
     async def decide_ask(self, ask_id: str, decision: str, by: str, note: str = "", via: str = "") -> str:
+        """One decision per request, even when Approve is tapped twice or in two channels at once."""
+        async with self._ask_locks[ask_id.upper()]:
+            return await self._decide_ask(ask_id, decision, by, note, via)
+
+    async def _decide_ask(self, ask_id: str, decision: str, by: str, note: str = "", via: str = "") -> str:
         pre = self.asks.get(ask_id)
+        if pre.status != "pending":
+            raise AskError(f"{pre.id} is already {pre.status}")
         merged = ""
         if pre.kind == "merge" and decision == "approved" and pre.status == "pending":
             # Merge first; only a merge that worked makes the request "approved". A failed merge is rolled back
@@ -1073,8 +1156,9 @@ class Runtime:
             merged = f" — merged {p['branch']} into {p['project']} ({sha})"
             if pre.doc.meta.get("task"):
                 try:
-                    self.tasks.set_status(pre.doc.meta["task"], "done", by=self.owner_id,
-                                          note=f"merged {p['branch']} @ {sha}")
+                    done, _ = self.tasks.set_status(pre.doc.meta["task"], "done", by=self.owner_id,
+                                                    note=f"merged {p['branch']} @ {sha}")
+                    await self.on_done(done)               # whatever waited on it is unblocked
                 except TaskError:
                     pass
         ask = self.asks.decide(ask_id, decision, by=by, note=note)
@@ -1100,7 +1184,7 @@ class Runtime:
                     result += f" — done{': ' + done if done else ''}"
                 except (TaskError, AskError, ExecutorError, ValueError, KeyError) as e:
                     result += f" — but it failed: {e}"
-        self.ws.commit(f"{ask.id}: {decision} by {by}", author=self.cfg.owner_name)
+        await asyncio.to_thread(self.ws.commit, f"{ask.id}: {decision} by {by}", self.cfg.owner_name)
         decided = getattr(self.bus, "ask_decided", None)
         if decided:
             await decided(ask, f"{result} by {by}", via)
@@ -1207,6 +1291,8 @@ class Runtime:
 
     def cmd_cut(self, args: str) -> str:
         parts = args.strip().split(maxsplit=1)
+        if not parts:
+            raise ValueError("usage: /cut T-001 [reason]")
         task, _ = self.tasks.set_status(parts[0], "cut", by=self.owner_id, note=parts[1] if len(parts) > 1 else "")
         self.ws.commit(f"{task.id} cut", author=self.cfg.owner_name)
         return f"✂️ {task.id} cut"
@@ -1241,6 +1327,13 @@ class Runtime:
         from .github import GitHubError
         if not self.cfg.github.enabled:
             return {"pulled": 0, "pushed": 0}
+        if self._gh_lock.locked():                          # one sync at a time (scheduler + "Sync now")
+            return {"pulled": 0, "pushed": 0, "busy": True}
+        async with self._gh_lock:
+            return await self._sync_github()
+
+    async def _sync_github(self) -> dict:
+        from .github import GitHubError
         try:
             changes = await asyncio.to_thread(self.github.pull)
             applied = []
@@ -1269,8 +1362,9 @@ class Runtime:
             if c.field == "comment":
                 return await self.feedback(t.id, c.value)
             if c.field == "stage":
-                if c.value == t.status:
-                    note = ""
+                if c.value == t.status or (c.source == "status" and c.value == "doing"
+                                           and t.status in ("doing", "blocked", "review")):
+                    note = ""                              # "In Progress" covers doing/blocked/review
                 elif c.value == "done":
                     note = await self.accept(t.id, "accepted on GitHub")
                 elif c.value == "cut":
@@ -1287,7 +1381,10 @@ class Runtime:
                 else:
                     self.tasks.set_status(t.id, c.value, by=self.owner_id, note="moved on GitHub")
                     note = f"🔄 {t.id} → {c.value}"
-                gh.mark_pulled(t.id, "stage", STAGES.get(c.value, ""))
+                if c.source == "status":
+                    gh.mark_pulled(t.id, "status", c.raw)       # Stage still shows the old value: the next push fixes it
+                else:
+                    gh.mark_pulled(t.id, "stage", STAGES.get(c.value, ""))
                 return note
             if c.field == "owner":
                 m = self.cfg.member(c.value.strip()) or next(
@@ -1308,7 +1405,8 @@ class Runtime:
             gh.mark_pulled(t.id, c.field, c.value)
             return f"{t.id} {c.field} → {c.value}"
         except (TaskError, ValueError) as e:
-            gh.mark_pulled(t.id, c.field, c.value)       # don't retry forever; the next push restores the real value
+            shown = c.raw if c.source == "status" else (STAGES.get(c.value, c.value) if c.field == "stage" else c.value)
+            gh.restore(t.id, "status" if c.source == "status" else c.field, shown)   # next push puts it back
             self.ws.log(self.cfg.monitor.id, f"GitHub change refused on {t.id} ({c.field}={c.value}): {e}")
             return f"⚠️ {t.id}: {e}"
 
@@ -1332,7 +1430,7 @@ class Runtime:
             await asyncio.to_thread(self.backup_runtime)
         except Exception:  # noqa: BLE001 - a failed backup must not stop the report
             log.exception("runtime backup failed")
-        rel, text = write_report(self.cfg, self.ws, self.tasks, self.asks)
+        rel, text = await asyncio.to_thread(write_report, self.cfg, self.ws, self.tasks, self.asks)
         await self.bus.post_group(self.cfg.monitor.id, text)
         head = text.split("## Headline", 1)[-1].strip().split("\n", 1)[0] if "## Headline" in text else ""
         await self.bus.send_owner(self.cfg.monitor.id, f"📊 Today's report is in All hands ({rel}).\n{head}")

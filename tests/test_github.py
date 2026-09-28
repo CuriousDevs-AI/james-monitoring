@@ -105,3 +105,49 @@ async def test_code_changes_open_a_pr_as_the_owner_and_approval_merges_it(tmp_pa
     rt.llm.push({"reply": "Merged.", "actions": []})
     res = await rt.decide_ask(ask.id, "approved", by="Pankaj")
     assert "PR #1" in res and gh()["prs"][pr]["state"] == "merged" and rt.tasks.get(t.id).status == "done"
+
+
+
+async def test_a_failure_halfway_never_duplicates_the_issue(tmp_path, monkeypatch):
+    gh = fake_gh(tmp_path, monkeypatch)
+    rt = runtime(tmp_path)
+    rt.tasks.create(title="Pricing", owner="sofia", created_by="pankaj")
+    real = rt.github.gh.json
+    calls = {"n": 0}
+
+    def flaky(*args, **kw):
+        if args[:2] == ("project", "item-add") and calls["n"] == 0:
+            calls["n"] += 1
+            from james_monitoring.github import GitHubError
+            raise GitHubError("boom")
+        return real(*args, **kw)
+    rt.github.gh.json = flaky
+    assert "error" in await rt.sync_github()
+    await rt.sync_github()
+    assert len(gh()["issues"]) == 1 and len(gh()["items"]) == 1
+
+
+async def test_moving_a_card_in_the_status_column_sticks(tmp_path, monkeypatch):
+    gh = fake_gh(tmp_path, monkeypatch)
+    rt = runtime(tmp_path)
+    t = rt.tasks.create(title="Pricing", owner="sofia", created_by="pankaj", done_means=["x"])
+    await rt.sync_github()
+    s = gh()
+    s["items"]["PVTI_1"]["status"] = "In Progress"            # dragged on the default board
+    json.dump(s, open(tmp_path / "gh.json", "w"))
+    await rt.sync_github()
+    assert rt.tasks.get(t.id).status == "doing" and gh()["items"]["PVTI_1"]["stage"] == "Doing"
+    await rt.sync_github()
+    assert rt.tasks.get(t.id).status == "doing"               # not moved back
+
+
+async def test_a_refused_change_is_put_back_on_the_board(tmp_path, monkeypatch):
+    gh = fake_gh(tmp_path, monkeypatch)
+    rt = runtime(tmp_path)
+    rt.tasks.create(title="Pricing", owner="sofia", created_by="pankaj")
+    await rt.sync_github()
+    s = gh()
+    s["items"]["PVTI_1"]["owner"] = "Nobody Real"
+    json.dump(s, open(tmp_path / "gh.json", "w"))
+    await rt.sync_github()
+    assert gh()["items"]["PVTI_1"]["owner"] == "Sofia"

@@ -3,6 +3,7 @@ add and remove people."""
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 import uuid
 from pathlib import Path
@@ -137,7 +138,13 @@ class TeamAdmin:
             raw = self.raw()
             mid = slug(name)
             taken = {str(m.get("id")).lower() for m in raw.get("team", [])}
-            if mid in taken or mid == "all":
+            from .config import RESERVED_IDS
+            owner_key = re.sub(r"[^a-z0-9]+", "_", str((raw.get("owner") or {}).get("name", "")).lower()).strip("_")
+            if mid in RESERVED_IDS:
+                raise ValueError(f"“{name}” is a reserved word here ({', '.join(RESERVED_IDS)}) — use another name.")
+            if mid == owner_key:
+                raise ValueError(f"“{name}” is your own name — give your teammate a different one.")
+            if mid in taken:
                 raise ValueError(f"'{mid}' is already on the team — use a different name.")
             member = {"id": mid, "name": name, "role": role, "bot_token_env": f"TG_TOKEN_{mid.upper()}"}
             projects = [p.strip() for p in (projects or []) if p.strip()]

@@ -1,6 +1,8 @@
 """Owner commands, shared by Telegram and the local CLI."""
 from __future__ import annotations
 
+import asyncio
+
 from .runtime import Event, Runtime
 
 HELP = [
@@ -47,7 +49,7 @@ async def run_command(rt: Runtime, cmd: str, args: str, member_id: str, private:
     if cmd == "board":
         return rt.tasks.board()
     if cmd == "assign":
-        text, who = rt.cmd_assign(args)
+        text, who = await asyncio.to_thread(rt.cmd_assign, args)      # git commit off the event loop
         coro = ack_assignment(rt, who, text)
         if background:
             rt._spawn(coro)
@@ -61,7 +63,7 @@ async def run_command(rt: Runtime, cmd: str, args: str, member_id: str, private:
     if cmd in ("changes", "rework"):
         return await rt.cmd_changes(args)
     if cmd == "cut":
-        return rt.cmd_cut(args)
+        return await asyncio.to_thread(rt.cmd_cut, args)
     if cmd == "asks":
         return rt.cmd_asks()
     if cmd in ("approve", "reject"):

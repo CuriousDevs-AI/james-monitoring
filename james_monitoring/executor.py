@@ -78,12 +78,13 @@ class Executor:
         branch = self.branch_for(task_id)
         wt = self._worktree(p, task_id)
         if not wt.exists():
-            wt.parent.mkdir(parents=True, exist_ok=True)
-            existing = _git(repo, "branch", "--list", branch)
-            if existing:
-                _git(repo, "worktree", "add", str(wt), branch)
-            else:
-                _git(repo, "worktree", "add", "-b", branch, str(wt), p.main_branch)
+            def make_worktree():
+                wt.parent.mkdir(parents=True, exist_ok=True)
+                if _git(repo, "branch", "--list", branch):
+                    _git(repo, "worktree", "add", str(wt), branch)
+                else:
+                    _git(repo, "worktree", "add", "-b", branch, str(wt), p.main_branch)
+            await asyncio.to_thread(make_worktree)          # git never blocks the team's event loop
         cmd = [c.replace("{prompt}", prompt) for c in self.cfg.executor_command]
         if not any("{prompt}" in c for c in self.cfg.executor_command):
             cmd.append(prompt)
@@ -102,17 +103,18 @@ class Executor:
             await proc.wait()
             raise ExecutorError(f"coding agent timed out after {self.cfg.executor_timeout_minutes} min")
         text = (out or b"").decode(errors="replace")
-        _git(wt, "add", "-A")
-        commit = ""
-        if _git(wt, "status", "--porcelain"):
-            name, email = self.cfg.git_author
-            _git(wt, "-c", f"user.name={name}", "-c", f"user.email={email}", "-c", "commit.gpgsign=false",
-                 "commit", "-q", "--no-verify", "-m", f"{task_id}: {self._title(task_id)}")
-        try:
-            commit = _git(wt, "rev-parse", "--short", "HEAD")
-            diffstat = _git(repo, "diff", "--stat", f"{p.main_branch}...{branch}")
-        except ExecutorError:
-            diffstat = ""
+
+        def commit_changes():
+            _git(wt, "add", "-A")
+            if _git(wt, "status", "--porcelain"):
+                name, email = self.cfg.git_author
+                _git(wt, "-c", f"user.name={name}", "-c", f"user.email={email}", "-c", "commit.gpgsign=false",
+                     "commit", "-q", "--no-verify", "-m", f"{task_id}: {self._title(task_id)}")
+            try:
+                return _git(wt, "rev-parse", "--short", "HEAD"), _git(repo, "diff", "--stat", f"{p.main_branch}...{branch}")
+            except ExecutorError:
+                return "", ""
+        commit, diffstat = await asyncio.to_thread(commit_changes)
         return RunResult(ok=proc.returncode == 0 and bool(diffstat), branch=branch, worktree=str(wt),
                          commit=commit, diffstat=diffstat or "(no changes)", output_tail=text[-1500:])
 
@@ -176,6 +178,6 @@ class Executor:
         if p.push:
             try:
                 _git(repo, "push", "-q")
-            except ExecutorError as e:
-                raise ExecutorError(f"merged locally ({sha}) but the push failed: {e}") from None
+            except ExecutorError as e:                     # merged is merged: say so, and that the push failed
+                return f"{sha}; ⚠️ not pushed: {str(e)[:150]}"
         return sha

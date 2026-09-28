@@ -105,7 +105,8 @@ class AskStore:
     def create(self, *, requester: str, summary: str, details: str = "", level: str = "red",
                task: str = "", default: str = "wait", hours: float | None = None, kind: str = "general",
                payload: dict | None = None, recommendation: str = "") -> Ask:
-        with self._lock:
+        from .fileio import path_lock
+        with self._lock, path_lock(self.dir / ".ids"):
             level = level if level in LEVELS else "red"
             default = default if default in DEFAULTS else "wait"
             if level == "red":

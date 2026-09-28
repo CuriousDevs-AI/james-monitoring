@@ -49,8 +49,11 @@ def path_lock(path: Path | str) -> Iterator[None]:
         fh = None
         try:
             if depth == 0 and fcntl is not None:
-                lock_file = Path(key + ".lock") if not Path(key).is_dir() else Path(key) / ".jm-lock"
-                lock_file.parent.mkdir(parents=True, exist_ok=True)
+                # Lock files live in one private temp folder (never next to the file: they'd end up in git).
+                import hashlib
+                lock_dir = Path(tempfile.gettempdir()) / f"jm-locks-{os.getuid() if hasattr(os, 'getuid') else 0}"
+                lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                lock_file = lock_dir / (hashlib.sha1(key.encode()).hexdigest() + ".lock")
                 fh = open(lock_file, "a")
                 fcntl.flock(fh, fcntl.LOCK_EX)
             yield
