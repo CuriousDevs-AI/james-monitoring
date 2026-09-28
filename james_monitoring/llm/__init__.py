@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -55,6 +57,18 @@ class LLM(Protocol):
 
 class LLMError(Exception):
     pass
+
+
+_TRANSIENT = re.compile(r"\b(429|500|502|503|504|529)\b|rate.?limit|overloaded|too many requests|timed? ?out|timeout|"
+                        r"temporar|try again|connection (reset|refused|aborted|error)|network|ECONNRESET|"
+                        r"service unavailable|bad gateway|internal server error|capacity", re.I)
+_PERMANENT = re.compile(r"not logged in|log ?in|auth|api key|unauthori[sz]ed|forbidden|401|403|not found|"
+                        r"invalid model|no such model|quota|billing|credit|insufficient", re.I)
+
+
+def is_transient(error: str) -> bool:
+    """A failure worth retrying in a few seconds (rate limit, overload, network) — not a login or a bad model."""
+    return bool(_TRANSIENT.search(error or "")) and not _PERMANENT.search(error or "")
 
 
 def make_llm(cfg: LLMConfig) -> LLM:

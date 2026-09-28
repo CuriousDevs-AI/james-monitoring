@@ -22,9 +22,16 @@ def mentions(text: str, cfg: Config, usernames: dict[str, str] | None = None) ->
     for tok in _MENTION.findall(text):
         t = tok.lower()
         if t in ALL_WORDS:
-            return True, [m.id for m in cfg.team]
+            return True, [m.id for m in cfg.workers]
         mid = by_username.get(t)
         m = cfg.member(mid) if mid else cfg.member(t)
+        if m and m.assistant:                          # the personal assistant is only reached in its own chat
+            continue
+        if not m and t in cfg.departments:             # @engineering → everyone in that department
+            for x in cfg.workers:
+                if x.department == t and x.id not in ids:
+                    ids.append(x.id)
+            continue
         if m and m.id not in ids:
             ids.append(m.id)
     return False, ids

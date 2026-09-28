@@ -79,7 +79,8 @@ class Task:
         fb = "\n".join(self.doc.sections.get("Feedback", "").strip().splitlines()[-3:])      # the newest
         parts = [f"{self.id} | {self.title} | owner={m.get('owner')} | {m.get('priority')} | status={m.get('status')}"
                  f" | due={m.get('due') or '-'} | project={m.get('project') or '-'}"
-                 + (f" | blocked_on={self.blocked_on}" if self.blocked_on else "")]
+                 + (f" | blocked_on={self.blocked_on}" if self.blocked_on else "")
+                 + (f" | depends_on={','.join(map(str, m['depends_on']))}" if m.get("depends_on") else "")]
         if dm:
             parts.append(f"  done means: {dm.replace(chr(10), ' ')}")
         if log:
@@ -274,12 +275,24 @@ class TaskStore:
             return t
 
     def update_fields(self, task_id: str, by: str, **fields) -> Task:
-        allowed = {"priority", "due", "title", "project", "owner", "goal"}
+        allowed = {"priority", "due", "title", "project", "owner", "goal", "reviewer", "depends_on"}
         with self._lock:
             t = self.get(task_id)
             changes = []
             for k, v in fields.items():
-                if k not in allowed or v in (None, ""):
+                if k not in allowed or v is None or (v == "" and k != "depends_on"):
+                    continue
+                if k == "depends_on":
+                    ids = v if isinstance(v, list) else re.split(r"[\s,]+", str(v))
+                    ids = sorted({str(x).strip().upper() for x in ids if str(x).strip()})
+                    known = {x.id for x in self.all()}
+                    bad = [x for x in ids if x not in known or x == t.id]
+                    if bad:
+                        raise TaskError(f"{t.id} can't depend on {', '.join(bad)} (no such task, or itself).")
+                    if ids == sorted(str(x) for x in (t.doc.meta.get("depends_on") or [])):
+                        continue
+                    t.doc.meta[k] = ids
+                    changes.append(f"depends_on={','.join(ids) or '-'}")
                     continue
                 if k == "priority":
                     v = str(v).upper()
@@ -307,8 +320,8 @@ class TaskStore:
             return t
 
     # -- views ---------------------------------------------------------------
-    def board(self) -> str:
-        tasks = self.all()
+    def board(self, skip_owners: set | None = None) -> str:
+        tasks = [t for t in self.all() if t.owner not in (skip_owners or set())]
         order = ["blocked", "doing", "review", "todo"]
         out = []
         for st in order:

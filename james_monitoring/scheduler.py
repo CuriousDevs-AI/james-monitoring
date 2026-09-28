@@ -26,6 +26,11 @@ def due_jobs(cfg, state: dict, at: datetime) -> list[str]:
     last = ran.get("checks")
     if not last or (at - datetime.fromisoformat(last)).total_seconds() >= cfg.check_every_minutes * 60:
         jobs.append("checks")
+    if getattr(cfg, "assistants", None):
+        if at.time() >= parse_hhmm(cfg.daily_brief) and ran.get("brief") != today:
+            jobs.append("brief")
+    if state.get("reminders"):
+        jobs.append("reminders")
     gh = getattr(cfg, "github", None)
     if gh is not None and gh.enabled:
         last = ran.get("github")
@@ -81,6 +86,11 @@ class Scheduler:
                             except Exception:  # noqa: BLE001
                                 log.exception("work session failed")
                         self.rt._spawn(session())
+                elif job == "brief":
+                    self._mark("brief", at.date().isoformat())
+                    await self.rt.run_brief()
+                elif job == "reminders":
+                    await self.rt.run_reminders(at)
                 elif job == "github":
                     self._mark("github", at.isoformat(timespec="seconds"))
                     self.rt._spawn(self.rt.sync_github())
@@ -99,6 +109,8 @@ class Scheduler:
             if not state.get("sched"):
                 today = at.date().isoformat()
                 self._mark("report", today if at.time() >= parse_hhmm(self.rt.cfg.daily_report) else "")
+                if at.time() >= parse_hhmm(self.rt.cfg.daily_brief):
+                    self._mark("brief", today)
                 for hhmm in self.rt.cfg.work_sessions:
                     if at.time() >= parse_hhmm(hhmm):
                         self._mark(f"work:{hhmm}", today)

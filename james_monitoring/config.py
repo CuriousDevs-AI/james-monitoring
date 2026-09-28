@@ -25,10 +25,40 @@ class Member:
     persona_file: str = ""         # relative to workspace; default team/<id>/persona.md
     llm: "LLMConfig | None" = None  # this person's own model (e.g. Marcus on Codex, Sofia on Claude); None = company default
     permissions: dict[str, str] = field(default_factory=dict)   # per-person overrides of Config.permissions
+    department: str = ""           # department id (optional)
+    assistant: bool = False        # the founder's personal assistant: private 1:1, personal tasks, reminders
 
     @property
     def bot_token(self) -> str:
         return os.environ.get(self.bot_token_env, "") if self.bot_token_env else ""
+
+
+@dataclass
+class Department:
+    id: str
+    name: str
+    head: str = ""                 # member id
+
+
+@dataclass
+class Client:
+    id: str
+    name: str
+    contact: str = ""              # who to talk to there (free text: name, email)
+    notes: str = ""
+
+
+USER_ROLES = ("admin", "member", "viewer", "client")
+
+
+@dataclass
+class User:
+    """A human who signs in to the console with their own link (the founder uses the console key)."""
+    id: str
+    name: str
+    role: str                      # admin | member | viewer | client
+    key_sha256: str = ""           # only the hash is stored; the link is shown once
+    client: str = ""               # for role client: the client whose projects they see
 
 
 @dataclass
@@ -43,6 +73,7 @@ class Project:
     status: str = "active"         # active | paused | done
     telegram_chat_id: int = 0      # optional Telegram group for this project's room
     channel: str = ""              # telegram | slack | console — where this project's room lives ("" = company default)
+    client: str = ""               # client id this project is for (optional)
 
 
 @dataclass
@@ -143,6 +174,19 @@ class Config:
     git_email: str = ""
     mirror_owner: bool = True      # show the owner's messages in every channel (console ↔ Telegram ↔ Slack)
     default_channel_raw: str = ""  # telegram | slack | console — where All hands and the 1:1s live
+    departments: dict[str, Department] = field(default_factory=dict)
+    clients: dict[str, Client] = field(default_factory=dict)
+    users: list[User] = field(default_factory=list)
+    daily_brief: str = "08:30"     # the personal assistant's morning brief (if there is an assistant)
+
+    @property
+    def assistants(self) -> list[Member]:
+        return [m for m in self.team if m.assistant]
+
+    @property
+    def workers(self) -> list[Member]:
+        """Everyone who works for the company (the personal assistant works only for the founder)."""
+        return [m for m in self.team if not m.assistant]
 
     # -- helpers ---------------------------------------------------------
     def project_members(self, pid: str) -> list[Member]:
@@ -293,6 +337,8 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
             persona_file=str(t.get("persona_file") or ""),
             llm=parse_llm(t["llm"], llm_raw) if isinstance(t.get("llm"), dict) and t["llm"].get("provider") else None,
             permissions=_levels(t.get("permissions"), f"team.{mid}.permissions"),
+            department=str(t.get("department") or ""),
+            assistant=bool(t.get("assistant", False)),
         ))
     if sum(1 for m in team if m.monitor) > 1:
         raise ConfigError("config: only one member can have `monitor: true`")
@@ -306,7 +352,8 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
                                      description=str(p.get("description") or ""), lead=str(p.get("lead") or ""),
                                      status=str(p.get("status") or "active"),
                                      telegram_chat_id=int(p.get("telegram_chat_id") or 0),
-                                     channel=str(p.get("channel") or "").lower())
+                                     channel=str(p.get("channel") or "").lower(),
+                                     client=str(p.get("client") or ""))
 
     sl = raw.get("slack") or {}
     slack = SlackConfig(bot_token_env=str(sl.get("bot_token_env") or "SLACK_BOT_TOKEN"),
@@ -345,6 +392,42 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
     if clash:
         raise ConfigError(f"config: team member id `{clash.id}` is the same as the owner's ({owner_name}) — give "
                           f"{clash.name} a different id (e.g. `{clash.id}_ai`)")
+    departments = {}
+    for did, d in (raw.get("departments") or {}).items():
+        d = d or {}
+        head = str(d.get("head") or "")
+        if head and head not in seen:
+            raise ConfigError(f"config: departments.{did}.head `{head}` is not on the team")
+        departments[str(did)] = Department(id=str(did), name=str(d.get("name") or did), head=head)
+    for m in team:
+        if m.department and m.department not in departments:
+            raise ConfigError(f"config: {m.id}'s department `{m.department}` doesn't exist (departments: "
+                              f"{', '.join(departments) or 'none'})")
+        if m.assistant and m.monitor:
+            raise ConfigError(f"config: {m.id} can't be both the manager and the personal assistant")
+    clients = {}
+    for cid, c in (raw.get("clients") or {}).items():
+        c = c or {}
+        clients[str(cid)] = Client(id=str(cid), name=str(c.get("name") or cid), contact=str(c.get("contact") or ""),
+                                   notes=str(c.get("notes") or ""))
+    for p in projects.values():
+        if p.client and p.client not in clients:
+            raise ConfigError(f"config: project {p.id}'s client `{p.client}` doesn't exist")
+    users, uids = [], set()
+    for u in raw.get("users") or []:
+        uid = str(u.get("id") or "").strip().lower()
+        role = str(u.get("role") or "viewer").lower()
+        if not uid or uid in uids or uid in seen or uid in RESERVED_IDS or uid == owner_key:
+            raise ConfigError(f"config: users: `{uid}` is missing, a duplicate, a team member's id or reserved")
+        if role not in USER_ROLES:
+            raise ConfigError(f"config: users.{uid}.role must be one of {', '.join(USER_ROLES)}")
+        client = str(u.get("client") or "")
+        if role == "client" and client not in clients:
+            raise ConfigError(f"config: users.{uid} is a client user but client `{client}` doesn't exist")
+        uids.add(uid)
+        users.append(User(id=uid, name=str(u.get("name") or uid), role=role,
+                          key_sha256=str(u.get("key_sha256") or ""), client=client))
+    brief = hhmm(_get(raw, "monitor.daily_brief", "08:30"), "monitor.daily_brief")
     return Config(
         company=str(raw.get("company") or "My Company"),
         timezone=tz,
@@ -380,4 +463,8 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         git_email=str(_get(raw, "owner.git_email", "") or ""),
         mirror_owner=bool(_get(raw, "sync.mirror_owner", True)),
         default_channel_raw=str(_get(raw, "sync.channel", "") or "").lower(),
+        departments=departments,
+        clients=clients,
+        users=users,
+        daily_brief=brief,
     )

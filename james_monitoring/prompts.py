@@ -51,10 +51,11 @@ RUN_CODE_SPEC = """\
 
 def build_system(*, company: str, today: str, charter: str, persona: str, memory: str, member_name: str,
                  member_role: str, roster: str, context: str, owner_name: str, can_run_code: bool,
-                 channel: str, needs_approval: list[str] | None = None) -> str:
+                 channel: str, needs_approval: list[str] | None = None, extra_actions: str = "") -> str:
     approval = (f"- These actions wait for {owner_name}'s approval before they run: {', '.join(needs_approval)}. "
                 f"Use them normally; say in your reply that it is waiting for approval.\n") if needs_approval else ""
-    spec = ACTION_SPEC.replace("{run_code}", RUN_CODE_SPEC if can_run_code else "").replace("{approval}", approval)
+    spec = ACTION_SPEC.replace("{run_code}", (RUN_CODE_SPEC if can_run_code else "") + extra_actions).replace(
+        "{approval}", approval)
     return f"""You are {member_name}, {member_role} at {company}. Today is {today}.
 You are a member of a real team. {owner_name} is the founder; their instructions are binding.
 You are talking via: {channel}.

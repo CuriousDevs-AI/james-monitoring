@@ -14,11 +14,12 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from .asks import Ask, AskError, AskStore
+from .assistant import REMIND_SPEC
 from .chat import BACKCHANNEL, PROJECT_ROOM, TEAM_ROOM, ChatStore
 from .config import Config, Member
 from .executor import Executor, ExecutorError
 from .fileio import atomic_write
-from .llm import LLM, LLMError, make_llm
+from .llm import LLM, LLMError, is_transient, make_llm
 from .monitor import build_report, checks, team_status_lines, write_report
 from .prompts import build_system
 from .tasks import TASK_ID, TaskError, TaskStore
@@ -34,13 +35,14 @@ HISTORY_TURNS = 8
 TURN_SECONDS = 420
 # A person's CLI session (Claude Code / Codex / OpenCode) is kept across calls and restarts, and started fresh when
 # the model changes or it gets long or old (the fresh one is seeded with the recent conversation).
+RETRY_BACKOFF = (3, 10)             # seconds between retries of a model call that hit a temporary problem
 SESSION_MAX_CALLS = 40
 SESSION_MAX_TOKENS = 600_000
 SESSION_MAX_DAYS = 3                # model calls in one turn (retries, file reads, repair) stop after this                 # own recent exchanges per channel (the room transcript adds everyone else)
 ROOM_CONTEXT = 16                 # recent messages of the current room shown to the agent
 ELSEWHERE = 4                     # recent messages from each other room the agent is part of
 ELSEWHERE_HOURS = 72
-NO_GATE = {"ask_permission", "remember", "notify_owner", "read_file"}   # never need approval
+NO_GATE = {"ask_permission", "remember", "notify_owner", "read_file", "remind"}   # never need approval
 
 
 # -- transport interface --------------------------------------------------------
@@ -84,7 +86,7 @@ class Event:
 _FILE_BLOCK = re.compile(r"^<<<FILE[ \t]+([^\n>]+?)[ \t]*>>>[ \t]*\n(.*?)\n?^<<<END(?:[ \t]+FILE)?>>>[ \t]*$", re.S | re.M)
 _STR_FIELDS = ("title", "owner", "text", "summary", "details", "note", "path", "id", "task", "project", "to",
                "description", "log", "output", "blocked_on", "instructions", "recommendation", "goal", "due",
-               "priority", "status", "level", "default", "why")
+               "priority", "status", "level", "default", "why", "at")
 
 
 @dataclass
@@ -233,6 +235,8 @@ class Runtime:
         self.executor.title_of = lambda tid: self.tasks.get(tid).title
         self._github = None
         self.chat = ChatStore(self.ws.root)
+        from .audit import AuditLog
+        self.audit = AuditLog(self.ws.root, cfg.timezone)
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._history: dict[str, deque] = defaultdict(lambda: deque(maxlen=HISTORY_TURNS * 2))
         self._bg: set[asyncio.Task] = set()
@@ -240,8 +244,9 @@ class Runtime:
         self._coding: set[str] = set()                    # tasks with a coding run in progress
         self._gh_lock = asyncio.Lock()
         self._ask_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self.turns: dict[str, dict] = {}                  # who is thinking right now (System health)
         if shared is not None:
-            self._locks, self._bg = shared._locks, shared._bg
+            self._locks, self._bg, self.turns = shared._locks, shared._bg, shared.turns
             self._coding, self._ask_locks, self._gh_lock = shared._coding, shared._ask_locks, shared._gh_lock
 
     def llm_for(self, m: Member) -> LLM:
@@ -385,6 +390,11 @@ class Runtime:
         """Last contact per person; `fails` counts consecutive model failures (one timeout isn't an incident)."""
         m = self.cfg.member(member_id)
         model = self.model_name(m) if m else ""
+
+        if error:
+            prev_err = ((self.ws.state().get("heartbeat") or {}).get(member_id) or {}).get("error", "")
+            if error != prev_err:                                 # a new failure, not the same one again
+                self._audit("model", member_id, "model error", model, error)
 
         def fn(s):
             hb = s.setdefault("heartbeat", {})
@@ -530,9 +540,11 @@ class Runtime:
     # -- context -----------------------------------------------------------------
     def roster(self) -> str:
         lines = [f"- {self.owner_id}: {self.cfg.owner_name} — founder (the owner)"]
-        for m in self.cfg.team:
+        for m in self.cfg.workers:                        # the personal assistant isn't part of the company team
             proj = f" — projects: {', '.join(m.projects)}" if m.projects else ""
-            lines.append(f"- {m.id}: {m.name} — {m.role}{proj}")
+            dep = self.cfg.departments.get(m.department)
+            lines.append(f"- {m.id}: {m.name} — {m.role}{proj}"
+                         + (f" — {dep.name}" + (" (head)" if dep.head == m.id else "") if dep else ""))
         return "\n".join(lines)
 
     def projects_text(self) -> str:
@@ -560,7 +572,7 @@ class Runtime:
         tz = self.cfg.timezone
         parts: list[str] = []
         if m.monitor:
-            parts.append("## Board (all tasks)\n" + self.tasks.board())
+            parts.append("## Board (all tasks)\n" + self.tasks.board(skip_owners={x.id for x in self.cfg.assistants}))
             parts.append("## People\n" + "\n".join(f"- {n}: {st} — {l}"
                                                    for n, st, l in team_status_lines(self.cfg, self.tasks)))
             pend = self.asks.pending()
@@ -600,6 +612,15 @@ class Runtime:
                 parts.append("## Your projects and teammates\n" + "\n".join(
                     f"- {pid}: " + (", ".join(x.name for x in self.cfg.project_members(pid) if x.id != m.id) or "just you")
                     for pid in mine_p))
+        if m.assistant:
+            from .assistant import Reminders
+            rems = Reminders(self).all(m.id)
+            parts.append("## Reminders you've set\n" + ("\n".join(f"- {r['at'].replace('T', ' ')}: {r['text']}"
+                                                                   for r in rems) or "- none"))
+            pend, review = self.asks.pending(), [t for t in self.tasks.all() if t.status == "review"]
+            parts.append("## What the company needs from the founder\n"
+                         + "\n".join([f"- approval {a.id}: {a.summary}" for a in pend[:5]]
+                                     + [f"- review {t.id}: {t.title}" for t in review[:5]] or ["- nothing"]))
         docs = self.list_docs()
         if docs:
             parts.append("## Team documents (read with read_file)\n" + docs)
@@ -620,7 +641,27 @@ class Runtime:
         if who == self.owner_id:
             return f"{self.cfg.owner_name} (founder)"
         mm = self.cfg.member(who)
-        return mm.name if mm else who
+        if mm:
+            return mm.name
+        u = next((x for x in self.cfg.users if x.id == who), None)
+        return f"{u.name} ({u.role}, a human colleague — not the founder)" if u else who
+
+    def name_of(self, who: str) -> str:
+        """A plain display name for anyone who can write in a room."""
+        if who == self.owner_id:
+            return self.cfg.owner_name
+        mm = self.cfg.member(who)
+        if mm:
+            return mm.name
+        u = next((x for x in self.cfg.users if x.id == who), None)
+        return u.name if u else who
+
+    def note_stuck(self, member_id: str, room: str) -> None:
+        """The hub's watchdog stopped a turn that hung: remembered for System health and the audit log."""
+        self._audit("system", member_id, "turn stopped (stuck)", room)
+        self.ws.update_state(lambda s: s.setdefault("stuck", []).append(
+            {"member": member_id, "room": room, "at": now(self.cfg.timezone).isoformat(timespec="seconds")}) or
+            s.__setitem__("stuck", s["stuck"][-20:]))
 
     def _line(self, msg: dict) -> str:
         from datetime import datetime
@@ -630,6 +671,8 @@ class Runtime:
         if len(text) > 400:
             text = text[:400] + "…"
         tag = {"ask": " [approval card]", "system": " [system]", "internal": " [teammates]"}.get(msg.get("kind"), "")
+        if msg.get("reply_quote"):
+            tag += f" (replying to “{str(msg['reply_quote'])[:80]}”)"
         return f"- {t} {self._who(msg.get('who', ''))}{tag}: {text}"
 
     def room_title(self, room: str) -> str:
@@ -656,7 +699,7 @@ class Runtime:
                          + "\n".join(self._line(x) for x in here[-ROOM_CONTEXT:]))
         if m.monitor:
             others = [TEAM_ROOM, BACKCHANNEL] + [PROJECT_ROOM + p for p in self.cfg.projects] + \
-                     [x.id for x in self.cfg.team if x.id != m.id]
+                     [x.id for x in self.cfg.workers if x.id != m.id]
         else:
             others = [m.id, TEAM_ROOM] + [PROJECT_ROOM + p for p in m.projects if p in self.cfg.projects]
         glance, budget = [], 5000
@@ -695,7 +738,11 @@ class Runtime:
             if cap and self._usage_today(m.id) >= cap:    # re-checked: others may have spent it while we waited
                 self._enqueue(m, ev, "over today's budget")
                 return f"💸 I've used today's budget ({cap:,} tokens) — your message is queued."
-            return await self._turn(m, ev)
+            self.turns[m.id] = {"room": self.room_of(m, ev), "since": time.time(), "source": ev.source}
+            try:
+                return await self._turn(m, ev)
+            finally:
+                self.turns.pop(m.id, None)
 
     async def _turn(self, m: Member, ev: Event) -> str:
         cap = self.cfg.daily_tokens_per_agent
@@ -718,6 +765,11 @@ class Runtime:
                    "system": "a system event"}.get(ev.source, ev.source)
         if ev.project:
             channel = self.project_channel(ev.project)
+        if m.assistant and ev.source == "dm":
+            channel = (f"private chat with {self.cfg.owner_name} — you are their personal assistant. This chat and "
+                       f"your tasks are private to them: never share them with the team. Keep their day organised: "
+                       f"personal tasks (create_task with owner = you), reminders (remind), and delegate company work "
+                       f"to the team with create_task / message_agent when they ask.")
         context = self.context_for(m)
         convo = self.conversation_context(m, ev)
         if convo:
@@ -730,7 +782,8 @@ class Runtime:
             member_name=m.name, member_role=m.role, roster=self.roster(), context=context,
             owner_name=self.cfg.owner_name, can_run_code=self.executor.enabled and not m.monitor,
             channel=channel, needs_approval=[a for a, lv in gated.items() if lv == "red"
-                                             and (a != "run_code" or (self.executor.enabled and not m.monitor))])
+                                             and (a != "run_code" or (self.executor.enabled and not m.monitor))],
+            extra_actions=REMIND_SPEC if m.assistant else "")
         try:
             llm = self.llm_for(m)
         except LLMError as e:
@@ -743,7 +796,8 @@ class Runtime:
         hist = self._load_history(hkey, legacy)
         who = self.cfg.owner_name if ev.sender == self.owner_id else self._who(ev.sender)
         where = f"project {ev.project}" if ev.project else ev.source
-        user_msg = f"[{where} from {who}] {ev.text}"
+        quote = f", replying to “{ev.meta['reply_quote']}”" if ev.meta.get("reply_quote") else ""
+        user_msg = f"[{where} from {who}{quote}] {ev.text}"
         messages = [*hist, {"role": "user", "content": user_msg}]
 
         last_error = ""
@@ -756,17 +810,24 @@ class Runtime:
             if time.monotonic() > deadline:
                 last_error = f"the turn took longer than {TURN_SECONDS // 60} minutes"
                 return None
-            try:
-                if sess is not None:
-                    res = await asyncio.to_thread(llm.complete, system, msgs, sess)
-                    self._save_session(m, sess, res)       # resumed next time, even after a restart
-                else:
-                    res = await asyncio.to_thread(llm.complete, system, msgs)
-            except LLMError as e:
-                last_error = " ".join(str(e).split())[:160]
-                log.error("llm failed for %s: %s", m.id, e)
-                self._heartbeat(m.id, error=str(e)[:200])
-                return None
+            for attempt in range(len(RETRY_BACKOFF) + 1):
+                try:
+                    if sess is not None:
+                        res = await asyncio.to_thread(llm.complete, system, msgs, sess)
+                        self._save_session(m, sess, res)       # resumed next time, even after a restart
+                    else:
+                        res = await asyncio.to_thread(llm.complete, system, msgs)
+                    break
+                except LLMError as e:
+                    last_error = " ".join(str(e).split())[:160]
+                    wait = RETRY_BACKOFF[attempt] if attempt < len(RETRY_BACKOFF) else None
+                    if wait is not None and is_transient(str(e)) and time.monotonic() + wait < deadline:
+                        log.warning("llm hiccup for %s (retry in %ss): %s", m.id, wait, last_error)
+                        await asyncio.sleep(wait)                 # rate limit / overload / network: try again
+                        continue
+                    log.error("llm failed for %s: %s", m.id, e)
+                    self._heartbeat(m.id, error=str(e)[:200])
+                    return None
             self._heartbeat(m.id)
             billable = getattr(res, "billable_tokens", res.total_tokens)
             used = self._add_usage(m.id, billable, self.model_name(m))
@@ -873,6 +934,8 @@ class Runtime:
             return f"post in #{a.get('project')}: {str(a.get('text', ''))[:300]}"
         if t == "run_code":
             return f"run the coding agent on {a.get('task')} in {a.get('project')}: {str(a.get('instructions', ''))[:200]}"
+        if t == "remind":
+            return f"remind {self.cfg.owner_name} at {a.get('at')}: {str(a.get('text', ''))[:200]}"
         return t
 
     async def _apply(self, m: Member, a: dict, ev: Event) -> str:
@@ -886,6 +949,8 @@ class Runtime:
             await self.bus.send_owner(m.id, ask.summary, ask=ask, urgent=True)
             return f"🙋 {ask.id}: waiting for {self.cfg.owner_name} to approve — {self.describe(m, a)}"
         note = await self._do(m, a, ev)
+        self._audit("agent", m.id, t, str(a.get("id") or a.get("task") or a.get("path") or a.get("to") or ""),
+                    self.describe(m, a) + (" (approved)" if ev.meta.get("approved") else ""))
         if level == "yellow":
             await self.bus.send_owner(m.id, f"🟡 FYI — {m.name} did: {self.describe(m, a)}")
         return note
@@ -910,6 +975,12 @@ class Runtime:
 
     async def _do(self, m: Member, a: dict, ev: Event) -> str:
         t = a["type"]
+        if t == "remind":
+            if not m.assistant:
+                raise ValueError("only the founder's personal assistant sets reminders — use notify_owner")
+            from .assistant import Reminders
+            r = Reminders(self).add(m.id, str(a.get("at") or ""), str(a.get("text") or ""))
+            return f"⏰ reminder set for {r['at'].replace('T', ' ')[:16]}: {r['text']}"
         if t == "create_task":
             owner = (a.get("owner") or m.id).lower().lstrip("@")
             if owner != self.owner_id:
@@ -1003,6 +1074,9 @@ class Runtime:
             target = self.cfg.member(to)
             if not target or target.id == m.id:
                 raise ValueError(f"unknown teammate `{to}`")
+            if target.assistant:
+                raise ValueError(f"{target.name} is {self.cfg.owner_name}'s personal assistant, not reachable by "
+                                 f"the team — message {self.cfg.owner_name} instead")
             self.ws.log(m.id, f"to {target.id}: {a.get('text', '')[:300]}")
             room = self._handoff_room(ev, a.get("task", ""))
             await self._internal(room, m.id, f"→ {target.name}: {a.get('text', '')}")
@@ -1222,7 +1296,20 @@ class Runtime:
     async def decide_ask(self, ask_id: str, decision: str, by: str, note: str = "", via: str = "") -> str:
         """One decision per request, even when Approve is tapped twice or in two channels at once."""
         async with self._ask_locks[ask_id.upper()]:
-            return await self._decide_ask(ask_id, decision, by, note, via)
+            out = await self._decide_ask(ask_id, decision, by, note, via)
+            try:
+                summary = self.asks.get(ask_id).summary
+            except Exception:  # noqa: BLE001
+                summary = ""
+            self._audit("decision", by, decision, ask_id.upper(), {"summary": summary, "note": note}, via=via)
+            return out
+
+    def _audit(self, kind: str, who: str, action: str, target: str = "", detail="", via: str = "") -> None:
+        """Never lets a full disk or a bad value break the work being recorded."""
+        try:
+            self.audit.record(kind, who, action, target, detail, via)
+        except Exception:  # noqa: BLE001
+            log.exception("audit record failed")
 
     async def _decide_ask(self, ask_id: str, decision: str, by: str, note: str = "", via: str = "") -> str:
         pre = self.asks.get(ask_id)
@@ -1514,6 +1601,22 @@ class Runtime:
             old.unlink()
         return str(path)
 
+    async def run_reminders(self, at=None) -> int:
+        """Send every reminder whose time has come (the scheduler calls this each tick)."""
+        from .assistant import Reminders
+        due = Reminders(self).due(at or now(self.cfg.timezone))
+        for r in due:
+            who = r.get("member") if self.cfg.member(r.get("member", "")) else self.cfg.monitor.id
+            await self.bus.send_owner(who, f"⏰ Reminder: {r['text']}", urgent=True)
+        return len(due)
+
+    async def run_brief(self) -> int:
+        from .assistant import brief
+        for m in self.cfg.assistants:
+            if not self.paused(m.id):
+                await self.bus.send_owner(m.id, brief(self, m))
+        return len(self.cfg.assistants)
+
     async def run_daily_report(self) -> str:
         try:
             await asyncio.to_thread(self.backup_runtime)
@@ -1601,15 +1704,15 @@ class Runtime:
     def onboarding_messages(self) -> list[tuple[str, str]]:
         """(member_id, text) — the day-one 'we are one team' intros. Deterministic, no model call."""
         jm = self.cfg.monitor
-        roster = "\n".join(f"• {m.name} — {m.role}" for m in self.cfg.team)
+        roster = "\n".join(f"• {m.name} — {m.role}" for m in self.cfg.workers)
         msgs = [(jm.id, f"👋 Welcome to {self.cfg.company} HQ.\n\nWe are one team. {self.cfg.owner_name} is the founder; "
-                        f"his word is final.\n\nThe team:\n{roster}\n\nHow we work:\n"
+                        f"their word is final.\n\nThe team:\n{roster}\n\nHow we work:\n"
                         f"• This group is for things that concern everyone: announcements, @all status, big news.\n"
                         f"• Work instructions go in each person's 1:1 chat.\n"
                         f"• Every task lives in git with an owner, a priority and a date.\n"
                         f"• 🔴 money, public, production, deleting, legal → we ask {self.cfg.owner_name} first.\n"
                         f"• I post the daily report at {self.cfg.daily_report}.")]
-        for m in self.cfg.team:
+        for m in self.cfg.workers:
             if m.id == jm.id:
                 continue
             proj = f" I work on: {', '.join(m.projects)}." if m.projects else ""

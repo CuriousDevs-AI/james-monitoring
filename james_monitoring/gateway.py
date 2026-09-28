@@ -247,7 +247,7 @@ class TelegramGateway:
         """Which room a Telegram message belongs to (None = not ours), and the text to record."""
         chat = update.effective_chat
         if chat.type == ChatType.PRIVATE:
-            m = _AT.match(text)                          # "@riya …" in a DM → Riya, if she has no bot of her own
+            m = _AT.match(text)                          # "@riya …" in a DM → Riya, if Riya has no bot of their own
             if m:
                 target = self.cfg.member(m.group(1))
                 if target and target.id != member_id and target.id not in self.apps:
@@ -303,7 +303,12 @@ class TelegramGateway:
                 self.extra_chats[room] = update.effective_chat.id   # replies reach this extra user too
             if update.effective_chat.type != ChatType.PRIVATE:
                 text = self._reply_target(update, text)
-            await self.hub.inbound(room, text, via="telegram")
+            r = getattr(msg, "reply_to_message", None)          # a swipe-reply keeps what it answers
+            quote = ""
+            if r is not None and isinstance(getattr(r, "text", None), str) and r.text:
+                who = getattr(getattr(r, "from_user", None), "first_name", "") or ""
+                quote = (f"{who}: " if isinstance(who, str) and who else "") + " ".join(r.text.split())[:120]
+            await self.hub.inbound(room, text, via="telegram", reply_quote=quote)
         return handler
 
     def _make_other_handler(self, member_id: str):

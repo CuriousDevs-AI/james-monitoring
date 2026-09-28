@@ -151,6 +151,62 @@ class Workspace:
             out += [self.NOTES + (f" (newest {len(kept)} of {len(notes)})" if len(kept) < len(notes) else ""), *kept]
         return "\n".join(out)
 
+    @staticmethod
+    def _entry(line: str, pinned: bool) -> dict:
+        import hashlib
+        import re as _re
+        m = _re.match(r"^- (\d{4}-\d{2}-\d{2}) — (.*)$", line, _re.S)
+        return {"id": hashlib.sha1(line.encode()).hexdigest()[:12], "pinned": pinned,
+                "date": m.group(1) if m else "", "text": (m.group(2) if m else line[2:]).strip(), "line": line}
+
+    def memory_entries(self, member_id: str) -> list[dict]:
+        """Every correction (pinned) and note, oldest first — what the console's memory editor shows."""
+        corr, notes, _ = self._memory_sections(member_id)
+        return [self._entry(x, True) for x in corr if x.startswith("- ")] + \
+               [self._entry(x, False) for x in notes if x.startswith("- ")]
+
+    def memory_edit(self, member_id: str, action: str, entry_id: str = "", text: str = "",
+                    pinned: bool = False) -> dict:
+        """The owner curates memory: add, edit, pin (→ binding correction), unpin, delete. Hand-written parts of
+        the file are kept verbatim. Raises ValueError if the entry changed since it was shown."""
+        rel = f"team/{member_id}/memory.md"
+        text = " ".join(str(text or "").split())
+        if action == "add":
+            if not text:
+                raise ValueError("Write the note first.")
+            self.remember(member_id, text, pinned=pinned)
+            return {"ok": True}
+        with path_lock(self.root / rel):
+            corr, notes, other = self._memory_sections(member_id)
+            entries = [(x, True) for x in corr] + [(x, False) for x in notes]
+            hit = next(((x, p) for x, p in entries if x.startswith("- ") and self._entry(x, p)["id"] == entry_id), None)
+            if not hit:
+                raise ValueError("That memory entry changed or is gone — reload and try again.")
+            line, was_pinned = hit
+            e = self._entry(line, was_pinned)
+            if action == "delete":
+                new = None
+            elif action == "edit":
+                if not text:
+                    raise ValueError("A memory entry can't be empty — delete it instead.")
+                new = f"- {e['date'] or self._now().date().isoformat()} — {text}"
+            elif action in ("pin", "unpin"):
+                new = line
+            else:
+                raise ValueError(f"unknown memory action {action}")
+            to_pinned = {"pin": True, "unpin": False}.get(action, was_pinned)
+            (corr if was_pinned else notes).remove(line)
+            if new is not None:
+                (corr if to_pinned else notes).append(new)
+            head = [x for x in other]
+            while head and not head[-1].strip():
+                head.pop()
+            if not head:
+                head = [f"# Memory — {member_id}", "", "Newest last. Corrections from the owner are binding."]
+            out = head + ([""] + [self.CORR, *corr] if corr else []) + ([""] + [self.NOTES, *notes] if notes else [])
+            self.write(rel, "\n".join(out).rstrip("\n") + "\n")
+        return {"ok": True}
+
     def remember(self, member_id: str, note: str, pinned: bool = False) -> None:
         """Add one entry: the file is only ever *inserted into*, so hand-written parts are never touched."""
         note = " ".join(str(note or "").split())
@@ -259,6 +315,20 @@ class Workspace:
             return self._git(*args, cwd=path or self.root)
         except RuntimeError:
             return ""
+
+    def file_history(self, rel: str, n: int = 30) -> list[dict]:
+        """Every commit that changed one file (a task, a doc), newest first: the audit trail git already keeps."""
+        try:
+            out = self._git("log", f"-{n}", "--follow", "--date=iso-strict", "--pretty=format:%h\x1f%ad\x1f%an\x1f%s",
+                            "--", rel)
+        except RuntimeError:
+            return []
+        rows = []
+        for line in out.splitlines():
+            parts = line.split("\x1f")
+            if len(parts) == 4:
+                rows.append({"hash": parts[0], "at": parts[1], "author": parts[2], "subject": parts[3]})
+        return rows
 
     # -- runtime state (.jm/state.json, not committed) ----------------------
     def _state_path(self) -> Path:

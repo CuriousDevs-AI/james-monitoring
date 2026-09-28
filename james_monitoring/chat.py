@@ -7,7 +7,8 @@ Rooms:
     backchannel     teammates talking to each other when it isn't about one project (read-only for the owner)
 
 Stored in .jm/chat/<room>.jsonl (runtime data, not committed). Each message:
-    {"i", "ts", "who", "text", "kind": msg|notice|ask|system|internal, "via"?: console|telegram|slack, "ask_id"?}
+    {"i", "ts", "who", "text", "kind": msg|notice|ask|system|internal, "via"?: console|telegram|slack, "ask_id"?,
+     "reply_to"?: i of the message answered, "thread"?: i of the thread's first message, "reply_quote"?: "Who: …"}
 """
 from __future__ import annotations
 
@@ -88,6 +89,18 @@ class ChatStore:
             else:
                 lo = mid + 1
         return msgs[lo:][-limit:]
+
+    def get(self, room: str, i: int) -> dict | None:
+        """One message by its index (None if there's no such message)."""
+        if i is None or int(i) < 0:
+            return None
+        hit = self.since(room, int(i) - 1, limit=1_000_000)[:1]
+        return hit[0] if hit and hit[0].get("i") == int(i) else None
+
+    def thread(self, room: str, root: int) -> list[dict]:
+        """A thread: its first message and every reply to it, in order."""
+        msgs = self._messages(room)
+        return [m for m in msgs if m.get("i") == root or m.get("thread") == root]
 
     def recent(self, room: str, n: int = 20, max_age_hours: float | None = None) -> list[dict]:
         msgs = self.since(room, -1, limit=n)

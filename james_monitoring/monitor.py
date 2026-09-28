@@ -26,7 +26,7 @@ INCIDENT_AFTER_FAILS = 3
 
 def team_status_lines(cfg: Config, tasks: TaskStore) -> list[tuple[str, str, str]]:
     rows = []
-    for m in cfg.team:
+    for m in cfg.workers:                              # the personal assistant's work is private
         st, line = tasks.person_status(m.id)
         rows.append((m.name, st, line))
     return rows
@@ -65,10 +65,11 @@ def activity(cfg: Config, ws: Workspace, tasks: TaskStore, day: str) -> dict[str
 def build_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -> str:
     tz = cfg.timezone
     d = today(tz)
-    all_tasks = tasks.all()
+    personal = {m.id for m in cfg.assistants}              # the founder's own tasks stay out of the company report
+    all_tasks = [t for t in tasks.all() if t.owner not in personal]
     open_tasks = [t for t in all_tasks if t.is_open]
     rows = team_status_lines(cfg, tasks)
-    workers = {m.name for m in cfg.team if not m.monitor}   # the manager coordinates; he isn't "not started"
+    workers = {m.name for m in cfg.workers if not m.monitor}   # the manager coordinates; they aren't "not started"
     counts = {k: sum(1 for r in rows if r[1] == k and r[0] in workers)
               for k in ["on track", "at risk", "blocked", "not started"]}
     stale_cut = d - timedelta(days=cfg.stale_days)
@@ -120,7 +121,7 @@ def build_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -
     L += [f"- {n}: {st} — {line}" for n, st, line in rows if n in workers or st != "not started"]
     did = activity(cfg, ws, tasks, d.isoformat())
     L += ["", "## Today's work (from task logs and saved documents)"]
-    worked = [(m, did.get(m.id) or []) for m in cfg.team if not m.monitor]
+    worked = [(m, did.get(m.id) or []) for m in cfg.workers if not m.monitor]
     L += [f"- {m.name}: " + ("; ".join(items[:6]) + (f" (+{len(items) - 6} more)" if len(items) > 6 else "")
                              if items else "no recorded work") for m, items in worked] or ["- nobody on the team yet"]
     if cfg.projects:
@@ -131,6 +132,21 @@ def build_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -
             blk = sum(1 for t in pt if t.status == "blocked")
             L.append(f"- {pr.name or pid} [{pr.status}]: {done_n}/{len(pt)} done"
                      + (f", {blk} blocked" if blk else "") + (f", {sum(1 for t in pt if t.is_open)} open" if pt else ""))
+    if cfg.departments:
+        L += ["", "## Departments"]
+        for did_, dep in cfg.departments.items():
+            people = [m for m in cfg.workers if m.department == did_]
+            dt = [t for t in open_tasks if any(t.owner == m.id for m in people)]
+            head = cfg.member(dep.head).name if dep.head and cfg.member(dep.head) else "no head"
+            L.append(f"- {dep.name} ({head}): {len(people)} people, {len(dt)} open"
+                     + (f", {sum(1 for t in dt if t.status == 'blocked')} blocked" if dt else ""))
+    if cfg.clients:
+        L += ["", "## Clients"]
+        for cid, c in cfg.clients.items():
+            ps = [p for p in cfg.projects.values() if p.client == cid]
+            pt = [t for t in all_tasks if any(t.project == p.id for p in ps)]
+            L.append(f"- {c.name}: {len(ps)} project(s), {sum(1 for t in pt if t.status == 'done')}/{len(pt)} tasks done"
+                     + (f", {sum(1 for t in pt if t.status == 'blocked')} blocked" if pt else ""))
     decided = [a for a in asks.all() if a.status != "pending"
                and str(a.doc.meta.get("decided_at", ""))[:10] >= since.isoformat()]
     if decided:
@@ -145,10 +161,12 @@ def build_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -
     if usage:
         total = sum(int(v) for v in usage.values())
         L += ["", "## Model use today", f"- {total:,} tokens: " + ", ".join(
-            f"{(cfg.member(k).name if cfg.member(k) else k)} {int(v):,}" for k, v in sorted(usage.items(),
+            f"{('personal' if cfg.member(k) and cfg.member(k).assistant else cfg.member(k).name) if cfg.member(k) else k} "
+            f"{int(v):,}" for k, v in sorted(usage.items(),
                                                                                          key=lambda kv: -int(kv[1])))]
     hb = state.get("heartbeat", {})
-    errs = [f"- {k}: {v.get('error')}" for k, v in hb.items() if v.get("error")]
+    errs = [f"- {k}: {v.get('error')}" for k, v in hb.items() if v.get("error")
+            and not (cfg.member(k) and cfg.member(k).assistant)]
     if errs:
         L += ["", "## System issues"] + errs
     return "\n".join(L) + "\n"
@@ -199,7 +217,7 @@ def checks(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -> list
             alerts.append(Alert(f"stale:{t.id}", f"💤 {t.id} ({t.owner}) hasn't moved in {cfg.stale_days}+ days: "
                                                   f"{t.title}", owner=False, nudge=t.owner, task=t.id))
     busy = {t.owner for t in all_tasks if t.is_open}
-    idle = [m for m in cfg.team if not m.monitor and m.id not in busy]
+    idle = [m for m in cfg.workers if not m.monitor and m.id not in busy]
     if idle and all_tasks:
         alerts.append(Alert(f"idle:{','.join(m.id for m in idle)}",
                             f"🪑 Nothing assigned to {', '.join(m.name for m in idle)} — give them work or pause them."))

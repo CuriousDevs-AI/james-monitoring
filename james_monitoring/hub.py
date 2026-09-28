@@ -15,6 +15,7 @@ teammate hand-offs) is written to the room and delivered to every channel.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import TYPE_CHECKING, Protocol
@@ -93,12 +94,23 @@ class Hub:
 
     # -- output: write to the room, deliver everywhere -----------------------------------------
     async def post(self, room: str, who: str, text: str, kind: str = "msg", ask: "Ask | None" = None,
-                   via: str = "") -> dict:
+                   via: str = "", reply_to: int | None = None) -> dict:
         if self.successor is not None:
-            return await self.successor.post(room, who, text, kind=kind, ask=ask, via=via)
-        msg = self.chat.append(room, who, text, kind=kind, via=via, ask_id=ask.id if ask else None)
+            return await self.successor.post(room, who, text, kind=kind, ask=ask, via=via, reply_to=reply_to)
+        msg = self.chat.append(room, who, text, kind=kind, via=via, ask_id=ask.id if ask else None,
+                               **self.reply_fields(room, reply_to))
         await self.fanout(room, msg, ask=ask, skip=via)
         return msg
+
+    def reply_fields(self, room: str, reply_to: int | None) -> dict:
+        """reply_to / thread / reply_quote for a message that answers message `reply_to` of this room."""
+        parent = self.chat.get(room, reply_to) if reply_to is not None else None
+        if not parent:
+            return {}
+        first = " ".join(str(parent.get("text", "")).split())
+        who = self.rt.name_of(parent.get("who", "")) if self.rt else parent.get("who", "")
+        return {"reply_to": parent["i"], "thread": parent.get("thread", parent["i"]),
+                "reply_quote": f"{who}: {first[:120]}{'…' if len(first) > 120 else ''}"}
 
     def delivers_to(self, room: str, transport_name: str) -> bool:
         """Each room lives on exactly one outside channel (Telegram *or* Slack), so a conversation is never split.
@@ -115,8 +127,11 @@ class Hub:
         for t in list(self.transports):
             if (skip and t.name == skip) or not self.delivers_to(room, t.name):
                 continue
+            out = msg
+            if msg.get("reply_quote"):                       # outside channels see what it answers
+                out = {**msg, "text": f"↩ {msg['reply_quote']}\n{msg.get('text', '')}"}
             try:
-                await t.deliver(room, msg, ask=ask)
+                await t.deliver(room, out, ask=ask)
             except Exception:  # noqa: BLE001 - one broken channel never blocks the others
                 log.exception("%s could not deliver to %s", t.name, room)
 
@@ -147,24 +162,29 @@ class Hub:
         await self.post(room, from_id, text, kind=kind, via=via)
 
     # -- input: the owner said something somewhere ----------------------------------------------
-    def receive(self, room: str, text: str, via: str = "console") -> dict | None:
-        """Record the owner's message now (so every screen shows it at once). Raises ValueError for a bad room."""
+    def receive(self, room: str, text: str, via: str = "console", who: str = "", reply_to: int | None = None,
+                reply_quote: str = "") -> dict | None:
+        """Record a person's message now (so every screen shows it at once): the founder's, or a signed-in
+        teammate's (`who`). Raises ValueError for a bad room."""
         text = (text or "").strip()
         if not text:
             raise ValueError("empty message")
         self.check_room(room)
-        return self.chat.append(room, self.rt.owner_id, text, via=via)
+        extra = self.reply_fields(room, reply_to)
+        if reply_quote and not extra:                    # a reply in Telegram/Slack to something we can't index
+            extra = {"reply_quote": reply_quote[:160]}
+        return self.chat.append(room, who or self.rt.owner_id, text, via=via, **extra)
 
     async def handle(self, room: str, msg: dict, via: str = "console") -> None:
-        """Mirror the owner's message to the other channels, then get the right people to answer."""
+        """Mirror the message to the other channels, then get the right people to answer."""
         if self.rt.cfg.mirror_owner:
             await self.fanout(room, msg, skip=via)
-        await self.route(room, msg["text"])
+        await self.route(room, msg["text"], sender=msg.get("who") or self.rt.owner_id, msg=msg)
 
-    async def inbound(self, room: str, text: str, via: str) -> None:
+    async def inbound(self, room: str, text: str, via: str, reply_quote: str = "") -> None:
         """For transports: receive + handle in one go. A room that lives on the other channel says where to go."""
         if self.successor is not None:                    # arrived during a reload: the new hub handles it
-            return await self.successor.inbound(room, text, via)
+            return await self.successor.inbound(room, text, via, reply_quote)
         if via in ("telegram", "slack") and not self.delivers_to(room, via):
             home = self.home(room) or "the console"
             name = self.rt.room_title(room)
@@ -174,15 +194,21 @@ class Hub:
                                            "text": f"ℹ️ {name} lives on {home.title() if home != 'the console' else home} "
                                                    f"— please write there, so the whole conversation stays in one place."})
             return
-        msg = self.receive(room, text, via=via)
+        msg = self.receive(room, text, via=via, reply_quote=reply_quote)
         await self.handle(room, msg, via=via)
 
-    async def route(self, room: str, text: str) -> None:
+    async def route(self, room: str, text: str, sender: str = "", msg: dict | None = None) -> None:
         from .runtime import Event
         rt, cfg = self.rt, self.rt.cfg
+        sender = sender or rt.owner_id
+        m = re.match(r"^\s*(approve|approved|reject|rejected)\s+(ASK-\d+)\b[\s:,.-]*(.*)$", text, re.I | re.S)
+        if sender != rt.owner_id and (is_command(text) or m):
+            await self.post(room, cfg.monitor.id, f"Only {cfg.owner_name} can run commands and decide approvals "
+                                                  f"here — ask them, or use the Approvals page if you're an admin.",
+                            kind="notice")
+            return
         if is_command(text):
             return await self._command(room, text)
-        m = re.match(r"^\s*(approve|approved|reject|rejected)\s+(ASK-\d+)\b[\s:,.-]*(.*)$", text, re.I | re.S)
         if m:                                   # "approve ASK-3 go ahead" typed anywhere = the button
             cmd = "approve" if m.group(1).lower().startswith("approve") else "reject"
             return await self._command(room, f"/{cmd} {m.group(2).upper()} {m.group(3).strip()}".strip())
@@ -203,13 +229,17 @@ class Hub:
                 await self.post(room, mid, line)
             return
         source = "dm" if room not in (TEAM_ROOM,) and not pid else "group"
+        meta = {}
+        if msg and msg.get("reply_quote"):
+            meta["reply_quote"] = msg["reply_quote"]
+        reply_to = msg.get("i") if msg and msg.get("thread") is not None else None   # a thread stays a thread
         # One after the other, like people in a meeting: each reads what the previous ones just said
         # (the room's recent messages are in their context), instead of parallel monologues.
         for i, mid in enumerate(targets):                  # the task feedback in it is recorded once, not per person
-            await self._answer(room, mid, Event(source, text, sender=rt.owner_id, project=pid, room=room,
-                                                meta={"primary": i == 0}))
+            await self._answer(room, mid, Event(source, text, sender=sender, project=pid, room=room,
+                                                meta={"primary": i == 0, **meta}), reply_to=reply_to)
 
-    async def _answer(self, room: str, mid: str, ev) -> None:
+    async def _answer(self, room: str, mid: str, ev, reply_to: int | None = None) -> None:
         self.pending[room] = self.pending.get(room, 0) + 1
         try:
             for t in self.transports:
@@ -219,8 +249,14 @@ class Hub:
                         await typing(room, mid)
                     except Exception:  # noqa: BLE001
                         pass
-            reply = await self.rt.dispatch(mid, ev)
-            await self.post(room, mid, reply)
+            from .runtime import TURN_SECONDS
+            try:     # watchdog: a turn that hangs (a stuck CLI, a dead network) is stopped and said so
+                reply = await asyncio.wait_for(self.rt.dispatch(mid, ev), TURN_SECONDS + 120)
+            except asyncio.TimeoutError:
+                self.rt.note_stuck(mid, room)
+                reply = (f"⚠️ I got stuck on this and stopped after {(TURN_SECONDS + 120) // 60} minutes — please send "
+                         f"it again (if it keeps happening, check my model in Settings → Models).")
+            await self.post(room, mid, reply, reply_to=reply_to)
         except Exception as e:  # noqa: BLE001 - show the problem in the room instead of losing the message
             log.exception("reply from %s failed", mid)
             await self.post(room, mid, f"⚠️ {e}", kind="notice")
