@@ -299,7 +299,8 @@ function toast(text, tone = "success") {
   $("#toasts").append(t); setTimeout(() => t.remove(), 3200);
 }
 const PROVIDERS = [["claude-code", "Claude subscription — claude CLI, no API key"], ["codex-cli", "ChatGPT / Codex subscription — codex CLI, no API key"],
-  ["opencode", "OpenCode — any model: GLM, Claude, GPT, Gemini, free models"], ["anthropic", "Anthropic API key"], ["openai", "OpenAI-compatible API — OpenAI, Ollama, OpenRouter"]];
+  ["opencode", "OpenCode — any model: GLM, Claude, GPT, Gemini, free models"],
+  ["ollama", "Ollama — models on this machine (free, private)"], ["openrouter", "OpenRouter — many models, one API key"], ["anthropic", "Anthropic API key"], ["openai", "OpenAI-compatible API — OpenAI, Ollama, OpenRouter"]];
 const LEVEL_TXT = {green: "Just do it", yellow: "Do it, tell me", red: "Ask me first"};
 const ACTION_TXT = {create_task: "Create tasks", update_task: "Update tasks (status, dates)", write_file: "Save documents (docs/)", message_agent: "Message a teammate", post_group: "Post in All hands", post_room: "Post in a project room", run_code: "Run the coding agent (branch only)"};
 // Model ids for OpenCode (free models first) — suggestions in every model box.
@@ -419,6 +420,33 @@ async function boot() {
   $("#app").put(h("div", {class: "shell"}, side, h("div", {class: "content"}, top, h("main", {id: "main"}))));
   if (PULSE) paintPulse(); else pulse();
   render();
+  aiCheck();
+}
+
+// When the console opens: is every model the team uses ready (and is OpenCode set up)? A banner if not, and — once
+// per browser tab — a short sheet with what to fix. Nothing blocks you; the team just can't answer until it's fixed.
+let AI_HEALTH = null;
+async function aiCheck() {
+  if (!AI_HEALTH) AI_HEALTH = await api("/api/models/health").catch(() => null);
+  const hlth = AI_HEALTH; if (!hlth) return;
+  $("#ai-banner")?.remove();
+  if (hlth.ok) return;
+  const fix = () => { AI_HEALTH = null; closeSheet(); go("settings"); setTimeout(() => document.getElementById("set-models")?.scrollIntoView(), 400); };
+  const banner = h("div", {id: "ai-banner", class: "card card-b row", style: "margin:12px 24px 0;border-color:rgba(220,38,38,.3);background:var(--danger-muted)"}, icon("alert"),
+    h("span", {class: "grow small"}, h("b", {}, "AI isn't ready: "), hlth.problems.map(p => `${p.who.join(", ")} — ${p.label}${p.model ? " (" + p.model + ")" : ""}: ${p.detail}`).join(" · ")),
+    h("button", {class: "btn primary sm", onclick: fix}, "Fix it"));
+  $("#main")?.before(banner);
+  let seen = false; try { seen = sessionStorage.getItem("jm-ai-check") === "1"; sessionStorage.setItem("jm-ai-check", "1"); } catch {}
+  if (seen || $("#sheet").classList.contains("open")) return;
+  const oc = hlth.opencode || {};
+  openSheet("AI setup check",
+    h("p", {class: "small muted", style: "margin-top:0"}, "Your team can't answer until its model is ready. This is what needs attention:"),
+    h("div", {class: "list card"}, hlth.problems.map(p => h("div", {class: "li"}, h("span", {class: "dot blocked", style: "margin-top:6px"}),
+      h("div", {class: "grow"}, h("div", {class: "t"}, p.label + (p.model ? " · " + p.model : "")), h("div", {class: "xs muted"}, `${p.detail} — used by ${p.who.join(", ")}`),
+        p.fix ? h("div", {class: "xs", style: "margin-top:2px"}, p.fix) : null)))),
+    h("h2", {class: "sec"}, "OpenCode"), oc.installed ? h("div", {class: "small"}, badge("✓ installed v" + (oc.version || "?"), "success"), " signed in: ", (oc.credentials || []).join(", ") || "none", " · free models available")
+      : h("div", {class: "small"}, badge("not installed", "warning"), " One CLI for GLM, Claude, GPT, Gemini and free models: ", h("code", {class: "mono"}, oc.install || "npm install -g opencode-ai")),
+    h("div", {class: "row", style: "margin-top:14px"}, h("button", {class: "btn primary", onclick: fix}, "Fix in Settings → Models"), h("button", {class: "btn ghost", onclick: () => closeSheet()}, "Later")));
 }
 async function togglePause() {
   if (!S.paused_all && !confirm("Pause the whole team? Nobody works until you resume; messages to them wait in a queue.")) return;
@@ -1120,6 +1148,84 @@ async function vReports() {
 }
 
 // ------------------------------------------------------------------ settings
+// Models: every way the team can think — ready or not, how to fix it, which model, who uses it, their sessions.
+let MODEL_PICK = null;
+function modelsCard() {
+  const el = h("div", {class: "card", id: "set-models", style: "margin-bottom:16px;scroll-margin-top:70px"});
+  const list = h("div", {class: "list"}), detail = h("div", {class: "card-b", style: "border-top:1px solid var(--border)"}), team = h("div", {});
+  el.put(h("div", {class: "card-h"}, icon("bot"), h("h3", {}, "Models"), h("span", {class: "xs muted"}, "how your team thinks — pick one, get it ready, give it to people"), h("span", {class: "grow"}),
+    h("button", {class: "btn ghost sm", onclick: () => load(true)}, icon("refresh"), "Check again")), list, detail, team);
+  const dot = ok => h("span", {class: "dot " + (ok ? "on-track" : "blocked"), style: "margin-top:6px"});
+  let cat = [], people = [];
+  async function load(refresh = false) {
+    list.put(h("div", {class: "li"}, h("span", {class: "spin"}), " Checking every option…"));
+    [cat, people] = await Promise.all([api("/api/models/catalog" + (refresh ? "?refresh=1" : "")).catch(() => []), api("/api/models/team").catch(() => [])]);
+    list.put(cat.map(o => h("div", {class: "li click" + (MODEL_PICK === o.id ? " on" : ""), style: MODEL_PICK === o.id ? "background:var(--accent-muted)" : "", onclick: () => { MODEL_PICK = o.id; load(); }},
+      dot(o.ok), h("div", {class: "grow"}, h("div", {class: "t"}, o.label), h("div", {class: "xs muted"}, o.detail)),
+      o.ok ? badge("Ready", "success") : badge(o.installed ? "Needs setup" : "Not installed", o.installed ? "warning" : ""))));
+    drawDetail(); drawTeam();
+  }
+  function drawDetail() {
+    const o = cat.find(x => x.id === MODEL_PICK);
+    if (!o) return detail.put(h("div", {class: "small muted"}, "Pick an option above to set it up and give it to people."));
+    const model = h("input", {placeholder: o.id === "opencode" ? "provider/model — e.g. zai/glm-4.6 or opencode/big-pickle (free)" : o.kind === "local" ? "e.g. llama3.1" : "blank = the tool's default"});
+    const dl = h("datalist", {id: "dl-" + o.id}); model.setAttribute("list", "dl-" + o.id);
+    const suggestions = o.id === "opencode" ? (o.providers || []).flatMap(g => g.models.map(mid => [mid, g.free ? "free" : g.signed_in ? "signed in" : "needs sign-in"])) : (o.models || []).map(m => [m, ""]);
+    dl.put(suggestions.map(([v, t]) => h("option", {value: v}, t)));
+    const allowFree = h("input", {type: "checkbox"});
+    const who = new Set(["company"]);
+    const chips = h("div", {class: "chipsel"}, [["company", "Everyone (company default)"], ...S.members.map(m => [m.id, m.name])].map(([id, name]) => {
+      const c = h("span", {class: "chip" + (who.has(id) ? " on" : ""), onclick: () => {
+        if (id === "company") { who.clear(); who.add("company"); } else { who.delete("company"); who.has(id) ? who.delete(id) : who.add(id); if (!who.size) who.add("company"); }
+        chips.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", who.has(x.dataset.id))); }, "data-id": id}, name); return c; }));
+    const out = h("div", {class: "small", style: "min-height:18px;margin-top:8px"});
+    const steps = [];
+    if (!o.installed && o.install) steps.push(h("div", {class: "small"}, "1 · Install on this machine: ", h("code", {class: "mono"}, o.install), " ",
+      h("button", {class: "btn ghost sm", onclick: () => { navigator.clipboard?.writeText(o.install); toast("Copied"); }}, "Copy"), " — then Check again."));
+    if (o.kind === "cli" && o.installed) steps.push(h("div", {class: "row small"}, o.ok ? badge("✓ " + o.detail, "success") : badge(o.detail, "danger"),
+      h("button", {class: "btn " + (o.ok ? "outline" : "primary") + " sm", onclick: () => loginFor(o.id, "", o.label, o.ok, () => load(true))}, o.ok ? "Sign in again" : "Log in")));
+    if (o.kind === "api") steps.push(h("div", {class: "small"}, o.ok ? badge("✓ " + o.detail, "success") : h("span", {}, "Paste your key:"), o.ok ? null : keyBox(o.key_env, () => load(true))));
+    if (o.id === "opencode" && o.installed) steps.push(h("div", {class: "small"}, h("div", {class: "muted", style: "margin-bottom:6px"}, "Providers in OpenCode — sign in to the ones you want (paste the key or code it asks for):"),
+      h("div", {class: "chipsel"}, (o.providers || []).map(g => h("span", {class: "chip" + (g.signed_in ? " on" : ""), title: g.signed_in ? "ready" : "click to sign in",
+        onclick: () => g.signed_in ? (model.value = g.models[0] || "", model.focus()) : loginFor("opencode", g.provider, "OpenCode · " + g.provider, false, () => load(true))}, g.provider + (g.free ? " (free)" : "") + (g.signed_in ? "" : " — sign in")))),
+      h("button", {class: "btn ghost sm", style: "margin-top:6px", onclick: () => loginFor("opencode", "", "OpenCode", false, () => load(true))}, "Sign in to another provider…"),
+      h("label", {class: "row xs", style: "gap:6px;margin-top:8px;flex-wrap:nowrap"}, allowFree, "Allow free OpenCode models (they run OpenCode's own agent — isolated: own folder and home, no secrets)")));
+    if (o.kind === "local") steps.push(h("div", {class: "small"}, o.ok ? badge("✓ " + o.detail, "success") : badge(o.detail, "danger"), " ", o.fix ? h("span", {class: "muted"}, o.fix) : null));
+    const apply = h("button", {class: "btn primary", onclick: async () => {
+      apply.disabled = true; out.put(h("span", {class: "spin"}), " saving…");
+      const body = {provider: o.id, model: model.value.trim(), allow_free: allowFree.checked, who: who.has("company") ? "company" : [...who]};
+      if (o.base_url) body.base_url = o.base_url; if (o.key_env) body.api_key_env = o.key_env;
+      try { await api("/api/models/assign", body); S = await api("/api/state"); AI_HEALTH = null; aiCheck(); out.put(badge("Saved — " + (who.has("company") ? "the company default" : [...who].map(nameOf).join(", ")) + " now use it", "success")); load(); }
+      catch (e) { out.put(badge(e.message, "danger")); } apply.disabled = false; }}, icon("check"), "Use this model");
+    const test = h("button", {class: "btn outline", onclick: async () => { out.put(h("span", {class: "spin"}), " asking the model…");
+      const r = await api("/api/test_model", {provider: o.id, model: model.value.trim(), base_url: o.base_url || "", allow_free: allowFree.checked}).catch(e => ({ok: false, error: e.message}));
+      out.put(r.ok ? badge(`Works · ${r.tokens} tokens`, "success") : badge(r.error || "failed", "danger")); }}, "Test");
+    detail.put(h("div", {class: "row"}, h("b", {}, o.label), h("span", {class: "grow"}), o.sessions ? badge("keeps sessions across restarts", "accent") : null),
+      steps.length ? h("div", {style: "display:grid;gap:8px;margin:10px 0"}, steps) : null,
+      h("label", {class: "f"}, "Model"), model, dl, h("label", {class: "f"}, "Who uses it"), chips,
+      h("div", {class: "row", style: "margin-top:10px"}, apply, test), out);
+  }
+  function drawTeam() {
+    const ago = t => { if (!t) return "never"; const m = Math.round((Date.now() / 1000 - t) / 60); return m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
+    team.put(h("div", {class: "rooms-h", style: "border-top:1px solid var(--border)"}, "Who uses what — and their saved sessions"),
+      h("div", {class: "list"}, people.map(p => { const cur = p.sessions.filter(x => x.current);
+        return h("div", {class: "li"}, avatar(p.name, "sm"), h("div", {class: "grow"},
+          h("div", {class: "row"}, h("span", {class: "t"}, p.name), badge((p.label || p.provider) + (p.model ? " · " + p.model : ""), p.ok && !p.error ? "success" : "danger"), p.own ? badge("own model") : badge("company default")),
+          h("div", {class: "xs muted"}, cur.length ? `${cur.length} session${cur.length > 1 ? "s" : ""} (${cur.map(x => roomInfo(x.room).name).join(", ")}) · ${cur.reduce((a, x) => a + x.calls, 0)} calls · last ${ago(Math.max(...cur.map(x => x.last || 0)))}` : "no saved session yet — starts on the next message"),
+          p.error ? h("div", {class: "err xs"}, p.error) : !p.ok ? h("div", {class: "xs", style: "color:var(--warning)"}, p.fix || p.detail) : null),
+          h("div", {class: "row"}, p.own ? h("button", {class: "btn ghost sm", onclick: async () => { await api("/api/models/default", {member: p.id}); toast(p.name + " uses the company default"); S = await api("/api/state"); load(); }}, "Use default") : null,
+            cur.length ? h("button", {class: "btn outline sm", title: "Their next message starts a new session (memory, tasks and chat stay)", onclick: async () => {
+              if (!confirm(`Start a new session for ${p.name}? Their memory, tasks and chats stay; the model's running conversation starts over.`)) return;
+              const r = await api("/api/models/sessions/reset", {member: p.id}); toast(`${r.reset} session${r.reset === 1 ? "" : "s"} cleared`); load(); }}, "New session") : null)); })));
+  }
+  load();
+  return el;
+}
+function loginFor(provider, target, label, signedIn, done) {
+  if (signedIn && !confirm(`${label} is already signed in. Signing in again replaces that account (it signs out first). Continue?`)) return;
+  loginSheet(provider, target, label, done, signedIn);
+}
+
 // Connections: every model the team uses (installed? logged in? answering?) + git, GitHub, Telegram, Slack.
 function connectionsCard() {
   const body = h("div", {class: "list"}, h("div", {class: "li"}, h("span", {class: "spin"}), " Checking connections…"));
@@ -1158,7 +1264,7 @@ function connectionsCard() {
 }
 // Sign in, fully from the console: the CLI's own login runs in a terminal on this machine; you see its screen, open
 // the link, and paste the code or key it asks for. Nothing you paste is stored or shown again.
-function loginSheet(provider, target, label, done) {
+function loginSheet(provider, target, label, done, force = false) {
   const screen = h("pre", {style: "max-height:240px;overflow:auto;font-size:11.5px"}, "Starting…");
   const linkBox = h("div", {}), codeBox = h("div", {}), status = h("div", {class: "small", style: "min-height:18px;margin-top:8px"});
   const input = h("input", {type: "password", autocomplete: "off", placeholder: "Paste the code or key here", "aria-label": "Code or key"});
@@ -1190,7 +1296,8 @@ function loginSheet(provider, target, label, done) {
       h("span", {class: "grow"}), h("button", {class: "btn ghost sm", onclick: async () => { await api("/api/model_login/cancel", {provider}).catch(() => {}); finished = true; closeSheet(); done && done(); }}, "Cancel")),
     h("details", {style: "margin-top:12px"}, h("summary", {class: "xs muted"}, "What the sign-in shows (live)"), screen));
   (async () => {
-    const r = await api("/api/model_login", {provider, target}).catch(e => ({started: false, error: e.message}));
+    let r = await api("/api/model_login", {provider, target, force}).catch(e => ({started: false, error: e.message}));
+    if (!r.started && r.confirm && confirm(r.error + "\n\nContinue?")) r = await api("/api/model_login", {provider, target, force: true}).catch(e => ({started: false, error: e.message}));
     if (!r.started) { status.put(badge(r.error || "couldn't start", "danger")); return; }
     render_(r); input.focus();
     const t = setInterval(async () => { if (finished || !$("#sheet").classList.contains("open")) return clearInterval(t);
@@ -1266,9 +1373,7 @@ async function vSettings() {
   $("#main").style.padding = "";
   const s = await api("/api/settings"); const m = s.monitor || {}, l = s.llm || {};
   const f = {company: h("input", {value: s.company || ""}), owner_name: h("input", {value: s.owner?.name || ""}), timezone: h("input", {value: s.timezone || ""}),
-    provider: h("select", {}, PROVIDERS.map(([v, t]) => h("option", {value: v, selected: l.provider === v}, t))),
-    model: h("input", {value: l.model || ""}), base_url: h("input", {value: l.base_url || ""}), api_key: h("input", {type: "password", placeholder: "leave blank to keep"}),
-    allow_free: h("input", {type: "checkbox", checked: !!l.allow_free}),
+
     daily_report: h("input", {type: "time", value: m.daily_report || "18:30"}), work_sessions: h("input", {value: (m.work_sessions || []).join(", "), placeholder: "e.g. 10:00, 15:00 · blank = only when asked"}),
     budget: h("input", {type: "number", value: s.budget?.daily_tokens_per_agent || 300000}),
     coding_tool: (() => { const cmd = s.executor?.command || [], cur = cmd[0] || "none", known = ["none", "claude", "codex"].includes(cur);
@@ -1277,7 +1382,6 @@ async function vSettings() {
     owner_telegram_id: h("input", {class: "mono", value: s.owner?.telegram_user_id || ""}), group_chat_id: h("input", {class: "mono", value: s.telegram?.group_chat_id || ""}),
     git_name: h("input", {value: s.owner?.git_name || S.git.name || ""}), git_email: h("input", {type: "email", value: s.owner?.git_email || S.git.email || ""})};
   const err = h("div", {class: "err"});
-  setTimeout(() => modelSuggest(f.model, f.provider), 0);
   const perms = Object.fromEntries(S.action_types.map(a => [a, h("select", {}, ["green", "yellow", "red"].map(lv => h("option", {value: lv, selected: (s.permissions || {})[a] === lv}, LEVEL_TXT[lv])))]));
   const mirror = h("input", {type: "checkbox", checked: s.sync?.mirror_owner !== false});
   const channel = h("select", {"aria-label": "Where the team talks to you"}, [["", `Automatic — whatever is connected (now: ${S.delivery.home || "console only"})`], ["telegram", "Telegram"], ["slack", "Slack"], ["console", "Console only"]]
@@ -1287,7 +1391,7 @@ async function vSettings() {
       permissions: Object.fromEntries(Object.entries(perms).map(([k, e]) => [k, e.value])), mirror_owner: mirror.checked, slack_owner_ids: slackIds.value, channel: channel.value}); toast("Settings saved — restarted"); await refresh(); } catch (e) { err.textContent = e.message; } };
   const tgToken = h("input", {type: "password", placeholder: "Manager bot token from @BotFather"}), tgOut = h("div", {class: "small", style: "min-height:18px;margin-top:8px"});
   const tg = S.telegram;
-  const CARD_ID = {"Company": "set-company", "AI model": "set-ai", "Permissions": "set-permissions", "Schedule & budget": "set-schedule", "Telegram": "set-telegram"};
+  const CARD_ID = {"Company": "set-company", "Code tasks": "set-ai", "Permissions": "set-permissions", "Schedule & budget": "set-schedule", "Telegram": "set-telegram"};
   const card = (title, ic, ...kids) => h("div", {class: "card", id: CARD_ID[title], style: "margin-bottom:16px;scroll-margin-top:70px"}, h("div", {class: "card-h"}, icon(ic), h("h3", {}, title)), h("div", {class: "card-b"}, kids));
   const detect = (what, waitMsg) => async () => {
     try {
@@ -1304,16 +1408,13 @@ async function vSettings() {
     main.addEventListener("input", mark); main.addEventListener("change", mark); }
   const jump = id => () => document.getElementById(id)?.scrollIntoView({behavior: "smooth", block: "start"});
   $("#main").put(pageHeader("Settings", "Changes apply when you save — the team reloads in the background (work in progress keeps going).", dirty, h("button", {class: "btn primary", onclick: save}, icon("check"), "Save & restart")),
-    h("div", {class: "chips", style: "margin:-6px 0 14px"}, [["set-connections", "Connections"], ["set-company", "Company"], ["set-ai", "AI model"], ["set-permissions", "Permissions"], ["set-schedule", "Schedule"], ["set-github", "GitHub"], ["set-telegram", "Telegram"], ["set-slack", "Slack"]]
+    h("div", {class: "chips", style: "margin:-6px 0 14px"}, [["set-models", "Models"], ["set-connections", "Connections"], ["set-company", "Company"], ["set-permissions", "Permissions"], ["set-schedule", "Schedule"], ["set-github", "GitHub"], ["set-telegram", "Telegram"], ["set-slack", "Slack"]]
       .map(([id, t]) => h("span", {class: "badge outline click", onclick: jump(id)}, t))),
-    connectionsCard(), err,
+    modelsCard(), connectionsCard(), err,
     h("div", {class: "cols"}, h("div", {},
       card("Company", "overview", h("div", {class: "three"}, h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Name"), f.company), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Owner"), f.owner_name), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Timezone"), f.timezone)),
         h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Your git name (commits & PRs are yours)"), f.git_name), h("div", {}, h("label", {class: "f"}, "Your git email"), f.git_email))),
-      card("AI model", "bot", h("label", {class: "f", style: "margin-top:0"}, "Provider"), f.provider, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Model"), f.model), h("div", {}, h("label", {class: "f"}, "Base URL"), f.base_url)),
-        h("label", {class: "f"}, "API key"), f.api_key,
-        h("label", {class: "f row", style: "gap:6px;flex-wrap:nowrap"}, f.allow_free, h("span", {}, "Allow free OpenCode models (opencode/…) — they run OpenCode's own agent, isolated: empty folder, throwaway home, no secrets")),
-        h("label", {class: "f"}, "Coding tool for code tasks"), f.coding_tool),
+      card("Code tasks", "bot", h("label", {class: "f", style: "margin-top:0"}, "Coding tool that edits your code repos (on a branch; you approve the merge)"), f.coding_tool),
       card("Permissions", "approvals", h("p", {class: "small muted", style: "margin:0 0 10px"}, "What people may do on their own. “Ask me first” turns the action into an Approve/Reject card — it runs only after you approve. Money, anything public, production, deleting and legal always ask. Override per person in their profile."),
         h("div", {class: "perm"}, S.action_types.map(a => [h("span", {class: "small"}, ACTION_TXT[a] || a), perms[a]]))),
       card("Sync", "refresh", h("label", {class: "f", style: "margin-top:0"}, "Where the team talks to you — All hands and the 1:1s (projects can choose their own)"), channel,

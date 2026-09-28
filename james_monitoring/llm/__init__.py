@@ -16,11 +16,23 @@ from ..config import LLMConfig
 
 
 @dataclass
+class Session:
+    """A person's ongoing conversation inside a CLI model (Claude Code, Codex, OpenCode), kept across restarts.
+    key: who + where ("sofia:p-site") — also names its own stable folder. id: the tool's session id to resume
+    ("" = start a new one). system_hash: the team prompt last sent into it (re-sent only when it changes)."""
+    key: str
+    id: str = ""
+    system_hash: str = ""
+
+
+@dataclass
 class LLMResult:
     text: str
     input_tokens: int = 0
     output_tokens: int = 0
     truncated: bool = False          # the model hit its output limit: the reply is cut off
+    session_id: str = ""             # the CLI session this answer belongs to (to resume next time)
+    system_hash: str = ""            # the team prompt now inside that session
     cached_tokens: int = 0           # input tokens served from the provider's prompt cache (cheaper)
 
     @property

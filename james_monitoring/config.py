@@ -246,6 +246,11 @@ def parse_llm(llm: dict, base: dict | None = None) -> LLMConfig:
         merged = {k: v for k, v in merged.items() if k in ("max_tokens", "temperature")}
     merged.update({k: v for k, v in llm.items() if v not in (None, "")})
     provider = str(merged.get("provider") or "anthropic")
+    if provider == "openrouter" and not merged.get("base_url"):
+        merged["base_url"] = "https://openrouter.ai/api/v1"
+    if provider == "ollama":
+        merged.setdefault("base_url", "http://localhost:11434/v1")
+        merged.setdefault("api_key_env", "")                 # local: no key
     if provider in CLI_PROVIDERS:
         key_env = ""                                       # the CLI holds the login
     elif "api_key_env" in merged:

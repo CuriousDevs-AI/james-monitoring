@@ -35,7 +35,9 @@ def _kind(provider: str) -> str:
         return "opencode"
     if p in ("anthropic", "claude"):
         return "anthropic"
-    if p in ("openai", "codex", "ollama", "openrouter", "openai-compatible"):
+    if p == "ollama":
+        return "ollama"
+    if p in ("openai", "codex", "openrouter", "openai-compatible"):
         return "openai"
     return p
 
@@ -61,6 +63,17 @@ def _run(cmd: list[str], timeout: float = 20) -> tuple[int, str]:
 
 
 def check(conf: LLMConfig) -> dict:
+    if _kind(conf.provider) == "ollama" or (conf.provider == "ollama"):
+        running, models = ollama_models(conf.base_url or "http://localhost:11434")
+        ok = running and (not conf.model or conf.model in models)
+        return {"provider": "ollama", "label": "Ollama (local)", "model": conf.model or "default", "ok": ok,
+                "installed": running, "logged_in": running, "can_login": False, "key_env": "", "login_target": "",
+                "detail": "running" if running else "not running",
+                "fix": "" if ok else ("Start Ollama (ollama serve)" if not running else f"ollama pull {conf.model}")}
+    return _check(conf)
+
+
+def _check(conf: LLMConfig) -> dict:
     """Fast readiness check for one model setup. `ok` = ready to use; `fix` = what to do if not."""
     kind = _kind(conf.provider)
     out = {"provider": kind, "label": LABEL.get(kind, conf.provider), "model": conf.model or "default",
@@ -329,8 +342,10 @@ _logins: dict[str, LoginSession] = {}
 _login_lock = threading.Lock()
 
 
-def login(provider: str, log_dir: Path, target: str = "") -> dict:
-    """Start (or rejoin) the sign-in for a CLI provider. `target`: for OpenCode, the provider id to log in to."""
+def login(provider: str, log_dir: Path, target: str = "", force: bool = False) -> dict:
+    """Start (or rejoin) the sign-in for a CLI provider. `target`: for OpenCode, the provider id to log in to.
+    Claude and Codex sign out the current account as soon as a new sign-in starts — so if one is already signed
+    in, nothing starts without `force` (the console asks first)."""
     kind = _kind(provider)
     cmd = login_command(kind, target)
     if not cmd:
@@ -338,6 +353,11 @@ def login(provider: str, log_dir: Path, target: str = "") -> dict:
     b = _bin(kind)
     if not b:
         return {"started": False, "error": f"Install the CLI first: {INSTALL[kind]}"}
+    running = _logins.get(kind)
+    if kind in ("claude-code", "codex-cli") and not force and not (running and running.proc.poll() is None):
+        if _check(LLMConfig(provider=kind)).get("logged_in"):
+            return {"started": False, "confirm": True,
+                    "error": "Already signed in. Signing in again replaces this account (it signs out first)."}
     with _login_lock:                                     # two clicks never start two logins
         cur = _logins.get(kind)
         if cur and cur.proc.poll() is None:
@@ -369,6 +389,92 @@ def login_cancel(provider: str) -> dict:
     if s:
         s.cancel()
     return {"cancelled": bool(s)}
+
+
+# -- the catalogue behind Settings → Models ---------------------------------------------------------------------
+_cache: dict[str, tuple[float, object]] = {}
+
+
+def _cached(key: str, ttl: float, fn):
+    hit = _cache.get(key)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    val = fn()
+    _cache[key] = (time.time(), val)
+    return val
+
+
+def ollama_models(base: str = "http://localhost:11434") -> tuple[bool, list[str]]:
+    """Is a local Ollama running, and which models does it have?"""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(base.rstrip("/").removesuffix("/v1") + "/api/tags", timeout=1.5) as r:
+            data = json.loads(r.read())
+        return True, sorted(m.get("name", "") for m in data.get("models", []) if m.get("name"))
+    except Exception:  # noqa: BLE001
+        return False, []
+
+
+def opencode_info() -> dict:
+    """OpenCode on this machine: installed? version, providers signed in, models by provider (free ones marked)."""
+    b = _bin("opencode")
+    if not b:
+        return {"installed": False, "install": INSTALL["opencode"]}
+    rc, ver = _run([b, "--version"], timeout=15)
+    models = _cached("opencode-models", 300, opencode_models)
+    creds = opencode_credentials()
+    groups: dict[str, dict] = {}
+    for mid in models:
+        prov = mid.split("/", 1)[0]
+        g = groups.setdefault(prov, {"provider": prov, "models": [], "free": prov == "opencode",
+                                     "signed_in": prov == "opencode" or prov in creds})
+        g["models"].append(mid)
+    for c in creds:
+        groups.setdefault(c, {"provider": c, "models": [], "free": False, "signed_in": True})
+    order = sorted(groups.values(), key=lambda g: (not g["signed_in"], not g["free"], g["provider"]))
+    return {"installed": True, "version": ver.strip().splitlines()[-1] if ver.strip() else "", "credentials": creds,
+            "providers": order}
+
+
+# Suggestions only — any model id the provider accepts works.
+SUGGEST = {"claude-code": ["sonnet", "opus", "haiku"], "codex-cli": [],
+           "anthropic": ["claude-sonnet-5", "claude-opus-5-5", "claude-haiku-4-5-20251001"],
+           "openai": [], "openrouter": ["anthropic/claude-sonnet-5", "openai/gpt-5", "z-ai/glm-4.6"]}
+
+
+def catalog() -> list[dict]:
+    """Every way the team can think, with what's ready and what to do next."""
+    out = []
+    for pid, label, conf in (("claude-code", "Claude subscription (Claude Code CLI)", LLMConfig(provider="claude-code")),
+                             ("codex-cli", "ChatGPT / Codex subscription (Codex CLI)", LLMConfig(provider="codex-cli"))):
+        c = check(conf)
+        out.append({"id": pid, "label": label, "kind": "cli", "ok": c["ok"], "installed": c["installed"],
+                    "detail": c["detail"], "fix": c["fix"], "install": INSTALL[pid], "can_login": c["installed"],
+                    "models": SUGGEST[pid], "sessions": True})
+    oc = opencode_info()
+    out.append({"id": "opencode", "label": "OpenCode — GLM, Claude, GPT, Gemini, free models…", "kind": "opencode",
+                "ok": oc.get("installed", False) and any(g["signed_in"] for g in oc.get("providers", [])),
+                "installed": oc.get("installed", False), "install": INSTALL["opencode"], "sessions": True,
+                "detail": (f"v{oc.get('version', '')} · signed in: {', '.join(oc.get('credentials') or []) or 'none'} · "
+                           f"free models available") if oc.get("installed") else "not installed",
+                "fix": "" if oc.get("installed") else f"Install it on this machine: {INSTALL['opencode']}",
+                "providers": oc.get("providers", [])})
+    for pid, label, env, base in (("anthropic", "Anthropic API (pay per use)", "ANTHROPIC_API_KEY", ""),
+                                  ("openai", "OpenAI API (pay per use)", "OPENAI_API_KEY", ""),
+                                  ("openrouter", "OpenRouter — hundreds of models, one key", "OPENROUTER_API_KEY",
+                                   "https://openrouter.ai/api/v1")):
+        has = bool(os.environ.get(env))
+        out.append({"id": pid, "label": label, "kind": "api", "ok": has, "installed": True, "key_env": env,
+                    "base_url": base, "detail": f"{env} is set" if has else f"{env} not set",
+                    "fix": "" if has else "Paste your API key.", "models": SUGGEST.get(pid, [])})
+    running, models = ollama_models()
+    out.append({"id": "ollama", "label": "Ollama — models on this machine (free, private)", "kind": "local",
+                "ok": running and bool(models), "installed": running, "base_url": "http://localhost:11434/v1",
+                "detail": (f"running · {len(models)} model(s)" if running else "not running"),
+                "fix": "" if running and models else ("Pull a model: ollama pull llama3.1" if running else
+                                                      "Install from ollama.com and start it (ollama serve)."),
+                "models": models})
+    return out
 
 
 def providers_in_use(cfg) -> list[dict]:

@@ -31,7 +31,12 @@ MAX_READ_ROUNDS = 2
 MAX_FILE_CHARS = 60_000
 READABLE_DIRS = ("docs", "tasks", "reports", "team", "asks", "decisions")
 HISTORY_TURNS = 8
-TURN_SECONDS = 420                # model calls in one turn (retries, file reads, repair) stop after this                 # own recent exchanges per channel (the room transcript adds everyone else)
+TURN_SECONDS = 420
+# A person's CLI session (Claude Code / Codex / OpenCode) is kept across calls and restarts, and started fresh when
+# the model changes or it gets long or old (the fresh one is seeded with the recent conversation).
+SESSION_MAX_CALLS = 40
+SESSION_MAX_TOKENS = 600_000
+SESSION_MAX_DAYS = 3                # model calls in one turn (retries, file reads, repair) stop after this                 # own recent exchanges per channel (the room transcript adds everyone else)
 ROOM_CONTEXT = 16                 # recent messages of the current room shown to the agent
 ELSEWHERE = 4                     # recent messages from each other room the agent is part of
 ELSEWHERE_HOURS = 72
@@ -242,10 +247,85 @@ class Runtime:
     def llm_for(self, m: Member) -> LLM:
         """Each person can run on their own model (Claude, Codex, a local model…); default: the company's."""
         if not m.llm:
-            return self.llm
+            return self._sandboxed(self.llm)
         if m.id not in self._llms:
-            self._llms[m.id] = make_llm(m.llm)
+            self._llms[m.id] = self._sandboxed(make_llm(m.llm))
         return self._llms[m.id]
+
+    def _sandboxed(self, llm: LLM) -> LLM:
+        """CLI models keep their per-person folders (and so their sessions) in the company's own sandbox."""
+        if hasattr(llm, "sandbox") and not getattr(llm, "sandbox", None):
+            d = self.ws.root / ".jm" / "sandbox"
+            d.mkdir(parents=True, exist_ok=True)
+            llm.sandbox = str(d)
+        return llm
+
+    # -- CLI sessions per person per room (survive restarts) ------------------------------
+    def _sessions_path(self):
+        return self.ws.root / ".jm" / "sessions.json"
+
+    def _sessions(self) -> dict:
+        try:
+            return json.loads(self._sessions_path().read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _update_sessions(self, fn) -> None:
+        from .fileio import path_lock
+        with path_lock(self._sessions_path()):
+            data = self._sessions()
+            fn(data)
+            atomic_write(self._sessions_path(), json.dumps(data, indent=1))
+
+    def session_for(self, m: Member, room: str):
+        """This person's session in this room — resumed if it's still the same model and not too long or old."""
+        from .llm import Session
+        key = f"{m.id}:{room}"
+        rec = self._sessions().get(key) or {}
+        fresh = (not rec.get("id") or rec.get("model") != self.model_name(m)
+                 or int(rec.get("calls", 0)) >= SESSION_MAX_CALLS or int(rec.get("tokens", 0)) >= SESSION_MAX_TOKENS
+                 or (time.time() - float(rec.get("started", 0) or 0)) > SESSION_MAX_DAYS * 86400)
+        return Session(key, "" if fresh else rec["id"], "" if fresh else rec.get("system_hash", ""))
+
+    def _save_session(self, m: Member, sess, res) -> None:
+        if not res.session_id:
+            return
+        model = self.model_name(m)
+
+        def fn(data):
+            rec = data.get(sess.key) or {}
+            if rec.get("id") != res.session_id:
+                rec = {"id": res.session_id, "started": time.time(), "calls": 0, "tokens": 0}
+            rec.update(model=model, system_hash=res.system_hash, last=time.time(),
+                       calls=int(rec.get("calls", 0)) + 1,
+                       tokens=int(rec.get("tokens", 0)) + getattr(res, "billable_tokens", res.total_tokens))
+            data[sess.key] = rec
+        self._update_sessions(fn)
+        sess.id, sess.system_hash = res.session_id, res.system_hash
+
+    def sessions(self) -> list[dict]:
+        """Every saved session: who, where, which model, how long — for Settings → Models."""
+        out = []
+        for key, rec in self._sessions().items():
+            mid, _, room = key.partition(":")
+            if not self.cfg.member(mid):
+                continue
+            out.append({"member": mid, "room": room, "model": rec.get("model", ""), "calls": rec.get("calls", 0),
+                        "tokens": rec.get("tokens", 0), "started": rec.get("started"), "last": rec.get("last"),
+                        "current": rec.get("model") == self.model_name(self.cfg.member(mid))})
+        return sorted(out, key=lambda x: (x["member"], -(x["last"] or 0)))
+
+    def reset_sessions(self, member: str = "", room: str = "") -> int:
+        """Start fresh next time (e.g. after big persona changes). Memory, tasks and chat are untouched."""
+        gone = []
+
+        def fn(data):
+            for key in list(data):
+                mid, _, r = key.partition(":")
+                if (not member or mid == member) and (not room or r == room):
+                    gone.append(data.pop(key))
+        self._update_sessions(fn)
+        return len(gone)
 
     def model_error(self, member_id: str) -> str:
         """The last model error for this person — only if it came from the model they use *now*."""
@@ -257,6 +337,8 @@ class Runtime:
 
     def model_name(self, m: Member) -> str:
         c = self.cfg.llm_for(m)
+        if c.provider in ("opencode", "open-code"):
+            return f"opencode:{c.model}"                  # OpenCode models already read "provider/model"
         return c.provider + (f"/{c.model}" if c.model else "")
 
     # -- state helpers ---------------------------------------------------------
@@ -667,13 +749,19 @@ class Runtime:
         last_error = ""
         deadline = time.monotonic() + TURN_SECONDS           # one turn never holds this person's lock for long
 
+        sess = self.session_for(m, room) if getattr(llm, "sessions", False) else None
+
         async def call(msgs):
             nonlocal last_error
             if time.monotonic() > deadline:
                 last_error = f"the turn took longer than {TURN_SECONDS // 60} minutes"
                 return None
             try:
-                res = await asyncio.to_thread(llm.complete, system, msgs)
+                if sess is not None:
+                    res = await asyncio.to_thread(llm.complete, system, msgs, sess)
+                    self._save_session(m, sess, res)       # resumed next time, even after a restart
+                else:
+                    res = await asyncio.to_thread(llm.complete, system, msgs)
             except LLMError as e:
                 last_error = " ".join(str(e).split())[:160]
                 log.error("llm failed for %s: %s", m.id, e)
@@ -1419,7 +1507,8 @@ class Runtime:
         path = dest / f"{today(self.cfg.timezone).isoformat()}.zip"
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
             for f in root.rglob("*"):
-                if f.is_file() and "backups" not in f.relative_to(root).parts and not f.name.endswith(".lock"):
+                parts = f.relative_to(root).parts
+                if f.is_file() and "backups" not in parts and "sandbox" not in parts and not f.name.endswith(".lock"):
                     z.write(f, f.relative_to(root))
         for old in sorted(dest.glob("*.zip"))[:-keep]:
             old.unlink()

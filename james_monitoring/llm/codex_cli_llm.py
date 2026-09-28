@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -18,7 +19,8 @@ from pathlib import Path
 from ..config import LLMConfig
 from . import LLMError, LLMResult
 from ._proc import run, safe_env
-from .claude_code_llm import _transcript, _workdir
+from . import Session
+from .claude_code_llm import base_dir, session_dir, session_prompt
 
 
 def _usage(stdout: str) -> tuple[int, int, int]:
@@ -45,36 +47,55 @@ DISABLE = ("shell_tool", "unified_exec", "apps", "browser_use", "browser_use_ext
 
 class CodexCLILLM:
     name = "codex-cli"
+    sessions = True
 
     def __init__(self, cfg: LLMConfig):
         self.bin = os.environ.get("JM_CODEX_BIN") or shutil.which("codex")
         if not self.bin:
             raise LLMError("`codex` CLI not found. Install it (npm install -g @openai/codex) and run `codex login`.")
         self.cfg = cfg
-        self.cwd = tempfile.mkdtemp(prefix="call-", dir=_workdir("codex"))
+        self.sandbox: str | None = None
 
-    def complete(self, system: str, messages: list[dict]) -> LLMResult:
-        prompt = (f"{system}\n\n# Conversation\n{_transcript(messages)}\n\n"
-                  "Answer with the JSON object described above and nothing else.")
-        fd, out_name = tempfile.mkstemp(prefix="last-", suffix=".txt", dir=self.cwd)   # one per call: agents run in parallel
+    def complete(self, system: str, messages: list[dict], session=None) -> LLMResult:
+        resume = bool(session and session.id)
+        try:
+            return self._call(system, messages, session, resume)
+        except LLMError as e:
+            if resume and re.search(r"session|thread|conversation|not found|rollout", str(e), re.I):
+                session.id = ""
+                return self._call(system, messages, session, False)
+            raise
+
+    def _call(self, system: str, messages: list[dict], session, resume: bool) -> LLMResult:
+        base = base_dir(self.sandbox, "codex")
+        cwd = session_dir(self.sandbox, "codex", session.key) if session else tempfile.mkdtemp(prefix="call-", dir=base)
+        prompt, sent = session_prompt(system, messages, session or Session(""), resume)
+        fd, out_name = tempfile.mkstemp(prefix="last-", suffix=".txt", dir=base)   # one per call: agents run in parallel
         os.close(fd)
         out_file = Path(out_name)
-        cmd = [self.bin, "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never",
-               "--ignore-user-config", "--ignore-rules", "--json", "--output-last-message", str(out_file),
-               "--cd", self.cwd]
+        flags = ["--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--json",
+                 "--output-last-message", str(out_file)]
         for f in DISABLE:
-            cmd += ["--disable", f]
+            flags += ["--disable", f]
         if self.cfg.model:
-            cmd += ["--model", self.cfg.model]
-        cmd.append("-")                                    # read the prompt from stdin
+            flags += ["--model", self.cfg.model]
+        if resume:
+            cmd = [self.bin, "exec", "resume", *flags, session.id, "-"]
+        else:
+            cmd = [self.bin, "exec", "--sandbox", "read-only", "--color", "never", "--cd", cwd, *flags,
+                   *([] if session else ["--ephemeral"]), "-"]
         try:
-            r = run(cmd, input=prompt, cwd=self.cwd, env=safe_env(),
+            r = run(cmd, input=prompt, cwd=cwd, env=safe_env(),
                     timeout=int(os.environ.get("JM_CODEX_TIMEOUT", "180")), what="codex CLI")
             text = out_file.read_text().strip() if out_file.exists() else ""
         finally:
             out_file.unlink(missing_ok=True)
+            if not session:
+                shutil.rmtree(cwd, ignore_errors=True)
         if r.returncode != 0 or not text:
             detail = (r.stderr or r.stdout or "no output").strip()[-400:]
             raise LLMError(f"codex CLI failed: {detail}")
         tin, tout, cached = _usage(r.stdout or "")
-        return LLMResult(text=text, input_tokens=tin, output_tokens=tout, cached_tokens=cached)
+        m = re.search(r'"thread_id"\s*:\s*"([^"]+)"', r.stdout or "")
+        return LLMResult(text=text, input_tokens=tin, output_tokens=tout, cached_tokens=cached,
+                         session_id=(session.id if resume else (m.group(1) if m else "")), system_hash=sent)

@@ -41,7 +41,7 @@ from .util import normalize_tz, today
 
 log = logging.getLogger("jm.server")
 
-PROVIDERS = ("claude-code", "codex-cli", "opencode", "anthropic", "openai", "fake")
+PROVIDERS = ("claude-code", "codex-cli", "opencode", "anthropic", "openai", "openrouter", "ollama", "fake")
 
 
 class _BrokenLLM:
@@ -433,10 +433,99 @@ class App:
             self.rt.ws.update_state(fn)
         return r
 
+    # -- Settings → Models ---------------------------------------------------------------------
+    def models_catalog(self, refresh: bool = False) -> list:
+        from . import connections as cx
+        if refresh:
+            cx._cache.clear()
+        return cx._cached("catalog", 20 if not refresh else 0, cx.catalog)
+
+    def models_team(self) -> list[dict]:
+        """Each person: their model, whether it's ready, the last error, and their saved sessions."""
+        from . import connections as cx
+        cfg, rt = self.rt.cfg, self.rt
+        sess = rt.sessions()
+        checks: dict = {}
+        out = []
+        for m in cfg.team:
+            c = cfg.llm_for(m)
+            key = (c.provider, c.model, c.base_url, c.api_key_env, c.allow_free)
+            if key not in checks:
+                checks[key] = cx.check(c)
+            chk = checks[key]
+            out.append({"id": m.id, "name": m.name, "role": m.role, "provider": c.provider, "model": c.model,
+                        "own": bool(m.llm), "allow_free": c.allow_free, "label": chk.get("label", c.provider),
+                        "ok": chk["ok"], "detail": chk["detail"], "fix": chk.get("fix", ""),
+                        "error": rt.model_error(m.id), "sessions": [x for x in sess if x["member"] == m.id]})
+        return out
+
+    @config_txn
+    def models_assign(self, b: dict) -> dict:
+        """Use a model for the whole company (default) or for chosen people."""
+        from .config import parse_llm
+        provider = str(b.get("provider") or "").strip()
+        if provider not in PROVIDERS + ("openrouter", "ollama"):
+            raise ValueError(f"Unknown provider {provider!r}.")
+        llm = {"provider": provider}
+        for k in ("model", "base_url", "api_key_env"):
+            if str(b.get(k) or "").strip():
+                llm[k] = str(b[k]).strip()
+        if b.get("allow_free"):
+            llm["allow_free"] = True
+        if provider == "opencode" and "/" not in llm.get("model", ""):
+            raise ValueError("Pick an OpenCode model (provider/model).")
+        parse_llm(llm)                                          # validates
+        who = b.get("who") if b.get("who") is not None else b.get("members")
+        if isinstance(who, str) and who != "company":
+            who = [who]
+        if not who:
+            raise ValueError("Choose who uses it — the company default or some people.")
+        raw = self.raw()
+        if who == "company":
+            keep = {k: v for k, v in (raw.get("llm") or {}).items() if k in ("max_tokens", "temperature")}
+            raw["llm"] = {**keep, **llm}
+        else:
+            if not isinstance(who, list):
+                raise ValueError("`who` must be \"company\" or a list of people.")
+            ids = {str(x) for x in who}
+            known = {str(m.get("id")) for m in raw.get("team", [])}
+            if ids - known:
+                raise ValueError(f"I don't know {', '.join(sorted(ids - known))} — pick people from the team.")
+            for m in raw.get("team", []):
+                if str(m.get("id")) in ids:
+                    m["llm"] = dict(llm)
+        self.save_raw(raw)
+        self.load()
+        return {"ok": True, "team": self.models_team()}
+
+    @config_txn
+    def models_use_default(self, member: str) -> dict:
+        raw = self.raw()
+        for m in raw.get("team", []):
+            if str(m.get("id")) == member:
+                m.pop("llm", None)
+        self.save_raw(raw)
+        self.load()
+        return {"ok": True}
+
+    def models_health(self) -> dict:
+        """What the console checks when it opens: every model in use, and OpenCode."""
+        from . import connections as cx
+        team = self.models_team()
+        problems = {}
+        for t in team:
+            if not t["ok"] or t["error"]:
+                k = (t["label"], t["model"], t["detail"], t["fix"])
+                problems.setdefault(k, []).append(t["name"])
+        oc = cx._cached("opencode-info", 60, cx.opencode_info)
+        return {"ok": not problems, "problems": [{"label": k[0], "model": k[1], "detail": k[2], "fix": k[3],
+                                                  "who": v} for k, v in problems.items()],
+                "opencode": {k: oc.get(k) for k in ("installed", "version", "credentials", "install")}}
+
     def test_model(self, b: dict) -> dict:
         """Setup/Settings: does this provider answer? (One tiny call.)"""
         from .config import parse_llm
-        conf = parse_llm({k: v for k, v in b.items() if k in ("provider", "model", "base_url") and v})
+        conf = parse_llm({k: v for k, v in b.items() if k in ("provider", "model", "base_url", "allow_free") and v})
         if b.get("api_key") and conf.api_key_env:
             os.environ[conf.api_key_env] = str(b["api_key"])       # the key you just typed, not an older one
         try:
@@ -953,6 +1042,9 @@ def make_handler(app: App, key: str):
                     "/api/rooms": lambda: app.rooms(),
                     "/api/pulse": lambda: app.pulse(),
                     "/api/github/status": lambda: app.github_status(),
+                    "/api/models/catalog": lambda: app.models_catalog(q.get("refresh") == "1"),
+                    "/api/models/team": lambda: app.models_team(),
+                    "/api/models/health": lambda: app.models_health(),
                     "/api/connections": lambda: app.connections(),
                     "/api/opencode/models": lambda: __import__("james_monitoring.connections", fromlist=["x"]).opencode_models(),
                     "/api/member": lambda: app.member_detail(q.get("id", "")),
@@ -1004,7 +1096,7 @@ def make_handler(app: App, key: str):
                 if path in ("/api/model_login", "/api/connections/login"):    # sign in (setup and Settings)
                     from . import connections as cx
                     return self._json(200, cx.login(str(b.get("provider", "")), app.base / ".jm-login",
-                                                    target=str(b.get("target", "") or "")))
+                                                    target=str(b.get("target", "") or ""), force=bool(b.get("force"))))
                 if path == "/api/model_login/input":                  # the pasted code / key, or a key press
                     from . import connections as cx
                     return self._json(200, cx.login_input(str(b.get("provider", "")), text=str(b.get("text", "")),
@@ -1052,6 +1144,10 @@ def make_handler(app: App, key: str):
                     "/api/telegram/detect": lambda: app.telegram_detect(str(b.get("what", "owner"))),
                     "/api/telegram/code": lambda: app.telegram_code(),
                     "/api/github/connect": lambda: app.github_connect(b),
+                    "/api/models/assign": lambda: app.models_assign(b),
+                    "/api/models/default": lambda: app.models_use_default(str(b.get("member", ""))),
+                    "/api/models/sessions/reset": lambda: {"reset": app.rt.reset_sessions(str(b.get("member", "")),
+                                                                                            str(b.get("room", "")))},
                     "/api/connections/test": lambda: app.connection_test(b),
                     "/api/github/sync": lambda: app.github_sync(),
                     "/api/slack/code": lambda: {"code": setattr(app, "_slack_code", f"{secrets.randbelow(900000) + 100000}")

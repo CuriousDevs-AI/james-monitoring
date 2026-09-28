@@ -122,7 +122,7 @@ def test_opencode_error_is_explained(tmp_path, monkeypatch):
     import pytest
     monkeypatch.setenv("JM_OPENCODE_BIN", cli(tmp_path, "opencode",
                                               """echo '{"type":"error","error":{"name":"APIError","data":{"message":"401 invalid x-api-key"}}}'"""))
-    with pytest.raises(LLMError, match="401 invalid x-api-key.*jm connection login opencode"):
+    with pytest.raises(LLMError, match="401 invalid x-api-key.*Settings → Models"):
         make_llm(LLMConfig(provider="opencode", model="anthropic/claude-sonnet-4-5")).complete("s", [{"role": "user", "content": "x"}])
 
 
@@ -225,7 +225,8 @@ def test_api_key_box_saves_to_env_over_http(tmp_path, monkeypatch):
         except urllib.error.HTTPError as e:
             return {"HTTP": e.code, **json.loads(e.read())}
     try:
-        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder")   # so teardown restores the original (unset)
+        monkeypatch.delenv("OPENROUTER_API_KEY")
         assert post("/api/model_key", {"env": "OPENROUTER_API_KEY", "key": "sk-or-1"}) == {"saved": "OPENROUTER_API_KEY"}
         assert "OPENROUTER_API_KEY=sk-or-1" in (app.base / ".env").read_text()           # works before setup too
         assert post("/api/model_key", {"env": "bad name", "key": "x"})["HTTP"] == 400
