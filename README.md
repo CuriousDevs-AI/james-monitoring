@@ -14,7 +14,11 @@ Run a team of AI agents the way you'd run a real team. Any founder, any startup,
 - **A GitHub Project board, too:** tasks are mirrored as issues on a GitHub Project. Move cards, edit fields or
   comment on github.com or in the GitHub app, and it comes back through the same rules ([docs/GITHUB.md](docs/GITHUB.md)).
 - **Any model, per person:** a **Claude subscription** (`claude` CLI), a **ChatGPT/Codex subscription** (`codex` CLI),
-  the Claude or OpenAI APIs, or a local model through Ollama. Riya can run on Codex while Omar runs on Claude.
+  **OpenCode** (GLM, Claude, GPT, Gemini… and free models), the Claude or OpenAI APIs, or a local model through Ollama.
+  Riya can run on Codex while Omar runs on GLM. **Settings → Connections** (or `jm connection`) shows whether each model
+  is installed, logged in and answering, with Log in and Test buttons.
+- **One channel per room:** All hands and the 1:1s live on Telegram *or* Slack, and each project can choose its own,
+  so a conversation is never split. The console always shows everything.
 
 ```
 You — web console · Telegram · Slack (all in sync)
@@ -63,6 +67,9 @@ jm run          # opens the console in your browser
 **Telegram and Slack are optional.** Connect either or both in Settings to run the team from your phone or your
 workspace. Telegram is a group plus one bot per person; Slack is one app where everyone posts under their own name
 ([docs/SLACK.md](docs/SLACK.md)). All channels stay in sync with the console: your messages, their replies and approvals.
+
+Check and fix AI logins from the terminal: `jm connection` (status), `jm connection test` (one tiny call each),
+`jm connection login claude|codex|opencode`.
 
 Terminal alternatives still exist: `jm init` (setup wizard), `jm add-member`, `jm chat <who|team|p-project>`, `jm status`,
 `jm report`, `jm work`, `jm doctor --ping`, and `jm run --no-web` (Telegram + Slack + schedule, no console).
@@ -134,6 +141,7 @@ jm status && jm report && jm work
 ```yaml
 llm: { provider: claude-code, model: sonnet }        # your Claude subscription via the `claude` CLI, no API key
 llm: { provider: codex-cli }                         # your ChatGPT subscription via the `codex` CLI, no API key
+llm: { provider: opencode, model: opencode/big-pickle }   # OpenCode: free models, or zhipuai/glm-4.6, anthropic/…
 llm: { provider: anthropic, model: <claude model id>, api_key_env: ANTHROPIC_API_KEY }
 llm: { provider: openai,    model: <gpt model id>, api_key_env: OPENAI_API_KEY }
 llm: { provider: openai,    model: llama3.1, base_url: http://localhost:11434/v1, api_key_env: "" }   # Ollama

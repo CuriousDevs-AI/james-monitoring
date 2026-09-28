@@ -93,9 +93,20 @@ class Hub:
         await self.fanout(room, msg, ask=ask, skip=via)
         return msg
 
+    def delivers_to(self, room: str, transport_name: str) -> bool:
+        """Each room lives on exactly one outside channel (Telegram *or* Slack), so a conversation is never split.
+        Other transports (e.g. `jm chat` printing) always see everything."""
+        if transport_name not in ("telegram", "slack"):
+            return True
+        return self.home(room) == transport_name
+
+    def home(self, room: str) -> str:
+        connected = tuple(t.name for t in self.transports if t.name in ("telegram", "slack"))
+        return self.rt.cfg.channel_for(room, connected)
+
     async def fanout(self, room: str, msg: dict, ask: "Ask | None" = None, skip: str = "") -> None:
         for t in list(self.transports):
-            if skip and t.name == skip:
+            if (skip and t.name == skip) or not self.delivers_to(room, t.name):
                 continue
             try:
                 await t.deliver(room, msg, ask=ask)
@@ -108,7 +119,7 @@ class Hub:
             return await self.successor.ask_decided(ask, result, via)
         for t in list(self.transports):
             fn = getattr(t, "ask_decided", None)
-            if fn and t.name != via:
+            if fn and t.name != via and self.delivers_to(ask.requester, t.name):
                 try:
                     await fn(ask, result)
                 except Exception:  # noqa: BLE001
@@ -144,7 +155,16 @@ class Hub:
         await self.route(room, msg["text"])
 
     async def inbound(self, room: str, text: str, via: str) -> None:
-        """For transports: receive + handle in one go."""
+        """For transports: receive + handle in one go. A room that lives on the other channel says where to go."""
+        if via in ("telegram", "slack") and not self.delivers_to(room, via):
+            home = self.home(room) or "the console"
+            name = self.rt.room_title(room)
+            for t in self.transports:
+                if t.name == via:
+                    await t.deliver(room, {"who": self.rt.cfg.monitor.id, "kind": "notice", "force": True,
+                                           "text": f"ℹ️ {name} lives on {home.title() if home != 'the console' else home} "
+                                                   f"— please write there, so the whole conversation stays in one place."})
+            return
         msg = self.receive(room, text, via=via)
         await self.handle(room, msg, via=via)
 

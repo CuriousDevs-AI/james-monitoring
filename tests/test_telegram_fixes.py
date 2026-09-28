@@ -133,3 +133,12 @@ async def test_owner_detection_needs_the_code(tmp_path):
         assert who and who.id == 111
     finally:
         tg.close()
+
+
+async def test_project_on_telegram_without_its_own_group_uses_hq_with_a_label(cfg):
+    gw, rt, sent = setup(cfg)
+    await rt.bus.post_room("p-site", "sofia", "Pricing page shipped")
+    assert sent[-1] == ("sofia", -100, "#site · Pricing page shipped")
+    rt.llm.push({"reply": "On it.", "actions": []})
+    await gw._make_text_handler("james")(upd("#site what's next?", chat_type="supergroup", chat_id=-100, msg_id=9), None)
+    assert [m["text"] for m in rt.chat.since("p-site")][-2:] == ["what's next?", "On it."]

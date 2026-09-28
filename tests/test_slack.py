@@ -78,9 +78,9 @@ def test_events_map_to_rooms_and_only_the_owner_commands(tmp_path):
 async def test_messages_and_cards_post_as_each_person(tmp_path):
     rt, hub, sl, web = make(tmp_path)
     rt.llm.push({"reply": "Hero redesign in review tomorrow.", "actions": []})
-    await hub.inbound("sofia", "status of the hero?", via="telegram")
+    await hub.inbound("sofia", "status of the hero?", via="console")
     who = [(p["channel"], p["username"], p["text"]) for p in web.posts]
-    assert who == [("G_SOFIA", "Pankaj (via telegram)", "status of the hero?"),
+    assert who == [("G_SOFIA", "Pankaj (via console)", "status of the hero?"),
                    ("G_SOFIA", "Sofia", "Hero redesign in review tomorrow.")]
 
     ask = rt.asks.create(requester="sofia", summary="Pay for Figma seat ($15/mo)", level="red")

@@ -32,21 +32,38 @@ def make(tmp_path, **over):
 
 
 async def test_one_conversation_every_channel(tmp_path):
-    rt, hub, tg, sl = make(tmp_path)
+    rt, hub, tg, sl = make(tmp_path)          # both connected, no choice made → rooms live on Telegram
     rt.llm.push({"reply": "Sticky navbar is live on the branch.", "actions": []})
     await hub.inbound("sofia", "make the navbar sticky", via="telegram")
     msgs = rt.chat.since("sofia")
     assert [(m["who"], m.get("via")) for m in msgs] == [("pankaj", "telegram"), ("sofia", None)]
-    # Telegram doesn't get its own message back; Slack sees both; the reply reaches both.
-    assert [g[2] for g in tg.got] == ["Sticky navbar is live on the branch."]
-    assert [g[2] for g in sl.got] == ["make the navbar sticky", "Sticky navbar is live on the branch."]
-
-    # the owner's echo can be switched off
-    rt.cfg.mirror_owner = False
-    sl.got.clear()
+    assert [g[2] for g in tg.got] == ["Sticky navbar is live on the branch."]     # no echo of its own message
+    assert sl.got == []                                                           # one room, one channel
+    # from the console: shown on the room's channel too (mirror), unless switched off
     rt.llm.push({"reply": "ok", "actions": []})
-    await hub.inbound("sofia", "thanks", via="telegram")
-    assert [g[2] for g in sl.got] == ["ok"]
+    await hub.inbound("sofia", "thanks", via="console")
+    assert [g[2] for g in tg.got][-2:] == ["thanks", "ok"]
+    rt.cfg.mirror_owner = False
+    rt.llm.push({"reply": "sure", "actions": []})
+    await hub.inbound("sofia", "one more", via="console")
+    assert [g[2] for g in tg.got][-1] == "sure" and "one more" not in [g[2] for g in tg.got]
+
+
+async def test_each_room_lives_on_exactly_one_channel(tmp_path):
+    rt, hub, tg, sl = make(tmp_path, projects={"site": {"channel": "slack"}}, sync={"channel": "telegram"})
+    rt.llm.push({"reply": "Plan: ship Friday.", "actions": []})
+    await hub.inbound("p-site", "plan?", via="slack")
+    assert [g[2] for g in sl.got] == ["Plan: ship Friday."] and tg.got == []        # the project is on Slack
+    calls = len(rt.llm.calls)
+    await hub.inbound("p-site", "plan?", via="telegram")                            # wrong place → pointed home
+    assert len(rt.llm.calls) == calls and "lives on Slack" in tg.got[-1][2]
+    assert [m["text"] for m in rt.chat.since("p-site")] == ["plan?", "Plan: ship Friday."]
+    rt.llm.push({"reply": "Hi!", "actions": []})
+    await hub.inbound("sofia", "hi", via="telegram")                               # 1:1s follow the company choice
+    assert tg.got[-1][2] == "Hi!" and all(g[0] != "sofia" for g in sl.got)
+    rt.cfg.projects["site"].channel = "console"
+    await hub.post_room("p-site", "sofia", "console only now")
+    assert "console only now" not in [g[2] for g in sl.got + tg.got]
 
 
 async def test_backchannel_is_read_only_and_bad_rooms_fail(tmp_path):
@@ -69,7 +86,7 @@ async def test_project_people_see_what_was_said_in_the_room(tmp_path):
     rt.llm.push({"reply": "Rate limits: 100 req/min per key, shipping Thursday.", "actions": []})
     await hub.inbound("p-api", "@riya what's the rate limit plan?", via="console")
     rt.llm.push({"reply": "I'll show the limit in the dashboard.", "actions": []})
-    await hub.inbound("p-api", "@lena can you surface it in the UI?", via="slack")
+    await hub.inbound("p-api", "@lena can you surface it in the UI?", via="console")
     system = rt.llm.calls[-1][0]
     assert "Recent messages in #api room" in system
     assert "Riya: Rate limits: 100 req/min per key" in system            # Lena knows what Riya said
@@ -87,7 +104,7 @@ async def test_teammate_handoffs_are_visible_in_the_project_room(tmp_path):
         {"id": "riya", "name": "Riya", "role": "Backend", "projects": ["api"]},
         {"id": "lena", "name": "Lena", "role": "Frontend", "projects": ["api"]},
     ]
-    rt, hub, tg, sl = make(tmp_path, team=raw_team, projects={"api": {"lead": "riya"}})
+    rt, hub, tg, sl = make(tmp_path, team=raw_team, projects={"api": {"lead": "riya", "channel": "slack"}})
     rt.llm.push({"reply": "Asked Lena.", "actions": [{"type": "message_agent", "to": "lena",
                                                        "text": "Need the 429 screen by Friday"}]})
     rt.llm.push({"reply": "Will do — Thursday.", "actions": []})

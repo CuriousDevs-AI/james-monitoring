@@ -39,7 +39,7 @@ from .util import normalize_tz, today
 
 log = logging.getLogger("jm.server")
 
-PROVIDERS = ("claude-code", "codex-cli", "anthropic", "openai", "fake")
+PROVIDERS = ("claude-code", "codex-cli", "opencode", "anthropic", "openai", "fake")
 
 
 class _BrokenLLM:
@@ -254,6 +254,8 @@ class App:
             "priorities": PRIORITIES, "workspace": str(cfg.workspace_path),
             "permissions": cfg.permissions, "action_types": ACTION_TYPES, "backchannel": BACKCHANNEL,
             "git": {"name": cfg.git_author[0], "email": cfg.git_author[1]},
+            "delivery": {"choice": cfg.default_channel_raw, "home": self.hub.home("team") if self.hub else "",
+                         "connected": [t.name for t in (self.hub.transports if self.hub else []) if t.name in ("telegram", "slack")]},
             "github": {"enabled": cfg.github.enabled, "owner": cfg.github.owner, "repo": cfg.github.repo,
                        "project": cfg.github.project, "prs": cfg.github.prs, **{k: v for k, v in (s.get("github") or {}).items()
                                                                                 if k in ("error", "last_sync", "url")}},
@@ -265,6 +267,7 @@ class App:
         return {"id": p.id, "name": p.name or p.id, "description": p.description, "lead": p.lead,
                 "status": p.status, "repo": p.repo, "members": [m.id for m in self.rt.cfg.project_members(p.id)],
                 "telegram_chat_id": p.telegram_chat_id, "slack": bool(self.rt.cfg.slack.channels.get(PROJECT_ROOM + p.id)),
+                "channel": p.channel, "home": self.hub.home(PROJECT_ROOM + p.id) if self.hub else "",
                 "room": PROJECT_ROOM + p.id,
                 "counts": {"total": len(tasks), "done": sum(1 for t in tasks if t.status == "done"),
                            "open": sum(1 for t in tasks if t.is_open),
@@ -376,6 +379,55 @@ class App:
         keys = (cfg.owner_key, cfg.owner_name.lower(), cfg.owner_name.split()[0].lower())
         return [t for t in rt.tasks.all() if t.status == "blocked" and any(k in t.blocked_on.lower() for k in keys)
                 and "approval ask-" not in t.blocked_on.lower()]
+
+    # -- connections: every model, login and channel in one place ---------------------------------
+    def connections(self) -> dict:
+        from . import connections as cx
+        cfg, st = self.rt.cfg, self.rt.ws.state()
+        hb = st.get("heartbeat", {})
+        models = []
+        for g in cx.providers_in_use(cfg):
+            c = g["config"]
+            models.append({**cx.check(c), "people": g["people"], "default": g["default"],
+                           "base_url": c.base_url, "raw_provider": c.provider,
+                           "failing": {mid: hb[mid]["error"] for mid in g["people"] if (hb.get(mid) or {}).get("error")}})
+        gname, gemail = cfg.git_author
+        return {"models": models,
+                "git": {"name": gname, "email": gemail, "ok": gemail != "jm@localhost",
+                        "fix": "" if gemail != "jm@localhost" else "Set your git name and email (Company) so commits are yours."},
+                "telegram": {"on": bool(self.gw), "error": self.telegram_error,
+                             "health": {k: v for k, v in (st.get("telegram_health") or {}).items() if v},
+                             "configured": bool(cfg.monitor.bot_token)},
+                "slack": {"on": bool(self.slack), "configured": cfg.slack.configured,
+                          "error": self.slack_error or (self.slack.error if self.slack else "")},
+                "github": {"enabled": cfg.github.enabled, "error": (st.get("github") or {}).get("error", ""),
+                           "last_sync": (st.get("github") or {}).get("last_sync", "")}}
+
+    def connection_test(self, b: dict) -> dict:
+        from . import connections as cx
+        from .config import parse_llm
+        if b.get("member"):
+            m = self.rt.cfg.member(str(b["member"]))
+            if not m:
+                raise ValueError("no such person")
+            conf = self.rt.cfg.llm_for(m)
+        else:
+            conf = parse_llm({k: v for k, v in b.items() if k in ("provider", "model", "base_url") and v},
+                             {"provider": self.rt.cfg.llm.provider, "model": self.rt.cfg.llm.model,
+                              "base_url": self.rt.cfg.llm.base_url, "api_key_env": self.rt.cfg.llm.api_key_env})
+        r = cx.test(conf)
+        if r["ok"]:                                            # working again: clear the old failures
+            people = [x.id for x in self.rt.cfg.team if self.rt.cfg.llm_for(x) == conf]
+            def fn(s):
+                for mid in people:
+                    if (s.get("heartbeat") or {}).get(mid):
+                        s["heartbeat"][mid].update(error="", fails=0)
+            self.rt.ws.update_state(fn)
+        return r
+
+    def connection_login(self, provider: str) -> dict:
+        from . import connections as cx
+        return cx.login(provider, self.rt.ws.root / ".jm" / "logs")
 
     def test_model(self, b: dict) -> dict:
         """Setup/Settings: does this provider answer? (One tiny call.)"""
@@ -567,6 +619,14 @@ class App:
         for k in ("name", "description", "lead", "repo", "status"):
             if k in b:
                 p[k] = str(b[k]).strip()
+        if "channel" in b:
+            ch = str(b.get("channel") or "").lower()
+            if ch and ch not in ("telegram", "slack", "console"):
+                raise ValueError("Channel is telegram, slack or console.")
+            if ch:
+                p["channel"] = ch
+            else:
+                p.pop("channel", None)
         if "telegram_chat_id" in b:
             v = str(b.get("telegram_chat_id") or "").strip()
             if v and not v.lstrip("-").isdigit():
@@ -641,7 +701,7 @@ class App:
                 "budget": raw.get("budget", {}), "telegram": raw.get("telegram", {}),
                 "workspace": raw.get("workspace", {}), "executor": raw.get("executor", {}),
                 "permissions": self.rt.cfg.permissions, "slack": {k: v for k, v in (raw.get("slack") or {}).items()},
-                "sync": {"mirror_owner": self.rt.cfg.mirror_owner}}
+                "sync": {"mirror_owner": self.rt.cfg.mirror_owner, "channel": self.rt.cfg.default_channel_raw}}
 
     @config_txn
     def settings_save(self, b: dict) -> dict:
@@ -694,6 +754,11 @@ class App:
             raw.setdefault("slack", {})["owner_user_ids"] = ids
         if "github_prs" in b and raw.get("github"):
             raw["github"]["prs"] = bool(b["github_prs"])
+        if "channel" in b:
+            ch = str(b["channel"] or "").lower()
+            if ch and ch not in ("telegram", "slack", "console"):
+                raise ValueError("Channel is telegram, slack or console.")
+            raw.setdefault("sync", {})["channel"] = ch
         if "mirror_owner" in b:
             raw.setdefault("sync", {})["mirror_owner"] = bool(b["mirror_owner"])
         self.save_raw(raw)
@@ -864,6 +929,9 @@ def make_handler(app: App, key: str):
                     "/api/rooms": lambda: app.rooms(),
                     "/api/pulse": lambda: app.pulse(),
                     "/api/github/status": lambda: app.github_status(),
+                    "/api/connections": lambda: app.connections(),
+                    "/api/opencode/models": lambda: __import__("james_monitoring.connections", fromlist=["x"]).opencode_models(),
+                    "/api/connections/login": lambda: __import__("james_monitoring.connections", fromlist=["x"]).login_state(q.get("provider", "")),
                     "/api/member": lambda: app.member_detail(q.get("id", "")),
                     "/api/project": lambda: app.project_detail(q.get("id", "")),
                     "/api/team": lambda: app.admin.state(),
@@ -939,6 +1007,8 @@ def make_handler(app: App, key: str):
                     "/api/telegram/detect": lambda: app.telegram_detect(str(b.get("what", "owner"))),
                     "/api/telegram/code": lambda: app.telegram_code(),
                     "/api/github/connect": lambda: app.github_connect(b),
+                    "/api/connections/test": lambda: app.connection_test(b),
+                    "/api/connections/login": lambda: app.connection_login(str(b.get("provider", ""))),
                     "/api/github/sync": lambda: app.github_sync(),
                     "/api/slack/code": lambda: {"code": setattr(app, "_slack_code", f"{secrets.randbelow(900000) + 100000}")
                                                or app._slack_code},

@@ -85,7 +85,8 @@ class TelegramGateway:
             return self.cfg.group_chat_id, None
         if room.startswith(PROJECT_ROOM):
             p = self.cfg.projects.get(room[len(PROJECT_ROOM):])
-            return (p.telegram_chat_id if p else 0), None
+            # its own group if it has one, otherwise the HQ group with a "#project ·" label
+            return ((p.telegram_chat_id or self.cfg.group_chat_id) if p else 0), None
         m = self.cfg.member(room)
         return (self.cfg.owner_user_id if m else 0), (m.id if m else None)
 
@@ -167,6 +168,10 @@ class TelegramGateway:
         owner = self.rt.owner_id if self.rt else ""
         if who == owner:
             text = f"🗨 {self.cfg.owner_name} (via {msg.get('via') or 'console'}): {text}"
+        if room.startswith(PROJECT_ROOM):
+            p = self.cfg.projects.get(room[len(PROJECT_ROOM):])
+            if p and not p.telegram_chat_id:
+                text = f"#{p.id} · {text}"
         if dm_member:
             speaker = dm_member                          # the DM with <member> is that member's bot
             if dm_member not in self.apps:               # no own bot → through the manager's, clearly labelled
@@ -235,7 +240,14 @@ class TelegramGateway:
             return member_id, text
         if member_id != self.cfg.monitor.id:
             return None, text                             # only the manager's bot reads groups: handled once
-        return self._chat_room(chat.id), text
+        room = self._chat_room(chat.id)
+        m = re.match(r"^#([\w-]+)[\s:·-]+(.*)$", text, re.S)
+        if room == TEAM_ROOM and m:                       # "#site …" in the HQ group → the site project's room
+            pid = next((k for k, v in self.cfg.projects.items()
+                        if m.group(1).lower() in (k.lower(), v.name.lower().replace(" ", "-"))), None)
+            if pid and not self.cfg.projects[pid].telegram_chat_id:
+                return PROJECT_ROOM + pid, m.group(2).strip()
+        return room, text
 
     def _first_time(self, update: Update) -> bool:
         """Each Telegram message is handled once (edits and redeliveries don't make agents act twice)."""

@@ -294,9 +294,19 @@ function toast(text, tone = "success") {
   const t = h("div", {class: "toast"}, h("span", {class: "ico " + tone, style: "width:22px;height:22px"}, icon(tone === "danger" ? "alert" : "check")), text);
   $("#toasts").append(t); setTimeout(() => t.remove(), 3200);
 }
-const PROVIDERS = [["claude-code", "Claude subscription — claude CLI, no API key"], ["codex-cli", "ChatGPT / Codex subscription — codex CLI, no API key"], ["anthropic", "Anthropic API key"], ["openai", "OpenAI-compatible API — OpenAI, Ollama, OpenRouter"]];
+const PROVIDERS = [["claude-code", "Claude subscription — claude CLI, no API key"], ["codex-cli", "ChatGPT / Codex subscription — codex CLI, no API key"],
+  ["opencode", "OpenCode — any model: GLM, Claude, GPT, Gemini, free models"], ["anthropic", "Anthropic API key"], ["openai", "OpenAI-compatible API — OpenAI, Ollama, OpenRouter"]];
 const LEVEL_TXT = {green: "Just do it", yellow: "Do it, tell me", red: "Ask me first"};
 const ACTION_TXT = {create_task: "Create tasks", update_task: "Update tasks (status, dates)", write_file: "Save documents (docs/)", message_agent: "Message a teammate", post_group: "Post in All hands", post_room: "Post in a project room", run_code: "Run the coding agent (branch only)"};
+// Model ids for OpenCode (free models first) — suggestions in every model box.
+async function modelSuggest(input, providerEl) {
+  const id = "models-" + Math.random().toString(36).slice(2); const dl = h("datalist", {id}); input.setAttribute("list", id); input.after(dl);
+  const fill = async () => { if (providerEl.value !== "opencode") { dl.put(); return; }
+    modelSuggest.cache = modelSuggest.cache || await api("/api/opencode/models").catch(() => []);
+    const list = [...modelSuggest.cache].sort((a, b) => (b.startsWith("opencode/") - a.startsWith("opencode/")));
+    dl.put(list.map(m => h("option", {value: m}, m.startsWith("opencode/") ? "free" : ""))); input.placeholder = "e.g. opencode/big-pickle (free), zhipuai/glm-4.6, anthropic/claude-sonnet-4-5"; };
+  providerEl.addEventListener("change", fill); fill();
+}
 const STATUS_TONE = {"on track": "success", "at risk": "warning", "blocked": "danger", "not started": ""};
 const PRI_TONE = {P0: "danger", P1: "warning", P2: ""};
 const TASK_TONE = {todo: "", doing: "accent", blocked: "danger", review: "warning", done: "success", cut: ""};
@@ -536,6 +546,9 @@ async function vOverview() {
     pageHeader("Overview", `${S.company} · what needs you, who's on track, what's moving`,
       h("button", {class: "btn outline", onclick: runWork, "data-busy": "work"}, icon("zap"), "Work session now"), h("button", {class: "btn secondary", onclick: runReport, "data-busy": "report"}, icon("reports"), "Write report")),
     d.push_error ? h("div", {class: "card card-b", style: "margin-bottom:12px;border-color:rgba(220,38,38,.3);color:var(--danger)"}, "Team repo can't push: " + d.push_error) : null,
+    d.people.some(p => p.error) ? h("div", {class: "card card-b row", style: "margin-bottom:12px;border-color:rgba(220,38,38,.3);background:var(--danger-muted)"}, icon("alert"),
+      h("span", {class: "grow small"}, h("b", {}, "AI model problem: "), d.people.filter(p => p.error).map(p => `${p.name} — ${p.error}`).join(" · ")),
+      h("button", {class: "btn primary sm", onclick: () => { go("settings"); setTimeout(() => document.getElementById("set-connections")?.scrollIntoView(), 400); }}, "Fix it")) : null,
     d.queued ? h("div", {class: "card card-b small", style: "margin-bottom:12px"}, `${d.queued} message${d.queued === 1 ? "" : "s"} waiting for paused or over-budget people — answered when they can work again.`) : null,
     h("div", {class: "metrics"}, metric("Open tasks", d.tasks.open), metric("Needs your review", d.tasks.review, d.tasks.review ? "warning" : ""),
       metric("Blocked", d.tasks.blocked, d.tasks.blocked ? "danger" : ""), metric("Overdue", d.tasks.overdue, d.tasks.overdue ? "danger" : ""), metric("Done", d.tasks.done, "success")),
@@ -630,8 +643,9 @@ function chatPanel(room, opts = {}) {
         if (day !== lastDay) { lastDay = day; msgs.append(h("div", {class: "day"}, day === new Date().toDateString() ? "Today" : new Date(m.ts * 1000).toLocaleDateString([], {weekday: "short", month: "short", day: "numeric"}))); }
         const bubble = h("div", {class: "bubble"}, mine ? m.text : h("div", {class: "md", html: md(m.text)}));
         if (m.kind === "ask" && m.ask_id) { const slot = h("div", {}, askFooter(m.ask_id)); cards.push([m.ask_id, slot]); bubble.append(slot); }
-        if (m.kind === "notice" && /^⚠️/.test(m.text) && !mine && lastSent) bubble.append(h("div", {style: "margin-top:6px"},
-          h("button", {class: "btn outline sm", onclick: () => send(lastSent)}, icon("refresh"), "Try again")));
+        if (/^⚠️ (I couldn't think|My AI model)/.test(m.text) || (m.kind === "notice" && /^⚠️/.test(m.text))) bubble.append(h("div", {class: "row", style: "margin-top:6px"},
+          lastSent ? h("button", {class: "btn outline sm", onclick: () => send(lastSent)}, icon("refresh"), "Try again") : null,
+          /model/.test(m.text) ? h("button", {class: "btn outline sm", onclick: () => { go("settings"); setTimeout(() => document.getElementById("set-connections")?.scrollIntoView(), 400); }}, "Fix the model") : null));
         msgs.append(h("div", {class: "msg" + (mine ? " me" : "") + (sys ? " system" : "") + (m.kind === "ask" ? " ask" : "") + (m.kind === "notice" ? " notice" : "") + (m.kind === "internal" ? " internal" : "")},
           sys ? null : (mine ? avatar(S.owner, "sm") : avatar(nameOf(m.who), "sm")),
           h("div", {}, h("div", {class: "meta"}, (mine ? "You" : nameOf(m.who)) + (m.kind === "internal" ? " · to the team" : "") + " · " + new Date(m.ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}),
@@ -812,7 +826,7 @@ async function vProject() {
   const tabs = [["overview", "Overview", "overview"], ["chat", "Room", "hash"], ["board", "Board", "board", p.counts.open], ["team", "Team", "team", p.members.length]];
   const head = h("div", {class: "phead"},
     h("div", {class: "row", style: "flex-wrap:nowrap;align-items:flex-start;gap:14px"}, projMark(p, "lg"),
-      h("div", {class: "grow", style: "min-width:0"}, h("div", {class: "row"}, h("h1", {}, p.name), badge(p.status, P_TONE[p.status])),
+      h("div", {class: "grow", style: "min-width:0"}, h("div", {class: "row"}, h("h1", {}, p.name), badge(p.status, P_TONE[p.status]), badge("room on " + (p.home ? p.home[0].toUpperCase() + p.home.slice(1) : "console only"), "outline")),
         h("p", {class: "muted", style: "margin:4px 0 0;font-size:13px;max-width:760px"}, p.description || "No brief yet — add one so everyone knows the goal.")),
       h("div", {class: "row actions"}, h("button", {class: "btn outline sm", onclick: () => projectSheet(projOf(p.id))}, "Edit"), h("button", {class: "btn primary sm", onclick: () => newTaskSheet({project: p.id})}, icon("plus"), "Task"))),
     h("div", {class: "pmeta"},
@@ -879,14 +893,17 @@ function projectSheet(p = {}) {
   const f = {name: h("input", {value: p.name || "", placeholder: "e.g. Mobile app"}), description: h("textarea", {placeholder: "What it is and the goal — everyone on the project reads this"}, p.description || ""),
     lead: h("select", {}, h("option", {value: ""}, "—"), S.members.map(m => h("option", {value: m.id, selected: m.id === p.lead}, m.name))),
     status: h("select", {}, ["active", "paused", "done"].map(s => h("option", {value: s, selected: s === (p.status || "active")}, s))), repo: h("input", {value: p.repo || "", placeholder: "optional · local path of its git repo, for code tasks"}),
-    tg: h("input", {class: "mono", value: p.telegram_chat_id || "", placeholder: "optional · a Telegram group just for this project (-100…)"})};
+    tg: h("input", {class: "mono", value: p.telegram_chat_id || "", placeholder: "optional · a Telegram group just for this project (-100…)"}),
+    channel: h("select", {}, [["", "Company default"], ["telegram", "Telegram"], ["slack", "Slack"], ["console", "Console only"]].map(([v, t]) => h("option", {value: v, selected: (p.channel || "") === v}, t)))};
   const picked = new Set(p.members || []);
   const chips = p.id ? null : h("div", {class: "chipsel"}, S.members.map(m => { const c = h("span", {class: "chip" + (picked.has(m.id) ? " on" : ""), onclick: () => { picked.has(m.id) ? picked.delete(m.id) : picked.add(m.id); c.classList.toggle("on"); }}, avatar(m.name, "sm"), m.name); return c; }));
   const err = h("div", {class: "err"});
   openSheet(p.id ? "Edit project" : "New project", h("label", {class: "f"}, "Name"), f.name, h("label", {class: "f"}, "Brief"), f.description,
     chips ? [h("label", {class: "f"}, "Team"), chips, h("div", {class: "xs muted", style: "margin-top:4px"}, "You can change this any time on the project's Team tab.")] : null,
-    h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Lead"), f.lead), h("div", {}, h("label", {class: "f"}, "Status"), f.status)), h("label", {class: "f"}, "Code repo"), f.repo, h("label", {class: "f"}, "Telegram group for this room"), f.tg,
-    h("div", {class: "row", style: "margin-top:14px"}, h("button", {class: "btn primary", onclick: async () => { try { const r = await api("/api/projects", {id: p.id, name: f.name.value, description: f.description.value, lead: f.lead.value, status: f.status.value, repo: f.repo.value, telegram_chat_id: f.tg.value, members: [...picked]});
+    h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Lead"), f.lead), h("div", {}, h("label", {class: "f"}, "Status"), f.status)), h("label", {class: "f"}, "Code repo"), f.repo, h("label", {class: "f"}, "This project's room lives on"), f.channel,
+    h("div", {class: "xs muted", style: "margin-top:4px"}, "One channel per project, so messages always land in one place. On Telegram without its own group, it uses the HQ group as “#project · …”."),
+    h("label", {class: "f"}, "Telegram group for this room (optional)"), f.tg,
+    h("div", {class: "row", style: "margin-top:14px"}, h("button", {class: "btn primary", onclick: async () => { try { const r = await api("/api/projects", {id: p.id, name: f.name.value, description: f.description.value, lead: f.lead.value, status: f.status.value, repo: f.repo.value, telegram_chat_id: f.tg.value, channel: f.channel.value, members: [...picked]});
       toast("Project saved"); closeSheet(); S = await api("/api/state"); if (!p.id) openProject(r.id); else boot(); } catch (e) { err.textContent = e.message; } }}, icon("check"), p.id ? "Save" : "Create project"), err));
   f.name.focus();
 }
@@ -1011,6 +1028,7 @@ async function memberSheet(id) {
   const role = h("input", {value: m.role}), persona = h("textarea", {class: "mono", style: "min-height:260px;font-size:12px"}, m.persona);
   const prov = h("select", {}, h("option", {value: ""}, "Company default"), PROVIDERS.map(([v, t]) => h("option", {value: v, selected: m.llm.own && m.llm.provider === v}, t)));
   const model = h("input", {value: m.llm.own ? m.llm.model : "", placeholder: "blank = the tool's default · e.g. sonnet, opus, gpt-5-codex"});
+  setTimeout(() => modelSuggest(model, prov), 0);
   const perms = Object.fromEntries(S.action_types.map(a => [a, h("select", {}, h("option", {value: ""}, `Company (${LEVEL_TXT[S.permissions[a]]})`), ["green", "yellow", "red"].map(l => h("option", {value: l, selected: m.permissions[a] === l}, LEVEL_TXT[l])))]));
   const paused = (S.paused || []).includes(id), err = h("div", {class: "err"});
   openSheet(m.name,
@@ -1065,6 +1083,52 @@ async function vReports() {
 }
 
 // ------------------------------------------------------------------ settings
+// Connections: every model the team uses (installed? logged in? answering?) + git, GitHub, Telegram, Slack.
+function connectionsCard() {
+  const body = h("div", {class: "list"}, h("div", {class: "li"}, h("span", {class: "spin"}), " Checking connections…"));
+  const el = h("div", {class: "card", id: "set-connections", style: "margin-bottom:16px;scroll-margin-top:70px"},
+    h("div", {class: "card-h"}, icon("zap"), h("h3", {}, "Connections"), h("span", {class: "grow"}), h("button", {class: "btn ghost sm", onclick: () => load()}, icon("refresh"), "Check again")), body);
+  const dot = ok => h("span", {class: "dot " + (ok === true ? "on-track" : ok === false ? "blocked" : "at-risk"), style: "margin-top:6px"});
+  const row = (ok, title, sub, ...actions) => h("div", {class: "li"}, dot(ok), h("div", {class: "grow"}, h("div", {class: "t"}, title), sub), h("div", {class: "row"}, actions));
+  const results = connectionsCard.results || (connectionsCard.results = {});
+  async function load() {
+    let c; try { c = await api("/api/connections"); } catch (e) { return body.put(h("div", {class: "li err"}, e.message)); }
+    body.put(
+      c.models.map(m => { const key = m.raw_provider + "|" + m.model; const out = h("div", {class: "xs", style: "margin-top:4px"}, results[key] || null);
+        const who = m.people.map(nameOf).join(", ") || "nobody yet";
+        const failing = Object.entries(m.failing || {});
+        const test = h("button", {class: "btn outline sm", onclick: async () => { test.disabled = true; out.put(h("span", {class: "spin"}), " asking the model…");
+          const r = await api("/api/connections/test", {member: m.people[0] || "", provider: m.people.length ? "" : m.raw_provider}).catch(e => ({ok: false, error: e.message}));
+          results[key] = r.ok ? badge(`Works · answered in ${r.seconds}s`, "success") : badge(r.error || "failed", "danger");
+          out.put(results[key]); test.disabled = false; if (r.ok) setTimeout(load, 800); }}, "Test");
+        const login = m.can_login && !m.ok ? h("button", {class: "btn primary sm", onclick: () => startLogin(m.provider, out, load)}, "Log in") : null;
+        return row(m.ok && !failing.length ? true : m.ok ? null : false, `${m.label} · ${m.model}`,
+          h("div", {class: "xs muted"}, (m.default ? "Company default · " : "") + "used by " + who + " · " + m.detail,
+            m.fix ? h("div", {style: "color:var(--warning);margin-top:2px"}, m.fix) : null,
+            failing.map(([mid, e]) => h("div", {class: "err xs", style: "margin-top:2px"}, `${nameOf(mid)}'s last call failed: ${e}`)), out), login, test); }),
+      row(c.git.ok, "Git identity", h("div", {class: "xs muted"}, `${c.git.name} <${c.git.email}> — every team commit and PR is yours`, c.git.fix ? h("div", {style: "color:var(--warning)"}, c.git.fix) : null)),
+      row(c.github.enabled ? !c.github.error : null, "GitHub", h("div", {class: "xs muted"}, c.github.enabled ? (c.github.error || "board mirror on" + (c.github.last_sync ? " · synced " + new Date(c.github.last_sync).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "")) : "optional — not connected"), h("button", {class: "btn ghost sm", onclick: () => document.getElementById("set-github")?.scrollIntoView({behavior: "smooth"})}, "Set up")),
+      row(c.telegram.on ? !Object.keys(c.telegram.health).length : c.telegram.configured ? false : null, "Telegram", h("div", {class: "xs muted"}, c.telegram.on ? "running" : c.telegram.configured ? (c.telegram.error || "not running") : "optional — not connected",
+        Object.entries(c.telegram.health).map(([mid, e]) => h("div", {class: "err xs"}, `${nameOf(mid)}'s bot: ${e}`))), h("button", {class: "btn ghost sm", onclick: () => document.getElementById("set-telegram")?.scrollIntoView({behavior: "smooth"})}, "Set up")),
+      row(c.slack.on ? !c.slack.error : c.slack.configured ? false : null, "Slack", h("div", {class: "xs muted"}, c.slack.on ? (c.slack.error || "running") : c.slack.configured ? (c.slack.error || "not running") : "optional — not connected"), h("button", {class: "btn ghost sm", onclick: () => document.getElementById("set-slack")?.scrollIntoView({behavior: "smooth"})}, "Set up")));
+  }
+  load();
+  return el;
+}
+async function startLogin(provider, out, done) {
+  out.put(h("span", {class: "spin"}), " starting sign-in…");
+  const r = await api("/api/connections/login", {provider}).catch(e => ({started: false, error: e.message}));
+  if (!r.started) return out.put(badge(r.error || "couldn't start", "danger"));
+  const link = u => u ? [" If it didn't open: ", h("a", {href: u, target: "_blank", rel: "noopener"}, "open the sign-in page")] : null;
+  out.put("Your browser is opening to sign in — finish there, then come back.", link(r.url));
+  const t = setInterval(async () => {
+    const s = await api("/api/connections/login?provider=" + encodeURIComponent(provider)).catch(() => null);
+    if (!s) return;
+    if (s.running) { if (s.url) out.put("Sign in in your browser, then come back.", link(s.url)); return; }
+    clearInterval(t); out.put(s.exit === 0 ? badge("Signed in", "success") : badge("Sign-in didn't finish: " + (s.output || "").split("\n").filter(Boolean).pop(), "danger")); setTimeout(done, 700);
+  }, 2000); timers.push(t);
+}
+
 function githubCard() {
   const g = S.github, out = h("div", {class: "small", style: "min-height:18px;margin-top:8px"}), who = h("span", {}, badge("Checking gh…"));
   api("/api/github/status").then(r => who.put(r.ok ? [badge("gh: @" + r.login, "success"), r.projects_ok ? null : badge("needs Projects access", "warning")] : badge(r.error || "gh not signed in", "danger"),
@@ -1075,7 +1139,7 @@ function githubCard() {
     try { const r = await api("/api/github/connect", {owner: owner.value, repo: repo.value, project: number.value, prs: prs.checked}); out.put(badge(`Project #${r.project} connected`, "success"), " ", r.url ? h("a", {href: r.url, target: "_blank", rel: "noopener"}, "open it") : null); S = await api("/api/state"); }
     catch (e) { out.put(badge(e.message, "danger")); } connect.disabled = false; }}, g.enabled ? "Save" : "Connect");
   const sync = h("button", {class: "btn outline sm", "data-busy": "gh", onclick: () => busy("gh", "Syncing", async () => { try { const r = await api("/api/github/sync", {}); out.put(badge(r.error ? r.error : `↓ ${r.pulled} from GitHub · ↑ ${r.pushed} to GitHub`, r.error ? "danger" : "success")); } catch (e) { out.put(badge(e.message, "danger")); } })}, icon("refresh"), "Sync now");
-  return h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon("board"), h("h3", {}, "GitHub")),
+  return h("div", {class: "card", id: "set-github", style: "margin-bottom:16px;scroll-margin-top:70px"}, h("div", {class: "card-h"}, icon("board"), h("h3", {}, "GitHub")),
     h("div", {class: "card-b"}, h("p", {class: "small muted", style: "margin:0 0 10px"}, "Optional. Every task becomes an issue on a GitHub Project board you can run from github.com or the GitHub app — moving a card, editing its fields or commenting comes back here through the same rules (Done = you accept). Code tasks can open real pull requests. All of it as your account (", h("code", {class: "mono"}, "gh"), ")."),
       h("div", {class: "row"}, who, g.enabled ? badge(`Project #${g.project}`, "success") : badge("Not connected"), g.last_sync ? badge("synced " + new Date(g.last_sync).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})) : null, g.url ? h("a", {class: "small", href: g.url, target: "_blank", rel: "noopener"}, "open board ↗") : null),
       g.error ? h("div", {class: "err", style: "margin-top:6px"}, g.error) : null,
@@ -1090,7 +1154,7 @@ function slackCard(slackIds) {
   const bot = h("input", {type: "password", placeholder: "Bot token · xoxb-…"}), app = h("input", {type: "password", placeholder: "App-level token · xapp-… (connections:write)"});
   const act = (path, wait, done) => async () => { out.textContent = wait; try { const r = await api(path, {bot_token: bot.value, app_token: app.value}); if (r.ok === false) return out.put(badge(r.error, "danger")); out.put(badge(done(r), "success")); S = await api("/api/state"); setTimeout(render, 900); } catch (e) { out.put(badge(e.message, "danger")); } };
   const rooms = Object.entries(sl.channels || {});
-  return h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon("slack"), h("h3", {}, "Slack")),
+  return h("div", {class: "card", id: "set-slack", style: "margin-bottom:16px;scroll-margin-top:70px"}, h("div", {class: "card-h"}, icon("slack"), h("h3", {}, "Slack")),
     h("div", {class: "card-b"}, h("p", {class: "small muted", style: "margin:0 0 10px"}, "Optional. One Slack app for the whole team — everyone posts under their own name. Channels stay in sync with this console and Telegram. Setup takes 3 minutes: ", h("a", {href: "https://api.slack.com/apps?new_app=1", target: "_blank", rel: "noopener"}, "create the app from our manifest"), " (docs/SLACK.md)."),
       h("div", {class: "row"}, sl.connected ? badge("Running" + (sl.workspace ? " · " + sl.workspace : ""), "success") : badge(sl.tokens ? "Not running" : "Not connected"),
         sl.owner_ids.length ? badge("You're set", "success") : badge("Your member id missing", "warning"), rooms.length ? badge(`${rooms.length} channels`, "success") : badge("No channels yet", "warning")),
@@ -1120,14 +1184,18 @@ async function vSettings() {
     owner_telegram_id: h("input", {class: "mono", value: s.owner?.telegram_user_id || ""}), group_chat_id: h("input", {class: "mono", value: s.telegram?.group_chat_id || ""}),
     git_name: h("input", {value: s.owner?.git_name || S.git.name || ""}), git_email: h("input", {type: "email", value: s.owner?.git_email || S.git.email || ""})};
   const err = h("div", {class: "err"});
+  setTimeout(() => modelSuggest(f.model, f.provider), 0);
   const perms = Object.fromEntries(S.action_types.map(a => [a, h("select", {}, ["green", "yellow", "red"].map(lv => h("option", {value: lv, selected: (s.permissions || {})[a] === lv}, LEVEL_TXT[lv])))]));
   const mirror = h("input", {type: "checkbox", checked: s.sync?.mirror_owner !== false});
+  const channel = h("select", {"aria-label": "Where the team talks to you"}, [["", `Automatic — whatever is connected (now: ${S.delivery.home || "console only"})`], ["telegram", "Telegram"], ["slack", "Slack"], ["console", "Console only"]]
+    .map(([v, t]) => h("option", {value: v, selected: (s.sync?.channel || "") === v}, t)));
   const slackIds = h("input", {class: "mono", value: (s.slack?.owner_user_ids || []).join(", "), placeholder: "U012AB3CD — Slack: your profile → ⋮ → Copy member ID"});
   const save = async () => { err.textContent = ""; try { await api("/api/settings", {...Object.fromEntries(Object.entries(f).map(([k, e]) => [k, e.value])), work_sessions: f.work_sessions.value.split(","),
-      permissions: Object.fromEntries(Object.entries(perms).map(([k, e]) => [k, e.value])), mirror_owner: mirror.checked, slack_owner_ids: slackIds.value}); toast("Settings saved — restarted"); await refresh(); } catch (e) { err.textContent = e.message; } };
+      permissions: Object.fromEntries(Object.entries(perms).map(([k, e]) => [k, e.value])), mirror_owner: mirror.checked, slack_owner_ids: slackIds.value, channel: channel.value}); toast("Settings saved — restarted"); await refresh(); } catch (e) { err.textContent = e.message; } };
   const tgToken = h("input", {type: "password", placeholder: "Manager bot token from @BotFather"}), tgOut = h("div", {class: "small", style: "min-height:18px;margin-top:8px"});
   const tg = S.telegram;
-  const card = (title, ic, ...kids) => h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon(ic), h("h3", {}, title)), h("div", {class: "card-b"}, kids));
+  const CARD_ID = {"Company": "set-company", "AI model": "set-ai", "Permissions": "set-permissions", "Schedule & budget": "set-schedule", "Telegram": "set-telegram"};
+  const card = (title, ic, ...kids) => h("div", {class: "card", id: CARD_ID[title], style: "margin-bottom:16px;scroll-margin-top:70px"}, h("div", {class: "card-h"}, icon(ic), h("h3", {}, title)), h("div", {class: "card-b"}, kids));
   const detect = (what, waitMsg) => async () => {
     try {
       if (what === "owner") { const c = await api("/api/telegram/code", {}); waitMsg = `Send ${c.code} to the manager's bot in Telegram (waiting 90s)…`; }
@@ -1141,8 +1209,11 @@ async function vSettings() {
   if (!main._dirtyHook) { main._dirtyHook = true;
     const mark = e => { if (VIEW === "settings" && !e.target.closest?.(".slack-tokens")) main.querySelector(".dirty")?.replaceChildren("Unsaved changes"); };
     main.addEventListener("input", mark); main.addEventListener("change", mark); }
+  const jump = id => () => document.getElementById(id)?.scrollIntoView({behavior: "smooth", block: "start"});
   $("#main").put(pageHeader("Settings", "Changes apply when you save — the team reloads in the background (work in progress keeps going).", dirty, h("button", {class: "btn primary", onclick: save}, icon("check"), "Save & restart")),
-    S.llm_error ? h("div", {class: "card card-b", style: "margin-bottom:12px;border-color:rgba(220,38,38,.3);color:var(--danger)"}, "Model problem: " + S.llm_error) : null, err,
+    h("div", {class: "chips", style: "margin:-6px 0 14px"}, [["set-connections", "Connections"], ["set-company", "Company"], ["set-ai", "AI model"], ["set-permissions", "Permissions"], ["set-schedule", "Schedule"], ["set-github", "GitHub"], ["set-telegram", "Telegram"], ["set-slack", "Slack"]]
+      .map(([id, t]) => h("span", {class: "badge outline click", onclick: jump(id)}, t))),
+    connectionsCard(), err,
     h("div", {class: "cols"}, h("div", {},
       card("Company", "overview", h("div", {class: "three"}, h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Name"), f.company), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Owner"), f.owner_name), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Timezone"), f.timezone)),
         h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Your git name (commits & PRs are yours)"), f.git_name), h("div", {}, h("label", {class: "f"}, "Your git email"), f.git_email))),
@@ -1150,7 +1221,9 @@ async function vSettings() {
         h("label", {class: "f"}, "API key"), f.api_key, h("label", {class: "f"}, "Coding tool for code tasks"), f.coding_tool),
       card("Permissions", "approvals", h("p", {class: "small muted", style: "margin:0 0 10px"}, "What people may do on their own. “Ask me first” turns the action into an Approve/Reject card — it runs only after you approve. Money, anything public, production, deleting and legal always ask. Override per person in their profile."),
         h("div", {class: "perm"}, S.action_types.map(a => [h("span", {class: "small"}, ACTION_TXT[a] || a), perms[a]]))),
-      card("Sync", "refresh", h("label", {class: "row small", style: "gap:8px;flex-wrap:nowrap"}, mirror, h("span", {}, "Show my messages in every channel — what I write in the console also appears on Telegram and Slack (and the other way round), so each one is the full conversation."))),
+      card("Sync", "refresh", h("label", {class: "f", style: "margin-top:0"}, "Where the team talks to you — All hands and the 1:1s (projects can choose their own)"), channel,
+        h("div", {class: "xs muted", style: "margin:4px 0 10px"}, "Each room lives on one channel — Telegram or Slack, never both — so a conversation is never split. Writing about a room on the other one gets a pointer back. The console always shows everything."),
+        h("label", {class: "row small", style: "gap:8px;flex-wrap:nowrap"}, mirror, h("span", {}, "Show my messages in every channel — what I write in the console also appears on Telegram and Slack (and the other way round), so each one is the full conversation."))),
       card("Schedule & budget", "clock", h("div", {class: "two"}, h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Daily report"), f.daily_report), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Daily tokens per person"), f.budget)),
         h("label", {class: "f"}, "Work sessions (Mon–Sat — the team works on its own)"), f.work_sessions)),
       h("div", {},

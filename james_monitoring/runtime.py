@@ -561,12 +561,12 @@ class Runtime:
             why = "paused" if self.paused(m.id) else "over today's budget" if cap and self._usage_today(m.id) >= cap else ""
             if why:
                 self._enqueue(m, ev, why)                 # never lost: answered when they can work again
-                return (f"⏸ {m.name} is paused — your message is queued and will be answered on /resume."
+                return ("⏸ I'm paused — your message is queued and I'll answer it when you /resume me."
                         if why == "paused" else
-                        f"💸 {m.name} hit today's budget ({cap:,} tokens) — your message is queued for when "
-                        f"the budget resets or is raised.")
+                        f"💸 I've used today's budget ({cap:,} tokens) — your message is queued; I'll answer when "
+                        f"the budget resets or you raise it.")
         elif cap and self._usage_today(m.id) >= cap:
-            return f"💸 {m.name} hit today's budget ({cap:,} tokens)."
+            return f"💸 I've used today's budget ({cap:,} tokens)."
 
         async with self._locks[m.id]:
             return await self._turn(m, ev)
@@ -608,7 +608,7 @@ class Runtime:
             llm = self.llm_for(m)
         except LLMError as e:
             self._heartbeat(m.id, error=str(e)[:200])
-            return f"⚠️ {m.name}'s model isn't available: {e}"
+            return f"⚠️ My AI model isn't available right now: {e}"
         room = self.room_of(m, ev)
         hkey = f"{m.id}:{room}"
         legacy = ((f"{m.id}:dm",) if room == m.id else (f"{m.id}:group",) if room == TEAM_ROOM else
@@ -619,10 +619,14 @@ class Runtime:
         user_msg = f"[{where} from {who}] {ev.text}"
         messages = [*hist, {"role": "user", "content": user_msg}]
 
+        last_error = ""
+
         async def call(msgs):
+            nonlocal last_error
             try:
                 res = await asyncio.to_thread(llm.complete, system, msgs)
             except LLMError as e:
+                last_error = " ".join(str(e).split())[:160]
                 log.error("llm failed for %s: %s", m.id, e)
                 self._heartbeat(m.id, error=str(e)[:200])
                 return None
@@ -637,7 +641,10 @@ class Runtime:
         for _round in range(MAX_READ_ROUNDS + 2):
             res = await call(messages)
             if res is None:
-                return f"⚠️ {m.name} couldn't think right now (model error). {self.cfg.monitor.name} has flagged it."
+                # Said in the first person: this message appears in the chat *as* this teammate.
+                told = "I've flagged it" if m.monitor else f"{self.cfg.monitor.name} has been told"
+                return (f"⚠️ I couldn't think right now (model error{': ' + last_error if last_error else ''}). "
+                        f"{told} — please try again in a moment.")
             parsed = parse_reply(res.text)
             if (not parsed.ok or res.truncated) and not retried:
                 retried = True                              # one retry: say exactly what went wrong

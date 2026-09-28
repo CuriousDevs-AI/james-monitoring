@@ -185,7 +185,7 @@ async def test_same_request_isnt_filed_twice_and_holds_its_task(tmp_path):
     assert len(rt.asks.all()) == 1
     assert rt.tasks.get(t.id).status == "blocked" and "ASK-001" in rt.tasks.get(t.id).blocked_on
     rt.llm.push({"reply": "Deploying.", "actions": []})
-    await hub.inbound("marcus", "approve ASK-001 go ahead", via="telegram")        # typed, not a button
+    await hub.inbound("marcus", "approve ASK-001 go ahead", via="console")         # typed, not a button
     await rt.drain()
     assert rt.asks.get("ASK-001").status == "approved" and rt.tasks.get(t.id).status == "doing"
 

@@ -41,6 +41,7 @@ class Project:
     lead: str = ""                 # member id
     status: str = "active"         # active | paused | done
     telegram_chat_id: int = 0      # optional Telegram group for this project's room
+    channel: str = ""              # telegram | slack | console — where this project's room lives ("" = company default)
 
 
 @dataclass
@@ -57,11 +58,13 @@ class LLMConfig:
         return os.environ.get(self.api_key_env, "") if self.api_key_env else ""
 
 
-CLI_PROVIDERS = ("claude-code", "claude_code", "claude-cli", "subscription", "codex-cli", "codex_cli", "fake")
+CLI_PROVIDERS = ("claude-code", "claude_code", "claude-cli", "subscription", "codex-cli", "codex_cli", "opencode",
+                 "open-code", "fake")
 KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 
 # What an agent may do on its own. green = just do it · yellow = do it and tell the owner · red = ask first
 # (the action waits as an Approve/Reject card and runs only after the owner approves).
+CHANNELS = ("telegram", "slack", "console")
 ACTION_TYPES = ["create_task", "update_task", "write_file", "message_agent", "post_group", "post_room", "run_code"]
 LEVELS = ("green", "yellow", "red")
 DEFAULT_PERMISSIONS = {**{a: "green" for a in ACTION_TYPES},
@@ -135,6 +138,7 @@ class Config:
     git_name: str = ""             # the owner's git identity: every commit/PR the team makes is theirs
     git_email: str = ""
     mirror_owner: bool = True      # show the owner's messages in every channel (console ↔ Telegram ↔ Slack)
+    default_channel_raw: str = ""  # telegram | slack | console — where All hands and the 1:1s live
 
     # -- helpers ---------------------------------------------------------
     def project_members(self, pid: str) -> list[Member]:
@@ -170,6 +174,18 @@ class Config:
 
     def llm_for(self, member: Member) -> "LLMConfig":
         return member.llm or self.llm
+
+    def channel_for(self, room: str, connected: tuple[str, ...] = ()) -> str:
+        """The one outside channel a room lives on: "telegram", "slack" or "" (console only).
+        Project setting → company setting (sync.channel) → whatever is connected (Telegram first)."""
+        ch = ""
+        if room.startswith("p-"):
+            p = self.projects.get(room[2:])
+            ch = p.channel if p and p.channel in CHANNELS else ""
+        ch = ch or (self.default_channel_raw if self.default_channel_raw in CHANNELS else "")
+        if not ch:
+            ch = "telegram" if "telegram" in connected else "slack" if "slack" in connected else "console"
+        return "" if ch == "console" else ch
 
     @property
     def git_author(self) -> tuple[str, str]:
@@ -274,7 +290,8 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
                                      push=bool(p.get("push", False)), name=str(p.get("name") or pid),
                                      description=str(p.get("description") or ""), lead=str(p.get("lead") or ""),
                                      status=str(p.get("status") or "active"),
-                                     telegram_chat_id=int(p.get("telegram_chat_id") or 0))
+                                     telegram_chat_id=int(p.get("telegram_chat_id") or 0),
+                                     channel=str(p.get("channel") or "").lower())
 
     sl = raw.get("slack") or {}
     slack = SlackConfig(bot_token_env=str(sl.get("bot_token_env") or "SLACK_BOT_TOKEN"),
@@ -342,4 +359,5 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         git_name=str(_get(raw, "owner.git_name", "") or ""),
         git_email=str(_get(raw, "owner.git_email", "") or ""),
         mirror_owner=bool(_get(raw, "sync.mirror_owner", True)),
+        default_channel_raw=str(_get(raw, "sync.channel", "") or "").lower(),
     )
