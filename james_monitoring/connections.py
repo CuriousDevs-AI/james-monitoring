@@ -17,14 +17,12 @@ from pathlib import Path
 
 from .config import CLI_PROVIDERS, LLMConfig
 
-LOGIN = {"claude-code": ["auth", "login", "--claudeai"], "codex-cli": ["login"]}
+LOGIN = {"claude-code": ["auth", "login", "--claudeai"], "codex-cli": ["login", "--device-auth"]}   # (for jm connection)
 LABEL = {"claude-code": "Claude subscription (claude CLI)", "codex-cli": "ChatGPT / Codex subscription (codex CLI)",
          "opencode": "OpenCode (any model, incl. free)",
          "anthropic": "Anthropic API", "openai": "OpenAI-compatible API", "fake": "Fake (tests)"}
 INSTALL = {"claude-code": "npm install -g @anthropic-ai/claude-code", "codex-cli": "npm install -g @openai/codex",
            "opencode": "npm install -g opencode-ai"}
-# Logins that need a terminal (an interactive picker): run them with `jm connection login <provider>`.
-TERMINAL_LOGIN = {"opencode": ["providers", "login"]}
 
 
 def _kind(provider: str) -> str:
@@ -66,7 +64,9 @@ def check(conf: LLMConfig) -> dict:
     """Fast readiness check for one model setup. `ok` = ready to use; `fix` = what to do if not."""
     kind = _kind(conf.provider)
     out = {"provider": kind, "label": LABEL.get(kind, conf.provider), "model": conf.model or "default",
-           "ok": False, "installed": True, "logged_in": None, "detail": "", "fix": "", "can_login": kind in LOGIN}
+           "ok": False, "installed": True, "logged_in": None, "detail": "", "fix": "",
+           "can_login": kind in ("claude-code", "codex-cli", "opencode"), "key_env": conf.api_key_env,
+           "login_target": (conf.model or "").split("/")[0] if kind == "opencode" else ""}
     if kind == "fake":
         return {**out, "ok": True, "logged_in": True, "detail": "no model (test mode)"}
     if kind == "opencode":
@@ -75,6 +75,7 @@ def check(conf: LLMConfig) -> dict:
             return {**out, "installed": False, "can_login": False, "detail": "CLI not installed",
                     "fix": f"Install it on this machine: {INSTALL[kind]}"}
         prov = (conf.model or "").split("/")[0]
+        out["can_login"] = bool(prov) and prov != "opencode"
         if not prov:
             return {**out, "can_login": False, "detail": "no model chosen",
                     "fix": "Pick a model like opencode/big-pickle (free) or zhipuai/glm-4.6 — see the list."}
@@ -87,9 +88,9 @@ def check(conf: LLMConfig) -> dict:
                     "detail": "free OpenCode model — no login (runs isolated)"}
         creds = opencode_credentials()
         logged = prov.lower() in creds
-        return {**out, "ok": logged, "logged_in": logged, "can_login": False,
+        return {**out, "ok": logged, "logged_in": logged,
                 "detail": f"{prov} credential found in OpenCode" if logged else f"no {prov} login in OpenCode",
-                "fix": "" if logged else "In a terminal on this machine: jm connection login opencode"}
+                "fix": "" if logged else f"Click Log in — sign in to {prov} (paste your key or code when asked)."}
     if kind in ("claude-code", "codex-cli"):
         b = _bin(kind)
         if not b:
@@ -108,7 +109,7 @@ def check(conf: LLMConfig) -> dict:
             logged = rc == 0 and "logged in" in text.lower() and "not logged in" not in text.lower()
             detail = text.strip().splitlines()[0][:120] if logged and text.strip() else "not logged in"
         return {**out, "ok": logged, "logged_in": logged, "detail": detail,
-                "fix": "" if logged else "Click Log in — your browser opens to sign in with your subscription."}
+                "fix": "" if logged else "Click Log in — sign in with your subscription (paste the code if asked)."}
     # API providers
     if not conf.model:
         return {**out, "detail": "no model id set", "fix": "Set a model id (e.g. from your provider's model list)."}
@@ -158,63 +159,216 @@ def opencode_models() -> list[str]:
     return [x.strip() for x in text.splitlines() if re.fullmatch(r"[\w.-]+/[\w.:/-]+", x.strip())]
 
 
-# -- login -------------------------------------------------------------------------------------
-_logins: dict[str, dict] = {}
+# -- login: the CLI's own sign-in, driven from the console -------------------------------------------------------
+# Each login runs in a pseudo-terminal, so the CLI behaves exactly as in a terminal: it prints its sign-in link or
+# one-time code, and waits for a pasted code ("Paste code here if prompted >") or an API key. The console shows the
+# live screen and sends what you type — nothing you paste is stored or echoed back.
+ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>78]")
+KEYS = {"enter": "\r", "up": "\x1b[A", "down": "\x1b[B", "space": " ", "tab": "\t", "esc": "\x1b"}
+
+
+def render_terminal(raw: str, width: int = 120) -> str:
+    """A tiny terminal: applies carriage returns, cursor moves and erases, so a menu that redraws itself shows
+    once — the way it looks in a real terminal — instead of every redraw stacked up."""
+    lines: list[list[str]] = [[]]
+    row = col = 0
+    i, n = 0, len(raw)
+    tok = re.compile(r"\x1b\[([0-9;?]*)([ -/]*)([@-~])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>78DEM]")
+    while i < n:
+        m = tok.match(raw, i) if raw[i] == "\x1b" else None
+        if m:
+            i = m.end()
+            if m.group(3) is None:
+                continue
+            args = [int(x) for x in (m.group(1) or "").lstrip("?").split(";") if x.isdigit()]
+            k, a = m.group(3), (args[0] if args else 1)
+            if k == "A":
+                row = max(0, row - a)
+            elif k == "B":
+                row += a
+            elif k == "C":
+                col += a
+            elif k == "D":
+                col = max(0, col - a)
+            elif k == "G":
+                col = max(0, a - 1)
+            elif k in "Hf":
+                row, col = max(0, (args[0] if args else 1) - 1), max(0, (args[1] if len(args) > 1 else 1) - 1)
+            elif k == "J":
+                while len(lines) <= row:
+                    lines.append([])
+                lines[row] = lines[row][:col]
+                if (args[0] if args else 0) == 0:
+                    del lines[row + 1:]
+            elif k == "K":
+                while len(lines) <= row:
+                    lines.append([])
+                mode = args[0] if args else 0
+                lines[row] = lines[row][:col] if mode == 0 else [" "] * col + lines[row][col + 1:] if mode == 1 else []
+            continue
+        c = raw[i]
+        i += 1
+        if c == "\r":
+            col = 0
+        elif c == "\n":
+            row += 1
+            col = 0
+        elif c == "\b":
+            col = max(0, col - 1)
+        elif c >= " " or c == "\t":
+            while len(lines) <= row:
+                lines.append([])
+            line = lines[row]
+            while len(line) < col:
+                line.append(" ")
+            if col < len(line):
+                line[col] = c
+            else:
+                line.append(c)
+            col += 1
+    return "\n".join("".join(x).rstrip() for x in lines).strip("\n")
+
+
+def login_command(kind: str, target: str = "") -> list[str] | None:
+    if kind == "claude-code":
+        return ["auth", "login", "--claudeai"]
+    if kind == "codex-cli":
+        return ["login", "--device-auth"]                 # a link + a one-time code: works on servers too
+    if kind == "opencode":
+        return ["--pure", "providers", "login"] + (["-p", target] if target else [])
+    return None
+
+
+class LoginSession:
+    def __init__(self, kind: str, cmd: list[str], log_dir: Path):
+        import fcntl
+        import pty
+        import struct
+        import termios
+        self.kind, self.started = kind, time.time()
+        self.buf = b""
+        self.lock = threading.Lock()
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))   # a real size: no 1-char lines
+        env = {**os.environ, "TERM": "xterm-256color"}
+        self.proc = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, env=env, cwd=str(log_dir),
+                                     start_new_session=True, close_fds=True)
+        os.close(slave)
+        self.fd = master
+        threading.Thread(target=self._read, daemon=True).start()
+        threading.Thread(target=self._expire, daemon=True).start()
+
+    def _read(self) -> None:
+        """The only owner of the terminal's file descriptor: it reads until the CLI is gone, then closes it —
+        exactly once (closing a number twice could close something else that reused it)."""
+        import select
+        try:
+            while True:
+                try:
+                    r, _, _ = select.select([self.fd], [], [], 0.5)
+                    if r:
+                        data = os.read(self.fd, 4096)
+                        if not data:
+                            break
+                        with self.lock:
+                            self.buf = (self.buf + data)[-20000:]
+                    elif self.proc.poll() is not None:
+                        break
+                except OSError:
+                    break
+        finally:
+            with self.lock:
+                fd, self.fd = self.fd, -1
+            if fd >= 0:
+                os.close(fd)
+
+    def _expire(self) -> None:
+        while self.proc.poll() is None and time.time() - self.started < 900:      # 15 minutes to finish
+            time.sleep(1)
+        if self.proc.poll() is None:
+            self.cancel()
+
+    def text(self) -> str:
+        with self.lock:
+            raw = self.buf.decode(errors="replace")
+        return render_terminal(raw)
+
+    def state(self) -> dict:
+        t = self.text()
+        urls = re.findall(r"https://[^\s'\")<>]+", t)
+        code = re.search(r"one-time code[^\n]*\n\s*([A-Z0-9]{4}-[A-Z0-9]{4,6})", t)
+        tail = t[-2500:]
+        low = tail.lower()
+        wants = ("code" if re.search(r"paste (the )?code|authorization code|enter (the )?code", low) else
+                 "key" if re.search(r"api key|token", low.rsplit("\n", 6)[-1] if "\n" in low else low) else "")
+        rc = self.proc.poll()
+        return {"running": rc is None, "exit": rc, "url": urls[-1].rstrip(".,") if urls else "",
+                "device_code": code.group(1) if code else "", "wants": wants,
+                "output": re.sub(r"(code=|state=)[A-Za-z0-9_\-]{6,}", r"\1…", tail)}
+
+    def send(self, text: str = "", key: str = "") -> None:
+        if self.proc.poll() is not None:
+            raise ValueError("That sign-in has already finished — start it again.")
+        data = KEYS.get(key, "") if key else text.replace("\n", "").strip() + "\r"
+        with self.lock:
+            if self.fd < 0:
+                raise ValueError("That sign-in has already finished — start it again.")
+            os.write(self.fd, data.encode())
+
+    def cancel(self) -> None:
+        if self.proc.poll() is None:
+            import signal
+            try:
+                os.killpg(self.proc.pid, signal.SIGKILL)       # the whole group: no orphaned login servers
+            except (ProcessLookupError, PermissionError):
+                self.proc.kill()
+            self.proc.wait()                                   # the reader thread then closes the terminal
+
+
+_logins: dict[str, LoginSession] = {}
 _login_lock = threading.Lock()
 
 
-def login(provider: str, log_dir: Path) -> dict:
-    """Start the CLI's own sign-in in the background. It opens the browser on this machine; we also capture the
-    sign-in link it prints, in case the browser didn't open (e.g. the console runs on a server)."""
+def login(provider: str, log_dir: Path, target: str = "") -> dict:
+    """Start (or rejoin) the sign-in for a CLI provider. `target`: for OpenCode, the provider id to log in to."""
     kind = _kind(provider)
-    if kind not in LOGIN:
-        return {"started": False, "error": "This provider uses an API key — paste it in the AI model settings."}
+    cmd = login_command(kind, target)
+    if not cmd:
+        return {"started": False, "error": "This provider uses an API key — paste it in the key box."}
     b = _bin(kind)
     if not b:
         return {"started": False, "error": f"Install the CLI first: {INSTALL[kind]}"}
     with _login_lock:                                     # two clicks never start two logins
         cur = _logins.get(kind)
-        if cur and cur["proc"].poll() is None:
-            return {"started": True, "running": True, "url": cur.get("url", "")}
-        return _start_login(kind, b, log_dir)
-
-
-def _start_login(kind: str, b: str, log_dir: Path) -> dict:
-    log_dir.mkdir(parents=True, exist_ok=True)
-    logf = log_dir / f"login-{kind}.log"
-    fh = open(logf, "w")
-    proc = subprocess.Popen([b, *LOGIN[kind]], stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                            start_new_session=True)
-    entry = {"proc": proc, "log": logf, "url": ""}
-    _logins[kind] = entry
-
-    def watch():
-        end = time.time() + 600                           # give up after 10 minutes
-        while time.time() < end and proc.poll() is None:
-            m = re.search(r"https://\S+", logf.read_text(errors="replace")) if logf.exists() else None
-            if m and not entry["url"]:
-                entry["url"] = m.group(0).rstrip(").,")
-            time.sleep(0.5)
-        if proc.poll() is None:                           # abandoned: the whole process group, no orphans
-            import signal
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                proc.kill()
-            proc.wait()
-        fh.close()
-    threading.Thread(target=watch, daemon=True).start()
-    time.sleep(1.5)                                       # usually enough for the link to be printed
-    return {"started": True, "url": entry["url"]}
+        if cur and cur.proc.poll() is None:
+            return {"started": True, **cur.state()}
+        if cur:
+            cur.cancel()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        _logins[kind] = LoginSession(kind, [b, *cmd], log_dir)
+    time.sleep(1.5)                                       # usually enough for the link / code to be printed
+    return {"started": True, **_logins[kind].state()}
 
 
 def login_state(provider: str) -> dict:
-    e = _logins.get(_kind(provider))
-    if not e:
-        return {"running": False}
-    rc = e["proc"].poll()
-    tail = e["log"].read_text(errors="replace")[-400:] if e["log"].exists() else ""
-    return {"running": rc is None, "exit": rc, "url": e.get("url", ""), "output": tail}
+    s = _logins.get(_kind(provider))
+    return s.state() if s else {"running": False, "exit": None, "output": ""}
+
+
+def login_input(provider: str, text: str = "", key: str = "") -> dict:
+    s = _logins.get(_kind(provider))
+    if not s:
+        raise ValueError("No sign-in is running — click Log in first.")
+    s.send(text=text, key=key)
+    time.sleep(1.0)
+    return s.state()
+
+
+def login_cancel(provider: str) -> dict:
+    s = _logins.pop(_kind(provider), None)
+    if s:
+        s.cancel()
+    return {"cancelled": bool(s)}
 
 
 def providers_in_use(cfg) -> list[dict]:

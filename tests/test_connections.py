@@ -1,6 +1,9 @@
 """Connections: is each model installed, logged in and answering — and can it be fixed from the console."""
 import stat
+
 import time
+
+import pytest
 
 from james_monitoring import connections as cx
 from james_monitoring.config import LLMConfig
@@ -160,3 +163,74 @@ def test_jm_connection_command(tmp_path, monkeypatch, capsys):
     assert e.value.code == 0 and "✅ ChatGPT / Codex subscription" in out and "used by James, Marcus" in out
     with pytest.raises(SystemExit):
         main(["-c", str(tmp_path / "config.yaml"), "connection", "login", "anthropic"])
+
+
+def test_sign_in_with_a_pasted_code_from_the_console(tmp_path, monkeypatch):
+    """Like `claude auth login`: prints a link, waits at 'Paste code here', succeeds only with the right code."""
+    state = tmp_path / "logged"
+    monkeypatch.setenv("JM_CLAUDE_BIN", cli(tmp_path, "claude", f'''
+if [ "$1 $2" = "auth status" ]; then
+  if [ -f {state} ]; then echo '{{"loggedIn": true}}'; else echo '{{"loggedIn": false}}'; fi; exit 0
+fi
+echo "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&state=SECRETSTATE123"
+printf "Paste code here if prompted > "
+read code
+if [ "$code" = "abc#123" ]; then touch {state}; echo "Login successful."; exit 0; fi
+echo "Invalid code"; exit 1'''))
+    cx.login_cancel("claude-code")
+    r = cx.login("claude-code", tmp_path / "logs")
+    assert r["started"] and r["running"] and r["wants"] == "code"
+    assert r["url"].startswith("https://claude.com/cai/oauth/authorize") and "SECRETSTATE123" not in r["output"]
+    st = cx.login_input("claude-code", text="  abc#123 \n")
+    for _ in range(30):
+        if not st["running"]:
+            break
+        time.sleep(0.1)
+        st = cx.login_state("claude-code")
+    assert st["exit"] == 0 and "Login successful." in st["output"]
+    assert cx.check(LLMConfig(provider="claude-code"))["ok"]
+    with pytest.raises(ValueError, match="already finished"):
+        cx.login_input("claude-code", text="again")
+
+
+def test_menu_keys_and_cancel(tmp_path, monkeypatch):
+    import pytest as _pytest  # noqa: F401
+    monkeypatch.setenv("JM_OPENCODE_BIN", cli(tmp_path, "opencode", '''
+echo "Enter your API key"; read k; echo "got ${#k} chars"; sleep 30'''))
+    cx.login_cancel("opencode")
+    r = cx.login("opencode", tmp_path / "logs", target="zai")
+    assert r["wants"] == "key"
+    st = cx.login_input("opencode", text="sk-very-secret-key")
+    assert "got 18 chars" in st["output"]
+    assert cx.login_cancel("opencode") == {"cancelled": True} and cx.login_state("opencode")["running"] is False
+
+
+def test_api_key_box_saves_to_env_over_http(tmp_path, monkeypatch):
+    import json
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    from james_monitoring.server import App, make_handler
+    app = App(tmp_path / "co", telegram=False)
+    app.base.mkdir(parents=True)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app, "k"))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+
+    def post(path, body):
+        req = urllib.request.Request(url + path, data=json.dumps(body).encode(), method="POST",
+                                     headers={"X-JM-Key": "k", "Content-Type": "application/json"})
+        try:
+            return json.loads(urllib.request.urlopen(req).read())
+        except urllib.error.HTTPError as e:
+            return {"HTTP": e.code, **json.loads(e.read())}
+    try:
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        assert post("/api/model_key", {"env": "OPENROUTER_API_KEY", "key": "sk-or-1"}) == {"saved": "OPENROUTER_API_KEY"}
+        assert "OPENROUTER_API_KEY=sk-or-1" in (app.base / ".env").read_text()           # works before setup too
+        assert post("/api/model_key", {"env": "bad name", "key": "x"})["HTTP"] == 400
+        assert post("/api/model_check", {"provider": "openai", "model": "m",
+                                         "base_url": "https://openrouter.ai/api/v1"})["key_env"] == "OPENAI_API_KEY"
+    finally:
+        srv.shutdown()
+        app.loop.call_soon_threadsafe(app.loop.stop)

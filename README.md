@@ -50,7 +50,10 @@ mkdir -p ../my-company && cd ../my-company
 jm run          # opens the console in your browser
 ```
 
-Then check your AI login: **Settings → Connections** in the console, or `jm connection` in a terminal.
+Then connect your AI: **Settings → Connections** (setup shows it too). **Log in** runs the model's own sign-in
+right in the console: open the link, and paste the code or API key when it asks — for Claude, Codex, and any
+OpenCode provider (GLM/Z.AI, Anthropic, OpenAI, Google, OpenRouter…). API providers get a paste-your-key box.
+In a terminal: `jm connection`, `jm connection login claude|codex|opencode [provider]`.
 
 **Everything happens in the console**, on your own machine at `localhost`, protected by a key in the link:
 

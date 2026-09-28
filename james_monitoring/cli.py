@@ -191,7 +191,7 @@ def cmd_connection(args) -> None:
     if args.action == "login":
         kind = cx._kind({"claude": "claude-code", "codex": "codex-cli"}.get(args.target or "", args.target or "")
                         or cfg.llm.provider)
-        cmd = cx.LOGIN.get(kind) or cx.TERMINAL_LOGIN.get(kind)
+        cmd = cx.login_command(kind, args.extra or "")
         b = cx._bin(kind)
         if not cmd:
             sys.exit(f"{args.target or cfg.llm.provider}: no login — it uses an API key (set it in Settings or .env).")
@@ -217,8 +217,8 @@ def cmd_connection(args) -> None:
         if not r["ok"]:
             bad += 1
             kind = r["provider"]
-            fix = (f"jm connection login {kind}" if (kind in cx.LOGIN or kind in cx.TERMINAL_LOGIN) and r["installed"]
-                   else r["fix"])
+            fix = (f"jm connection login {kind}" + (f" {r['login_target']}" if r.get("login_target") else "")
+                   if r.get("can_login") and r["installed"] else r["fix"])
             print(f"     fix: {fix}")
     name, email = cfg.git_author
     print(f"Git identity\n  {'✅' if email != 'jm@localhost' else '⚠️ '} {name} <{email}>")
@@ -361,7 +361,8 @@ def main(argv: list[str] | None = None) -> None:
 
     s = sub.add_parser("connection", help="check every AI model (installed, logged in, answering) · login · test")
     s.add_argument("action", nargs="?", choices=["check", "test", "login"], default="check")
-    s.add_argument("target", nargs="?", help="for login: claude-code | codex-cli | opencode")
+    s.add_argument("target", nargs="?", help="for login: claude | codex | opencode")
+    s.add_argument("extra", nargs="?", help="for `login opencode`: the provider to sign in to (e.g. zai, anthropic)")
     s.set_defaults(fn=cmd_connection)
 
     s = sub.add_parser("doctor", help="check the setup")

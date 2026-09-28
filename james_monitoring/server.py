@@ -433,10 +433,6 @@ class App:
             self.rt.ws.update_state(fn)
         return r
 
-    def connection_login(self, provider: str) -> dict:
-        from . import connections as cx
-        return cx.login(provider, self.rt.ws.root / ".jm" / "logs")
-
     def test_model(self, b: dict) -> dict:
         """Setup/Settings: does this provider answer? (One tiny call.)"""
         from .config import parse_llm
@@ -943,6 +939,9 @@ def make_handler(app: App, key: str):
             try:
                 if path == "/api/state":
                     return self._json(200, app.state())
+                if path in ("/api/model_login", "/api/connections/login"):
+                    from . import connections as cx
+                    return self._json(200, cx.login_state(q.get("provider", "")))
                 if not app.ready:
                     return self._json(409, {"error": "setup needed"})
                 routes = {
@@ -956,7 +955,6 @@ def make_handler(app: App, key: str):
                     "/api/github/status": lambda: app.github_status(),
                     "/api/connections": lambda: app.connections(),
                     "/api/opencode/models": lambda: __import__("james_monitoring.connections", fromlist=["x"]).opencode_models(),
-                    "/api/connections/login": lambda: __import__("james_monitoring.connections", fromlist=["x"]).login_state(q.get("provider", "")),
                     "/api/member": lambda: app.member_detail(q.get("id", "")),
                     "/api/project": lambda: app.project_detail(q.get("id", "")),
                     "/api/team": lambda: app.admin.state(),
@@ -1003,9 +1001,23 @@ def make_handler(app: App, key: str):
                     from .config import parse_llm
                     return self._json(200, cx.check(parse_llm({k: v for k, v in b.items()
                                                                if k in ("provider", "model", "base_url", "allow_free")})))
-                if path == "/api/model_login":
+                if path in ("/api/model_login", "/api/connections/login"):    # sign in (setup and Settings)
                     from . import connections as cx
-                    return self._json(200, cx.login(str(b.get("provider", "")), app.base / ".jm-login"))
+                    return self._json(200, cx.login(str(b.get("provider", "")), app.base / ".jm-login",
+                                                    target=str(b.get("target", "") or "")))
+                if path == "/api/model_login/input":                  # the pasted code / key, or a key press
+                    from . import connections as cx
+                    return self._json(200, cx.login_input(str(b.get("provider", "")), text=str(b.get("text", "")),
+                                                          key=str(b.get("key", ""))))
+                if path == "/api/model_login/cancel":
+                    from . import connections as cx
+                    return self._json(200, cx.login_cancel(str(b.get("provider", ""))))
+                if path == "/api/model_key":                          # an API key, straight into .env
+                    env, key = str(b.get("env", "")).strip(), str(b.get("key", "")).strip()
+                    if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}", env) or not key:
+                        raise ValueError("Paste the key (and pick which variable it's for).")
+                    set_env(app.base / ".env", {env: key})
+                    return self._json(200, {"saved": env})
                 if not app.ready:
                     return self._json(409, {"error": "setup needed"})
                 a = app.admin
@@ -1041,7 +1053,6 @@ def make_handler(app: App, key: str):
                     "/api/telegram/code": lambda: app.telegram_code(),
                     "/api/github/connect": lambda: app.github_connect(b),
                     "/api/connections/test": lambda: app.connection_test(b),
-                    "/api/connections/login": lambda: app.connection_login(str(b.get("provider", ""))),
                     "/api/github/sync": lambda: app.github_sync(),
                     "/api/slack/code": lambda: {"code": setattr(app, "_slack_code", f"{secrets.randbelow(900000) + 100000}")
                                                or app._slack_code},

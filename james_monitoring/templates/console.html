@@ -501,13 +501,9 @@ function setupStatus(f) {
   const check = async () => {
     const r = await api("/api/model_check", {provider: f.provider.value, model: f.model.value, base_url: f.base_url.value}).catch(e => ({ok: false, detail: e.message}));
     f.provider.dataset.ok = r.ok ? "1" : "";
-    const login = r.can_login && !r.ok ? h("button", {class: "btn primary sm", onclick: async () => {
-      const out = h("span", {}, " starting sign-in…"); box.append(out);
-      const l = await api("/api/model_login", {provider: f.provider.value}).catch(e => ({started: false, error: e.message}));
-      out.put(l.started ? [" Your browser is opening to sign in — then ", h("a", {href: "#", onclick: e => { e.preventDefault(); check(); }}, "check again"), ".",
-        l.url ? [" (", h("a", {href: l.url, target: "_blank", rel: "noopener"}, "sign-in page"), ")"] : null] : " " + (l.error || "couldn't start"));
-    }}, "Log in") : null;
-    box.put(r.ok ? badge("✓ " + r.detail, "success") : badge(r.detail || "not ready", "danger"), " ", r.fix ? h("span", {class: "muted"}, r.fix) : null, " ", login);
+    const login = r.can_login && !r.ok ? h("button", {class: "btn primary sm", onclick: () => loginSheet(f.provider.value, r.login_target, r.label, check)}, "Log in") : null;
+    const key = !r.ok && r.key_env && !r.can_login ? keyBox(r.key_env, check) : null;
+    box.put(r.ok ? badge("✓ " + r.detail, "success") : badge(r.detail || "not ready", "danger"), " ", r.fix ? h("span", {class: "muted"}, r.fix) : null, " ", login, key);
   };
   ["change", "blur"].forEach(ev => { f.provider.addEventListener(ev, check); f.model.addEventListener(ev, check); });
   setTimeout(check, 0);
@@ -1142,11 +1138,15 @@ function connectionsCard() {
           const r = await api("/api/connections/test", {member: m.people[0] || "", provider: m.people.length ? "" : m.raw_provider}).catch(e => ({ok: false, error: e.message}));
           results[key] = r.ok ? badge(`Works · answered in ${r.seconds}s`, "success") : badge(r.error || "failed", "danger");
           out.put(results[key]); test.disabled = false; if (r.ok) setTimeout(load, 800); }}, "Test");
-        const login = m.can_login && !m.ok ? h("button", {class: "btn primary sm", onclick: () => startLogin(m.provider, out, load)}, "Log in") : null;
+        const login = m.can_login && !m.ok ? h("button", {class: "btn primary sm", onclick: () => loginSheet(m.provider, m.login_target, m.label + (m.login_target ? " · " + m.login_target : ""), load)}, "Log in") : null;
+        const needsKey = !m.ok && m.key_env && !m.can_login && /not set|API key/i.test(m.detail + m.fix);
         return row(m.ok && !failing.length ? true : m.ok ? null : false, `${m.label} · ${m.model}`,
           h("div", {class: "xs muted"}, (m.default ? "Company default · " : "") + "used by " + who + " · " + m.detail,
             m.fix ? h("div", {style: "color:var(--warning);margin-top:2px"}, m.fix) : null,
-            failing.map(([mid, e]) => h("div", {class: "err xs", style: "margin-top:2px"}, `${nameOf(mid)}'s last call failed: ${e}`)), out), login, test); }),
+            failing.map(([mid, e]) => h("div", {class: "err xs", style: "margin-top:2px"}, `${nameOf(mid)}'s last call failed: ${e}`)),
+            needsKey ? keyBox(m.key_env, load) : null, out), login, test); }),
+      row(null, "Sign in to another provider (OpenCode)", h("div", {class: "xs muted"}, "GLM / Z.AI, Anthropic, OpenAI, Google, OpenRouter… — pick it, then paste your key or code"),
+        h("button", {class: "btn outline sm", onclick: () => loginSheet("opencode", "", "OpenCode", load)}, "Sign in")),
       row(c.git.ok, "Git identity", h("div", {class: "xs muted"}, `${c.git.name} <${c.git.email}> — every team commit and PR is yours`, c.git.fix ? h("div", {style: "color:var(--warning)"}, c.git.fix) : null)),
       row(c.github.enabled ? !c.github.error : null, "GitHub", h("div", {class: "xs muted"}, c.github.enabled ? (c.github.error || "board mirror on" + (c.github.last_sync ? " · synced " + new Date(c.github.last_sync).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "")) : "optional — not connected"), h("button", {class: "btn ghost sm", onclick: () => document.getElementById("set-github")?.scrollIntoView({behavior: "smooth"})}, "Set up")),
       row(c.telegram.on ? !Object.keys(c.telegram.health).length : c.telegram.configured ? false : null, "Telegram", h("div", {class: "xs muted"}, c.telegram.on ? "running" : c.telegram.configured ? (c.telegram.error || "not running") : "optional — not connected",
@@ -1155,6 +1155,55 @@ function connectionsCard() {
   }
   load();
   return el;
+}
+// Sign in, fully from the console: the CLI's own login runs in a terminal on this machine; you see its screen, open
+// the link, and paste the code or key it asks for. Nothing you paste is stored or shown again.
+function loginSheet(provider, target, label, done) {
+  const screen = h("pre", {style: "max-height:240px;overflow:auto;font-size:11.5px"}, "Starting…");
+  const linkBox = h("div", {}), codeBox = h("div", {}), status = h("div", {class: "small", style: "min-height:18px;margin-top:8px"});
+  const input = h("input", {type: "password", autocomplete: "off", placeholder: "Paste the code or key here", "aria-label": "Code or key"});
+  const show = h("input", {type: "checkbox", onchange: e => { input.type = e.target.checked ? "text" : "password"; }});
+  const send = async (payload) => { try { render_(await api("/api/model_login/input", {provider, ...payload})); } catch (e) { status.put(badge(e.message, "danger")); } };
+  const sendText = () => { const v = input.value.trim(); if (!v) return input.focus(); input.value = ""; status.put(h("span", {class: "spin"}), " sent — checking…"); send({text: v}); };
+  input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); sendText(); } });
+  let finished = false;
+  function render_(st) {
+    if (!st) return;
+    screen.textContent = st.output || "…"; screen.scrollTop = screen.scrollHeight;
+    linkBox.put(st.url ? h("a", {class: "btn primary", href: st.url, target: "_blank", rel: "noopener"}, "Open the sign-in page ↗") : null);
+    codeBox.put(st.device_code ? h("div", {class: "card card-b", style: "margin-top:10px;text-align:center"}, h("div", {class: "xs muted"}, "Enter this code on the sign-in page"),
+      h("div", {class: "mono", style: "font-size:24px;font-weight:600;letter-spacing:.08em;margin:4px 0"}, st.device_code),
+      h("button", {class: "btn ghost sm", onclick: () => { navigator.clipboard?.writeText(st.device_code); toast("Code copied"); }}, "Copy")) : null);
+    if (st.wants === "key") input.placeholder = "Paste your API key here"; else if (st.wants === "code") input.placeholder = "Paste the code from the sign-in page here";
+    if (!st.running && !finished) { finished = true;
+      status.put(st.exit === 0 ? badge("✓ Signed in", "success") : badge("Sign-in stopped" + (st.exit != null ? ` (exit ${st.exit})` : ""), "danger"));
+      setTimeout(() => done && done(), 600); }
+  }
+  openSheet("Sign in · " + label,
+    h("ol", {class: "small", style: "margin:0 0 10px;padding-left:18px"}, h("li", {}, "Open the sign-in page (your browser may already have opened it) and sign in."),
+      h("li", {}, "If it shows a code, paste it below and press Send. For an API key, paste the key."), h("li", {}, "Wait for “Signed in”.")),
+    linkBox, codeBox,
+    h("label", {class: "f"}, "Code or key"), h("div", {class: "row", style: "flex-wrap:nowrap"}, input, h("button", {class: "btn primary", onclick: sendText}, "Send")),
+    h("label", {class: "row xs muted", style: "gap:6px;margin-top:4px"}, show, "show what I paste"), status,
+    h("div", {class: "row", style: "margin-top:10px;gap:4px"}, h("span", {class: "xs muted"}, "Menu keys:"),
+      [["up", "↑"], ["down", "↓"], ["enter", "Enter"], ["space", "Space"]].map(([k, t]) => h("button", {class: "btn outline sm", onclick: () => send({key: k})}, t)),
+      h("span", {class: "grow"}), h("button", {class: "btn ghost sm", onclick: async () => { await api("/api/model_login/cancel", {provider}).catch(() => {}); finished = true; closeSheet(); done && done(); }}, "Cancel")),
+    h("details", {style: "margin-top:12px"}, h("summary", {class: "xs muted"}, "What the sign-in shows (live)"), screen));
+  (async () => {
+    const r = await api("/api/model_login", {provider, target}).catch(e => ({started: false, error: e.message}));
+    if (!r.started) { status.put(badge(r.error || "couldn't start", "danger")); return; }
+    render_(r); input.focus();
+    const t = setInterval(async () => { if (finished || !$("#sheet").classList.contains("open")) return clearInterval(t);
+      render_(await api("/api/model_login?provider=" + encodeURIComponent(provider)).catch(() => null)); }, 1200);
+  })();
+}
+// An API key, pasted once, saved to .env (never shown again).
+function keyBox(env, done) {
+  const input = h("input", {type: "password", autocomplete: "off", placeholder: `Paste ${env}`, style: "max-width:320px"}), out = h("span", {class: "xs"});
+  return h("div", {class: "row", style: "margin-top:6px;flex-wrap:nowrap"}, input, h("button", {class: "btn primary sm", onclick: async () => {
+    if (!input.value.trim()) return input.focus();
+    try { await api("/api/model_key", {env, key: input.value.trim()}); input.value = ""; out.put(badge("Saved", "success")); setTimeout(() => done && done(), 400); }
+    catch (e) { out.put(badge(e.message, "danger")); } }}, "Save key"), out);
 }
 async function startLogin(provider, out, done) {
   out.put(h("span", {class: "spin"}), " starting sign-in…");
