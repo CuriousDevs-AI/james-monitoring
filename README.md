@@ -1,201 +1,661 @@
+<div align="center">
+
 # james-monitoring
 
-Run a team of AI agents the way you'd run a real team. Any founder, any startup, any number of people.
+**Run a company of AI employees like a real team.**
 
-- **One conversation, every channel.** The web console, Telegram and Slack show the same rooms: All hands, a room
-  per project, and a 1:1 with each person. Start a thread on your laptop, continue it on your phone.
-- **A team that shares context.** Everyone on a project reads that project's room, including what teammates said
-  to each other. They don't ask for what someone already said.
-- **A manager (James by default, any name you like)** who watches the board, chases blockers and reports to you daily.
-- **You stay in the loop.** Risky things arrive as Approve/Reject cards, and you choose what else needs approval,
-  per action and per person. Nothing approves itself.
-- **Everything lives in git:** personas, tasks, memory, deliverables, decisions, reports. Every commit is made with
-  **your** git identity, and code tasks can open **real pull requests as you**.
-- **A GitHub Project board, too:** tasks are mirrored as issues on a GitHub Project. Move cards, edit fields or
-  comment on github.com or in the GitHub app, and it comes back through the same rules ([docs/GITHUB.md](docs/GITHUB.md)).
-- **Any model, per person:** a **Claude subscription** (`claude` CLI), a **ChatGPT/Codex subscription** (`codex` CLI),
-  **OpenCode** (GLM, Claude, GPT, Gemini… and free models), the Claude or OpenAI APIs, or a local model through Ollama.
-  Riya can run on Codex while Omar runs on GLM. **Settings → Connections** (or `jm connection`) shows whether each model
-  is installed, logged in and answering, with Log in and Test buttons.
-- **One channel per room:** All hands and the 1:1s live on Telegram *or* Slack, and each project can choose its own,
-  so a conversation is never split. The console always shows everything.
+A self-hosted console where AI teammates, each on the model you choose, work in shared rooms, own tasks in git,
+ask before anything risky, and report to you every day. A manager (James, by default) keeps everyone moving.
 
-```
-You — web console · Telegram · Slack (all in sync)
- ├── All hands ....... announcements · @all give status · !pause all · the daily report
- ├── project rooms ... #api: @all = the project's team · no mention = the lead · teammates' hand-offs visible
- ├── 1:1 per person .. instructions · corrections · ✅/❌ approval cards
- └── backchannel ..... teammates talking to each other outside a project (read-only)
-        │
-        ▼
- james-monitoring (one process on any server)
- ├── hub ............ one record per room → mirrored to every channel; routes @all · @name · rooms → people
- ├── runtime ........ prompt = charter + persona + memory + board + the room's recent chat → model → actions
- ├── rules .......... 1 P0/person · WIP ≤ 2 · "Done means" before start · only the reviewer marks done
- ├── permissions .... per action and per person: 🟢 do · 🟡 do & tell · 🔴 ask first (runs only after you approve)
- ├── work sessions .. scheduled: everyone moves their top task and saves real output to docs/
- ├── manager ........ hourly checks · alerts · daily report (built from files, not by a model)
- └── models ......... per person: claude-code · codex-cli (subscriptions) · anthropic · OpenAI-compatible · Ollama
-        │
-        ▼
- git workspace: team/charter.md · team/<id>/{persona,memory,log}.md · tasks/ · asks/ · docs/ · decisions/ · reports/
-```
+[![tests](https://github.com/CuriousDevs-AI/james-monitoring/actions/workflows/tests.yml/badge.svg)](https://github.com/CuriousDevs-AI/james-monitoring/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Version](https://img.shields.io/badge/version-0.2.0-blue)
+![Storage](https://img.shields.io/badge/storage-git%20%2B%20files-F05032?logo=git&logoColor=white)
 
-## Start in 2 minutes
+[Quick start](#-quick-start) · [Features](#-features) · [Architecture](#-architecture) · [Configuration](#-configuration) ·
+[API](#-http-api) · [Security](#-security) · [Contributing](#-contributing)
+
+<img src="docs/screenshots/overview.png" alt="The Overview page: what needs you, projects, departments and people" width="100%">
+
+</div>
+
+---
+
+## Contents
+
+- [Why](#-why) · [Features](#-features) · [Screenshots](#-screenshots)
+- [Quick start](#-quick-start) · [Installation](#-installation) · [Configuration](#-configuration)
+- [Architecture](#-architecture) · [Tech stack](#-tech-stack) · [Storage design](#-storage-design)
+- [Access control](#-authentication-roles-and-access-control) · [Models](#-ai-models) · [Integrations](#-integrations)
+- [CLI](#-cli) · [HTTP API](#-http-api) · [Project structure](#-project-structure)
+- [Deployment](#-deployment) · [Testing](#-testing) · [Security](#-security)
+- [Roadmap](#-roadmap) · [Contributing](#-contributing) · [License](#-license)
+
+---
+
+## 💡 Why
+
+AI agents are good at single tasks and bad at being a team. They forget what was said, don't know who owns what,
+can't be stopped before they do something risky, and leave no record. **james-monitoring gives agents the
+structure a real team has:**
+
+- **Rooms.** All hands, a room per project and a 1:1 with each person, identical in the web console,
+  Telegram and Slack.
+- **Ownership.** A task board with rules: one P0 per person, at most 2 tasks in progress, a "Done means" checklist
+  before starting, and only the reviewer can close a task.
+- **Memory.** Corrections you make are pinned and binding. Everything is plain markdown in a git repo.
+- **Guardrails.** Every action has a permission level: 🟢 just do it · 🟡 do it and tell me · 🔴 ask me first.
+- **Accountability.** A daily report built from the files, not written by a model, so it can't invent progress.
+  There is also an audit log of who did what.
+
+It runs as **one Python process** with no database. Everything lives in files and git.
+
+## ✨ Features
+
+<table>
+<tr><td width="50%" valign="top">
+
+**Team and work**
+- Web console with Overview, Chat, Board, Projects, People, Approvals, Reports, Activity and Settings
+- Rooms: All hands, project rooms, 1:1s and a read-only teammates' backchannel
+- **Threads**: reply to any message, and the person you replied to answers inside the thread
+- **@mentions** with a picker: `@name`, `@all` and `@department`
+- Task board with enforced rules, reassignment, a reviewer, dependencies, and history from git
+- **Work sessions** on a schedule: everyone moves their top task forward and saves the real output to `docs/`
+- **Daily report** plus hourly checks: blocked, overdue, stale, waiting on you, failing models
+- **⌘K search** across every message, task, document and memory note
+
+</td><td width="50%" valign="top">
+
+**Control and organization**
+- **Approvals**: 🔴 actions wait as Approve/Reject cards and run only after you approve (console, chat, Telegram or Slack)
+- **Permissions** per action at company, person, project and person-on-project level (most specific wins)
+- **Project settings**: a project's own model, rules and instructions, for everyone on it or per person
+- **Pause** the whole team, one person, or one project; waiting messages are answered on resume
+- **Departments** with heads, and **Clients** with a client-safe report and an optional read-only portal
+- **Personal assistant**: a teammate who works only for you (private chat, personal tasks, reminders, morning brief)
+- **Agent Studio**: hire from 10 role templates, fill in a persona form, try the agent in a throwaway chat, then hire
+- **Sign-in links and roles** (admin, member, viewer, client), plus an **audit log** with CSV export
+
+</td></tr>
+<tr><td valign="top">
+
+**Any model, per person**
+- Claude subscription (`claude` CLI) · ChatGPT/Codex subscription (`codex` CLI)
+- **OpenCode**: GLM, Claude, GPT, Gemini and OpenCode's free models
+- Anthropic API · OpenAI-compatible APIs · OpenRouter · Ollama (local)
+- Log in from the console (paste the code the CLI asks for), test each model, and see it in the health check
+- CLI sessions resume across restarts
+
+</td><td valign="top">
+
+**Channels and integrations**
+- Telegram: one bot per person, a group for All hands, and approval buttons
+- Slack: one app (Socket Mode), everyone posts under their own name, approval buttons
+- Each room lives on **one** channel, so a conversation is never split
+- GitHub: tasks mirrored to a GitHub Project in both directions, and code tasks as real pull requests (via `gh`)
+- Every commit uses **your** git identity
+
+</td></tr>
+</table>
+
+## 📸 Screenshots
+
+> Demo data (a fictional company) captured from a local instance with headless Chrome.
+
+| Chat: project room with a thread | Board |
+|---|---|
+| <img src="docs/screenshots/chat.png" alt="Project room with a reply thread"> | <img src="docs/screenshots/board.png" alt="Task board"> |
+| **Project settings** (model, rules, instructions, per person) | **Agent Studio** (templates, persona form, trial chat) |
+| <img src="docs/screenshots/project-settings.png" alt="Project settings"> | <img src="docs/screenshots/studio.png" alt="Agent Studio"> |
+| **Approvals** | **Activity & health** |
+| <img src="docs/screenshots/approvals.png" alt="Approvals"> | <img src="docs/screenshots/health.png" alt="Audit log and system health"> |
+| **Settings** | **Client portal** (read only) |
+| <img src="docs/screenshots/settings.png" alt="Settings"> | <img src="docs/screenshots/portal.png" alt="Client portal"> |
+
+<details><summary>Dark theme</summary>
+
+<img src="docs/screenshots/overview-dark.png" alt="Overview in the dark theme">
+
+</details>
+
+---
+
+## 🚀 Quick start
 
 ```bash
 git clone https://github.com/CuriousDevs-AI/james-monitoring.git
-cd james-monitoring && python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[all]"
-mkdir -p ../my-company && cd ../my-company
-jm run          # opens the console in your browser
+cd james-monitoring
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e ".[all]"
+
+mkdir ../my-team && cd ../my-team
+jm run                      # opens the console; setup happens in the browser
 ```
 
-Then connect your AI: **Settings → Connections** (setup shows it too). **Log in** runs the model's own sign-in
-right in the console: open the link, and paste the code or API key when it asks — for Claude, Codex, and any
-OpenCode provider (GLM/Z.AI, Anthropic, OpenAI, Google, OpenRouter…). API providers get a paste-your-key box.
-In a terminal: `jm connection`, `jm connection login claude|codex|opencode [provider]`.
+`jm run` prints a link like `http://localhost:8765/?k=<key>`. The key is how the console knows it's you.
+In an empty folder the browser shows **setup**, which covers four things:
+1. Your company and your git identity.
+2. A model, checked live, with Log in and Test buttons.
+3. The team repo.
+4. The manager's name.
 
-**Everything happens in the console**, on your own machine at `localhost`, protected by a key in the link:
+Then add people: from the **Agent Studio**, by dropping persona files or `SKILL.md` packages onto the People page, or
+by hand. Telegram and Slack are optional; everything works in the console.
 
-| Page | What you do there |
+> **No model subscription?** Pick **OpenCode**, tick *Allow OpenCode's free models*, and use `opencode/big-pickle`
+> (no login needed). Install it with `npm install -g opencode-ai`.
+
+## 📦 Installation
+
+**Requirements**
+
+| | |
 |---|---|
-| **Setup** | First run only: company, you, timezone, goals, AI model (a Claude subscription works), team repo, manager's name |
-| **Overview** | Open / review / blocked / overdue counts, **Needs you** (approvals, reviews, decisions), project progress, critical path, people, token use, recent activity |
-| **Projects** | The heart of it. Each project has a brief, a lead, **its own team** (a person can be on several projects), and four tabs: **Overview** (progress, what needs attention, who is on it), **Room** (the project's chat: `@all` reaches only that project's people, no mention goes to the lead), **Board** (that project's kanban) and **Team** (add, remove, make lead). Your projects are listed in the sidebar |
-| **Chat** | Project rooms, **All hands**, a private chat with each person, and the **Team backchannel** (read-only). Approve 🔴 requests right in the chat. Telegram and Slack conversations are the same rooms, with a badge showing where each message came from |
-| **All tasks** | The company-wide kanban (To do · Doing · Blocked · Review · Done), filter by project or person, drag to change status, open a task to accept, give feedback, change owner, priority, due date |
-| **People** | Drop in all the `.skill` / `SKILL.md` files at once; names and roles fill in. Telegram bots are optional, with live ✓ checks. Edit roles and personas, **pick each person's AI model**, set what they may do on their own, see memory and activity, pause people |
-| **Approvals** | Every permission request and its history |
-| **Reports** | Daily reports, and your open-decisions list (it appears in every report) |
-| **Settings** | Company and your git identity, default AI model, **permissions**, sync, schedule (report time, work sessions), budget, coding tool, **GitHub**, Telegram and **Slack** connections |
+| Python | 3.10+ (CI runs 3.10 and 3.12) |
+| git | required: the team workspace is a git repo |
+| A model | at least one: `claude` CLI, `codex` CLI, `opencode` CLI, an API key, or Ollama |
+| Optional | Telegram bots (@BotFather), a Slack app ([docs/SLACK.md](docs/SLACK.md)), the `gh` CLI for GitHub ([docs/GITHUB.md](docs/GITHUB.md)) |
 
-**Telegram and Slack are optional.** Connect either or both in Settings to run the team from your phone or your
-workspace. Telegram is a group plus one bot per person; Slack is one app where everyone posts under their own name
-([docs/SLACK.md](docs/SLACK.md)). All channels stay in sync with the console: your messages, their replies and approvals.
-
-Check and fix AI logins from the terminal: `jm connection` (status), `jm connection test` (one tiny call each),
-`jm connection login claude|codex|opencode`.
-
-Terminal alternatives still exist: `jm init` (setup wizard), `jm add-member`, `jm chat <who|team|p-project>`, `jm status`,
-`jm report`, `jm work`, `jm doctor --ping`, and `jm run --no-web` (Telegram + Slack + schedule, no console).
-`jm chat` conversations are saved like any other, so they show up in the console too.
-
-## Day to day
-
-| You do | What happens |
-|---|---|
-| DM the manager: *"what's the delivery status of the API?"* | The answer comes from the board, recent commits and open decisions. The manager doesn't answer from memory. |
-| In the group: `@all give status` | Each member's bot replies with one line. This comes straight from the board: instant, and no model call. |
-| In the group: `@riya @omar sync on the login flow` | Those two reply in the group. |
-| DM Riya: *"add rate limiting"* | Riya creates a task, codes it on branch `jm/T-012`, and sends you a 🔴 **Merge?** card. You tap ✅ and it's merged. |
-| DM Riya: *"T-012 not like this — per-user limits"* | The correction is saved on the task **and** in Riya's memory. |
-| Someone needs to spend money | You get a 🔴 card with the cost, the reason and the manager's recommendation. It never auto-approves. |
-| Work sessions (e.g. 10:00 and 15:00, Mon–Sat) | Everyone with open work moves it forward and writes the real output to `docs/`. You get a one-line-per-person digest. |
-| Daily report time | The report is posted in the group and committed to `reports/`, including your open decisions (`decisions/OPEN.md`). |
-| `/pause all` · `/resume all` | Everyone stops or starts. |
-
-### In the console
-
-- **⌘K search**: every message, task, document and memory note; Enter jumps to it.
-- **@mentions** with a picker, and **threads**: reply to any message; whoever you reply to answers inside the thread.
-- **The bell**: approvals, reviews, whoever is blocked on you, mentions, replies, model or system problems, reports.
-- **Agent Studio**: hire from a role template, shape the persona with a form, try them in a throwaway chat, then hire.
-- **Memory editor** on each profile: add, edit, pin as a binding correction, unpin, forget.
-- **Tasks**: reassign (both people are told), reviewer, depends-on, and every change from git.
-- **Project settings**: a project's own model, rules and instructions, for everyone on it or per person. The most specific wins.
-- **Departments** (with heads, `@engineering`) and **Clients** (a client-safe report and an optional read-only portal).
-- **Personal assistant**: one teammate who works only for you. It has a private chat and tasks, reminders and a morning brief.
-- **Sign-in links** for a co-founder, teammates or clients, with roles (admin, member, viewer, client).
-- **Activity & health**: an audit log of who did what (CSV export) and a live check of every part of the system.
-- Light and dark theme; works on a phone.
-
-### Try it without Telegram
+**Extras** (from `pyproject.toml`):
 
 ```bash
-jm chat james "what's blocked?"
-jm chat riya                       # interactive; /commands work too
-jm status && jm report && jm work
+pip install -e .                 # core (Telegram + YAML)
+pip install -e ".[anthropic]"    # + Anthropic API
+pip install -e ".[openai]"       # + OpenAI-compatible APIs (OpenAI, OpenRouter, Ollama, vLLM…)
+pip install -e ".[slack]"        # + Slack
+pip install -e ".[all]"          # everything above
+pip install -e ".[dev]"          # everything + pytest
 ```
 
-## Commands
+The `claude-code`, `codex-cli` and `opencode` providers use their CLIs, which you install separately:
+`npm install -g @anthropic-ai/claude-code`, `npm install -g @openai/codex` and `npm install -g opencode-ai`.
+You can log in to all three from **Settings → AI models**.
 
-| Command | Does |
-|---|---|
-| `/status` · `/board` | Everyone's status · all tasks by state |
-| `/assign <who> "title" P1 due:10-03 project:<id>` | Creates the task. That person acknowledges in your DM. |
-| `/accept T-012 [note]` · `/feedback T-012 text` · `/cut T-012` | Review, feedback (saved to the task and to memory), cut |
-| `/asks` · `/approve ASK-3` · `/reject ASK-3` | Permission requests (the buttons do the same) |
-| `/pause`, `/resume` (in a member's DM) · `/pause all`, `/resume all` | One person · everyone |
-| `/work` · `/report` · `/onboard` · `/log <who>` · `/budget` | Work session now · report now · intros · activity · token use |
-| `/whoami` · `/groupid` | Your id · this chat's id |
+Prefer the terminal? `jm init` is a setup wizard that verifies every Telegram link live; see [docs/SETUP.md](docs/SETUP.md).
 
-## Rules the system enforces
+## ⚙️ Configuration
 
-- **Priorities:** at most one P0 per person. Only the owner can override.
-- **Work in progress:** at most 2 tasks in `doing` per person, and a task can't start without "Done means".
-- **Done means reviewed:** agents move work to `review`. Only the reviewer (you, by default) marks it `done`.
-  **Request changes** (or feedback on work in review) sends it back to `doing`; they're told at once and rework it first.
-- **Blocked needs a reason:** `blocked` must name the person and the exact thing needed. That person is told at
-  once, unblocking others comes first in their next work session, and a task blocked on `T-012` goes back to
-  `todo` when T-012 is done.
-- **Own tasks only:** agents change only their own tasks. On a teammate's task they can add a log note or message them.
-  Only you can cut a task.
-- **Answers come back:** when one agent asks another, the reply goes back to whoever asked, and what they do with it
-  is said where the conversation started.
-- **Nothing is lost:** messages to a paused or over-budget person wait in a queue and are answered when they can work again.
-  Your corrections are pinned in their memory and never trimmed.
-- **Code:** changes happen only on `jm/<task>` branches. main changes only after you approve.
-- **🔴 asks** (money, public, production, deleting, legal, new vendors) never auto-decide.
-- **Permissions you set:** in Settings (and per person), each action (create tasks, save documents, message
-  teammates, post in All hands or a project room, run the coding agent) is 🟢 *just do it*, 🟡 *do it and tell
-  me*, or 🔴 *ask me first*. A 🔴 action becomes an Approve/Reject card and runs only after you approve it.
-- **Loops:** agent-to-agent conversations stop after `max_agent_hops` and escalate to you.
-- **The manager manages:** James does a round after every work session, and the hourly checks nudge whoever
-  owns late, stale or long-blocked work. You get alerts for reviews waiting too long, idle people and failing models.
-- **Budget:** a daily token budget per person. You get a warning at 80%, and they pause at 100%.
-- **Honest reports:** reports and checks are generated by code from the files, so they can't invent progress.
-- **Access:** only your Telegram id (plus any `extra_user_ids`) can command the team.
+Two files sit next to each other in your team folder:
 
-## Switching models
+| File | Holds | In git? |
+|---|---|---|
+| `config.yaml` | company, people, projects, permissions, schedule, channels | no (keep it private) |
+| `.env` | secrets: API keys, bot tokens, the console key | no (mode 0600) |
+
+The console edits both for you. Every change is validated and written atomically, and the previous version is kept
+as `config.yaml.bak`. A fully commented example is [`examples/config.yaml`](examples/config.yaml), and every
+variable is in [`.env.example`](.env.example).
+
+<details>
+<summary><b>config.yaml at a glance</b></summary>
 
 ```yaml
-llm: { provider: claude-code, model: sonnet }        # your Claude subscription via the `claude` CLI, no API key
-llm: { provider: codex-cli }                         # your ChatGPT subscription via the `codex` CLI, no API key
-llm: { provider: opencode, model: zhipuai/glm-4.6 }       # OpenCode: GLM, anthropic/…, openai/…, google/…
-llm: { provider: opencode, model: opencode/big-pickle, allow_free: true }   # OpenCode free models (opt-in)
-llm: { provider: anthropic, model: <claude model id>, api_key_env: ANTHROPIC_API_KEY }
-llm: { provider: openai,    model: <gpt model id>, api_key_env: OPENAI_API_KEY }
-llm: { provider: openai,    model: llama3.1, base_url: http://localhost:11434/v1, api_key_env: "" }   # Ollama
-```
+company: Acme Robotics
+timezone: Europe/Madrid
+owner: { name: Maria Lopez, git_name: maria, git_email: maria@example.com }
 
-That's the company default. Anyone can have their own, in their profile or in `config.yaml`:
+llm: { provider: opencode, model: zai/glm-4.6 }        # the company default
 
-```yaml
+monitor:
+  daily_report: "18:30"
+  work_sessions: ["10:00", "15:00"]                    # Mon–Sat
+permissions: { post_group: yellow, run_code: red }     # green | yellow | red
+
+departments: { engineering: { name: Engineering, head: riya } }
+clients:     { globex: { name: Globex } }
+
+projects:
+  api:
+    name: Public API
+    lead: riya
+    client: globex
+    status: active                                      # active | paused | done
+    instructions: "British spelling; nothing leaves without Maria."
+    permissions: { write_file: red }                    # this project's rules
+    agents:
+      riya: { role: Tech lead, llm: { provider: claude-code } }   # Riya on this project only
+
 team:
-  - { id: riya, name: Riya, role: Backend lead, llm: { provider: codex-cli } }
-  - { id: omar, name: Omar, role: Designer,     llm: { provider: claude-code, model: opus } }
+  - { id: james, name: James, role: Delivery manager, monitor: true }
+  - { id: riya,  name: Riya,  role: Backend lead, projects: [api], department: engineering,
+      llm: { provider: codex-cli } }
+  - { id: ada,   name: Ada,   role: Personal assistant, assistant: true }
 ```
 
-The coding tool is just as swappable (`executor.command`): Claude Code, Codex CLI, Aider, anything that edits files.
+</details>
 
-## Deploy (always on)
+**How settings combine.** For a person working on a project, the most specific value wins:
 
-- **Docker:** see `deploy/docker-compose.yml`. Mount a folder holding `config.yaml`, `.env` and the workspace.
-- **systemd:** see `deploy/james-monitoring.service`.
+```mermaid
+flowchart LR
+    A["This person on this project<br/><code>projects.X.agents.riya</code>"] -->|blank| B["This project<br/><code>projects.X</code>"]
+    B -->|blank| C["This person<br/><code>team[].llm / permissions</code>"]
+    C -->|blank| D["Company<br/><code>llm / permissions</code>"]
+```
 
-Telegram uses long polling and Slack uses Socket Mode, so you don't need a domain or open ports. A small VPS is enough.
+This applies to the **model** and to each **permission**. Project **instructions** and the person's **project role**
+are added to the prompt only while they work on that project: in its room, on its tasks, and in work sessions.
 
-Full guide: [docs/SETUP.md](docs/SETUP.md) · Internals: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+---
 
-## Development
+## 🏗 Architecture
+
+```mermaid
+flowchart TB
+    subgraph Channels
+        WEB["Web console<br/>(single-page, vanilla JS)"]
+        TG["Telegram<br/>one bot per person"]
+        SL["Slack<br/>Socket Mode app"]
+        CLI["jm chat (terminal)"]
+    end
+
+    subgraph Process["jm run: one Python process"]
+        HTTP["HTTP server + API<br/>server.py · roles & permissions"]
+        HUB["Hub<br/>hub.py · records, mirrors, routes"]
+        RT["Runtime<br/>runtime.py · prompt → model → actions"]
+        SCH["Scheduler<br/>reports · work sessions · checks · reminders · GitHub sync"]
+        MON["Monitor<br/>deterministic report & alerts"]
+    end
+
+    subgraph Models["Model adapters (llm/)"]
+        CC["claude-code"]
+        CX["codex-cli"]
+        OC["opencode"]
+        API["anthropic · openai-compatible<br/>openrouter · ollama"]
+    end
+
+    subgraph Storage["Team workspace (a git repo)"]
+        GIT["tasks/ · asks/ · team/ · docs/<br/>reports/ · decisions/ · audit/"]
+        JM[".jm/ runtime state<br/>(chat JSONL, sessions, queue)"]
+    end
+
+    GH["GitHub (gh CLI)<br/>Project board · PRs"]
+
+    WEB -->|X-JM-Key| HTTP --> HUB
+    TG --> HUB
+    SL --> HUB
+    CLI --> HUB
+    HUB --> RT
+    RT --> Models
+    RT --> GIT
+    HUB --> JM
+    SCH --> RT
+    SCH --> MON --> GIT
+    RT <--> GH
+    HUB -->|mirror to the room's channel| TG & SL
+```
+
+### A message, end to end
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor You
+    participant Hub
+    participant Router as router.py
+    participant RT as Runtime
+    participant LLM as Model
+    participant WS as Workspace (git)
+
+    You->>Hub: "@riya add rate limiting" (in #api)
+    Hub->>Hub: record in the room (.jm/chat) · mirror to the room's channel
+    Hub->>Router: who answers? (@name · @all · @department · the lead · the manager)
+    Router-->>Hub: riya
+    Hub->>RT: dispatch(riya, event)
+    RT->>RT: paused? over budget? project paused? → queue
+    RT->>LLM: charter + persona + memory + board + project settings + room chat
+    LLM-->>RT: {"reply": "...", "actions": [create_task, ...]}
+    RT->>RT: permission check per action (person-on-project → project → person → company)
+    alt 🟢 / 🟡
+        RT->>WS: apply (task file, doc, …) · commit as you
+    else 🔴
+        RT->>Hub: Approve/Reject card (runs only after you approve)
+    end
+    RT-->>Hub: reply (+ what actually happened)
+    Hub-->>You: in every place the room lives
+```
+
+**Design principles** (from [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)):
+
+1. **Git is the truth.** Tasks, memory, decisions and reports are markdown in a git repo.
+2. **Models are replaceable.** Every prompt is built from the files, so a new model gets the same team.
+3. **Rooms, not channels.** A room is the same everywhere; a transport is just how you reach it.
+4. **Reports come from code, not from a model.** Monitoring can't hallucinate progress.
+5. **Every action is checked.** Agents reply with JSON actions. Each is normalized, permission-checked and applied
+   on its own, and failures get exactly one repair round with the real results.
+
+## 🧰 Tech stack
+
+| Layer | Technology |
+|---|---|
+| Language | Python ≥ 3.10 (`asyncio` loop in a background thread) |
+| Web server | Standard library `ThreadingHTTPServer`: no framework, no build step |
+| Frontend | One file, [`templates/console.html`](james_monitoring/templates/console.html): vanilla JS, CSS design tokens, light and dark themes, Lucide icons inlined (works offline) |
+| Storage | git (workspace) + YAML (`config.yaml`) + JSONL (chat, audit) + JSON (runtime state). **No database** |
+| Telegram | `python-telegram-bot` ≥ 21 |
+| Slack | `slack_sdk` ≥ 3.27 (Socket Mode: no public URL needed) |
+| Models | `anthropic` ≥ 0.40 · `openai` ≥ 1.40 · the `claude`, `codex` and `opencode` CLIs |
+| GitHub | the `gh` CLI, signed in as you |
+| Tests | `pytest` + `pytest-asyncio`, GitHub Actions |
+
+## 🗄 Storage design
+
+There is no database server. State is split by how it should be kept:
+
+```mermaid
+flowchart LR
+    subgraph Team["team-workspace/  (git — committed, pushable)"]
+        T["tasks/T-001-*.md<br/>front matter + Goal · Done means · Log · Feedback · Output"]
+        A["asks/ASK-001.md<br/>approval requests + outcome"]
+        P["team/charter.md<br/>team/&lt;id&gt;/persona.md · memory.md · log.md"]
+        D["docs/ · reports/YYYY-MM-DD.md<br/>decisions/OPEN.md · projects/&lt;id&gt;.md"]
+        AU["audit/YYYY-MM.jsonl<br/>who did what"]
+    end
+    subgraph Runtime[".jm/  (gitignored — operational)"]
+        C["chat/&lt;room&gt;.jsonl"]
+        S["state.json<br/>usage · heartbeat · queue · reminders · read markers"]
+        SE["sessions.json · sandbox/<br/>CLI sessions per person per room"]
+        B["backups/ (last 14 days, zipped)"]
+    end
+    CFG["config.yaml + .env<br/>(next to the workspace)"]
+```
+
+- **Tasks** are markdown with YAML front matter. The ID, owner, status, priority, due date, reviewer and dependencies
+  are all readable and diffable, and every change is a commit.
+- **Statuses:** `todo → doing → review → done`, plus `blocked` (with "who and what") and `cut`.
+- **Chat** is append-only JSONL per room, read incrementally, so the console, Telegram, Slack and `jm chat` stay in
+  sync even across processes.
+- **Writes are safe.** Writes are atomic (temp file, fsync, rename) and each file has a lock shared across threads
+  and processes.
+
+---
+
+## 🔐 Authentication, roles and access control
+
+| Who | How they sign in |
+|---|---|
+| **Founder (owner)** | the console key: `JM_CONSOLE_KEY`, or a random key printed by `jm run` |
+| **Everyone else** | a personal link from **Settings → Sign-in links**. Only a SHA-256 of their key is stored, and a new link revokes the old one |
+
+The link's key is sent as the `X-JM-Key` header, and the console removes it from the address bar right away. Keys are
+compared in constant time. **Every API route declares the permission it needs** (`GET_PERMS` / `POST_PERMS` in
+[`server.py`](james_monitoring/server.py)); anything not listed is refused.
+
+| Permission | owner | admin | member | viewer | client |
+|---|:-:|:-:|:-:|:-:|:-:|
+| Read the workspace (board, rooms, reports…) | ✅ | ✅ | ✅ | ✅ | — |
+| Chat in All hands and project rooms | ✅ | ✅ | ✅ | — | — |
+| Read and write the founder's 1:1 rooms | ✅ | ✅ | — | — | — |
+| Create and move tasks | ✅ | ✅ | ✅ | — | — |
+| Accept, cut, send back, give feedback; approve and reject | ✅ | ✅ | — | — | — |
+| Settings, people, projects, models, Studio, memory, audit, health | ✅ | ✅ | — | — | — |
+| Sign-in links, reminders | ✅ | — | — | — | — |
+| The personal assistant (room, tasks, memory, requests) | ✅ | — | — | — | — |
+| Client portal (their projects only, read only) | — | — | — | — | ✅ |
+
+Some rules are enforced beyond the role table:
+- Only the founder's own words become binding corrections in an agent's memory.
+- Only the founder runs `/commands` or decides approvals from chat.
+- Signed-in teammates' messages are recorded under their names, and agents are told they're colleagues, not the
+  founder.
+- The client report leaves out internal names, chat and costs.
+
+### Agent permissions (what AI teammates may do on their own)
+
+Action types: `create_task` · `update_task` · `write_file` · `message_agent` · `post_group` · `post_room` · `run_code`
+
+| Level | Meaning |
+|---|---|
+| 🟢 green | just do it |
+| 🟡 yellow | do it and tell the founder |
+| 🔴 red | becomes an Approve/Reject card holding the action; it runs only after approval (default for `run_code`) |
+
+Money, anything public, production, deleting data and legal matters always go through `ask_permission`, and merging
+code into main always asks. A project's rules apply to any action that touches that project, wherever it was
+requested.
+
+## 🧠 AI models
+
+| `provider` | What | Auth | Sessions resume |
+|---|---|---|:-:|
+| `claude-code` | Claude via the `claude` CLI | Claude Pro/Max login | ✅ |
+| `codex-cli` | Codex via the `codex` CLI | ChatGPT login | ✅ |
+| `opencode` | any OpenCode model (`zai/glm-4.6`, `anthropic/…`, free `opencode/…` with `allow_free`) | OpenCode provider logins | ✅ |
+| `anthropic` | Anthropic API | `ANTHROPIC_API_KEY` | — |
+| `openai` | any OpenAI-compatible API | `OPENAI_API_KEY` (+ `base_url`) | — |
+| `openrouter` | OpenRouter | `OPENROUTER_API_KEY` | — |
+| `ollama` | local models | none (`http://localhost:11434/v1`) | — |
+
+- **Per person, per project.** Set a model in `team[].llm`, in `projects.<id>.llm`, or in
+  `projects.<id>.agents.<id>.llm`.
+- **CLI sessions** are saved per person per room in `.jm/sessions.json`, so a restart resumes the conversation.
+  A fresh session starts when the model changes, or after 40 calls, 600k tokens or 3 days.
+- **Reliability.** Temporary failures (rate limits, overload, network) are retried after 3 s and then 10 s. Login
+  and key errors aren't retried; they're shown with the fix. A turn is capped at 7 minutes of model calls, and a
+  watchdog stops a hung turn after 9 minutes.
+- **Sandboxed CLIs.** Each call runs in an empty folder with no secrets in its environment.
+  - `claude`: no tools and no MCP servers.
+  - `codex`: shell, browser, apps and user config are off.
+  - `opencode`: an isolated config; paid models have every tool off and every permission denied.
+- **Check a model:** use **Settings → AI models** or run `jm connection check`.
+
+## 🔌 Integrations
+
+| Integration | Setup | Notes |
+|---|---|---|
+| **Telegram** | Settings → Channels, or `jm init` ([docs/SETUP.md](docs/SETUP.md)) | one bot per person (`TG_TOKEN_<ID>`), the manager's bot reads the group, approval buttons, quiet hours |
+| **Slack** | [docs/SLACK.md](docs/SLACK.md) (app manifest included) | Socket Mode, `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`, `jm-*` channels per room, `/jm`, approval buttons |
+| **GitHub** | [docs/GITHUB.md](docs/GITHUB.md) (`gh auth refresh -s project`) | tasks mirrored to a GitHub Project in both directions; code tasks as PRs (approving the PR = merging it) |
+| **Coding agent** | Settings → Company → *Code tasks* | `claude` or `codex` edits the project's repo on a `jm/<task>` branch; you approve the merge |
+
+Each room lives on exactly one outside channel (`sync.channel`, which each project can override). Writing about a
+room in the other channel gets a pointer back, and the console always shows everything.
+
+---
+
+## 🖥 CLI
+
+| Command | What it does |
+|---|---|
+| `jm run [--port 8765] [--host 127.0.0.1] [--no-browser] [--no-telegram] [--no-web]` | start everything: console, team, Telegram/Slack, scheduler |
+| `jm init` | terminal setup wizard (verifies Telegram links live) |
+| `jm add-member [name --role R --persona FILE --token T]` · `jm remove-member ID` | manage people |
+| `jm chat <member\|team\|p-<project>> ["message"]` | talk to someone from the terminal (interactive without a message) |
+| `jm status` · `jm report [--write]` · `jm work` | board status · the report · one work session now |
+| `jm connection [check\|test\|login claude\|codex\|opencode [provider]]` | check, test or log in to every model |
+| `jm doctor [--ping]` | check the setup (models, workspace, personas, Telegram) |
+
+All commands accept `-c path/to/config.yaml` (default `./config.yaml`). In chat (console, Telegram or Slack) the
+founder can use `/status` `/board` `/assign` `/accept` `/feedback` `/changes` `/cut` `/asks` `/approve` `/reject`
+`/pause` `/resume` `/log` `/budget` `/report` `/work` `/onboard` `/whoami` `/groupid` `/help`.
+In Slack, `!status` works like `/status`.
+
+## 🌐 HTTP API
+
+The console uses a JSON API on the same port. Every request needs `X-JM-Key: <key>`. A failure returns
+`{"error": "..."}` with 400, 403, 404, 409 (setup needed), 413 or 504. This API exists for the console and
+isn't versioned yet; use it at your own risk.
+
+<details>
+<summary><b>GET routes</b> (permission in brackets)</summary>
+
+| Route | Returns |
+|---|---|
+| `/api/state` [any] | company, you (`me`), people, projects, departments, clients, channels (a client gets only their portal info) |
+| `/api/dashboard` · `/api/pulse` [read] | the Overview · a cheap poll for unread, versions and "needs you" |
+| `/api/tasks` · `/api/task?id=` [read] | tasks you may see · one task with sections, dependencies and git history |
+| `/api/chat?room=&after=` · `/api/thread?room=&root=` · `/api/rooms` [read] | messages · a thread · rooms with their last message |
+| `/api/asks` [read] | approval requests (the assistant's are the founder's only) |
+| `/api/search?q=` · `/api/doc?path=` [read] | full-text search · a team document with history |
+| `/api/notifications` [read] | the bell: items with read state |
+| `/api/member?id=` · `/api/team` · `/api/project?id=` [read] | profile · people · project detail |
+| `/api/reports` · `/api/report?name=` · `/api/decisions` · `/api/budget` [read] | reports and decisions · token use |
+| `/api/clients` · `/api/client_report?id=` [read] | clients · the client-safe report |
+| `/api/models/health` [read] | the setup check shown when the console opens |
+| `/api/memory?id=` [admin] | memory entries |
+| `/api/settings` · `/api/project/settings?id=` [admin] | company settings · project settings with the effective value per person |
+| `/api/models/catalog` · `/api/models/team` · `/api/connections` · `/api/opencode/models` [admin] | every model option · per person · connections |
+| `/api/audit` · `/api/audit.csv` · `/api/health` [admin] | the audit log (filters: `kind`, `who`, `q`, `before`) · CSV · system checks |
+| `/api/studio/templates` · `/api/github/status` [admin] | Studio templates and skills · `gh` status |
+| `/api/model_login` [admin] | the state of a running CLI login |
+| `/api/users` · `/api/reminders` [owner] | sign-in links · reminders |
+| `/api/portal` [client] | the client's projects and report |
+
+</details>
+
+<details>
+<summary><b>POST routes</b> (JSON body; permission in brackets)</summary>
+
+| Route | Does |
+|---|---|
+| `/api/chat` [chat] | send `{room, text, reply_to?}` |
+| `/api/tasks` · `/api/task` [task] | create · `{id, action: status\|edit\|accept\|cut\|feedback\|changes}` (the last four need approve) |
+| `/api/ask` [approve] | `{id, decision: approved\|rejected, note}` |
+| `/api/notifications/read` [read] | `{ids}` or `{all: true}` |
+| `/api/projects` · `/api/project/members` · `/api/project/settings` · `/api/project/pause` [admin] | project details · team · settings · pause/resume |
+| `/api/member` · `/api/add` · `/api/remove` · `/api/memory` [admin] | profiles · people (removal hands open tasks to the manager) · memory edits |
+| `/api/studio/try` · `/api/studio/hire` [admin] | a trial chat (nothing saved) · hire |
+| `/api/departments` · `/api/clients` [admin] | save or delete |
+| `/api/settings` · `/api/decisions` · `/api/pause` · `/api/work` · `/api/report/run` · `/api/restart` [admin] | company operations |
+| `/api/models/assign` · `/api/models/default` · `/api/models/sessions/reset` · `/api/test_model` · `/api/model_check` [admin] | models |
+| `/api/model_login` · `/api/model_login/input` · `/api/model_login/cancel` · `/api/model_key` · `/api/connections/*` [admin] | log in to a CLI from the console · save an API key |
+| `/api/telegram/*` · `/api/slack/*` · `/api/github/*` [admin] | connect channels and GitHub |
+| `/api/upload` · `/api/upload_folder` · `/api/token` · `/api/links` · `/api/member_status` [admin] | import personas · check Telegram bots |
+| `/api/users` · `/api/reminders` [owner] | `{action: add\|update\|rotate\|remove}` (the link is returned once) · reminders |
+| `/api/setup` [owner] | first-run setup (only while there's no `config.yaml`) |
+
+</details>
+
+---
+
+## 🗂 Project structure
+
+```text
+james-monitoring/
+├── james_monitoring/
+│   ├── cli.py            # `jm` command-line entry point
+│   ├── server.py         # console HTTP server, JSON API, roles & per-route permissions
+│   ├── templates/
+│   │   ├── console.html  # the whole web console (single file, no build)
+│   │   └── charter.md · persona.md · manager.md   # starter files for a new team
+│   ├── runtime.py        # dispatch, prompts, actions, permissions, sessions, queue, work sessions
+│   ├── hub.py            # rooms: record → mirror → route; threads; the runtime's bus
+│   ├── router.py         # who answers: @name · @all · @department · lead · manager
+│   ├── chat.py           # per-room JSONL chat store (incremental, multi-process safe)
+│   ├── prompts.py        # system prompt + action protocol
+│   ├── tasks.py · asks.py · mdoc.py   # task board rules · approval requests · markdown+front matter
+│   ├── workspace.py      # the git workspace: files, memory, commits, history, state
+│   ├── monitor.py        # deterministic report & checks
+│   ├── scheduler.py      # daily report, work sessions, checks, brief, reminders, GitHub sync
+│   ├── config.py · fileio.py   # typed, validated config · atomic writes and locks
+│   ├── users.py · audit.py · search.py   # sign-in & roles · audit log · full-text search
+│   ├── studio.py · assistant.py          # Agent Studio · personal assistant (reminders, brief)
+│   ├── connections.py    # model checks, catalog, console logins (PTY)
+│   ├── gateway.py · telegram_setup.py · slack.py · github.py   # integrations
+│   ├── executor.py       # coding agent on a branch / worktree; merge after approval
+│   ├── setup.py · ui.py · skills.py · commands.py · util.py
+│   └── llm/              # claude_code · codex_cli · opencode · anthropic · openai · fake
+├── tests/                # 22 test modules, 188 tests (+ fakes for Telegram and gh)
+├── docs/                 # ARCHITECTURE · SETUP · SLACK · GITHUB · screenshots/
+├── deploy/               # Dockerfile · docker-compose.yml · systemd unit
+├── examples/config.yaml  # fully commented configuration
+├── .env.example
+└── pyproject.toml
+```
+
+## 🚢 Deployment
+
+**Docker Compose** (the console is published on the host's `127.0.0.1:8765` only):
 
 ```bash
-pip install -e ".[dev]" && pytest -q
+cd deploy
+mkdir -p data
+export JM_CONSOLE_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(18))")
+docker compose up -d --build
+echo "http://localhost:8765/?k=$JM_CONSOLE_KEY"     # finish setup in the browser
 ```
 
-The tests include a fake Telegram Bot API server. They drive the real python-telegram-bot code and the full
-`jm init` flow end to end.
+`deploy/data/` holds `config.yaml`, `.env` and `team-workspace/`. The image includes git and the API providers.
+To use the `claude`, `codex` or `opencode` CLIs inside the container, install them in the image and log in there.
+Otherwise use an API provider or Ollama.
 
-## License
+**systemd:** see [`deploy/james-monitoring.service`](deploy/james-monitoring.service). It runs
+`jm -c <data>/config.yaml run` as a dedicated user, with `Restart=always`.
 
-MIT
+**Remote access:** the console listens on localhost by default. Reach it through an SSH tunnel
+(`ssh -L 8765:localhost:8765 server`) or a private network. `--host 0.0.0.0` exposes it to anyone who has the link,
+and `jm run` warns you when you do this.
+
+## 🧪 Testing
+
+```bash
+pip install -e ".[dev]"
+pytest -q                     # 188 tests, about a minute; no network, models are faked
+```
+
+The tests cover:
+- the console backend end to end, the runtime and routing;
+- tasks and approvals, roles and access control (over real HTTP);
+- the audit log, search, threads, project settings and pause;
+- the personal assistant, Studio, retries and the watchdog;
+- Telegram and Slack flows (with fakes), GitHub sync (with a fake `gh`), and model CLI adapters.
+
+CI runs the suite on Python 3.10 and 3.12 for every push and pull request.
+
+## 🛡 Security
+
+- **Local by default.** The server binds `127.0.0.1`. Every API call needs a key, compared in constant time.
+  Responses are sent with `no-store`, `nosniff`, `no-referrer` and `X-Frame-Options: DENY`.
+- **Secrets stay in `.env`,** written with mode 0600 and never committed. Sign-in keys are stored only as SHA-256
+  hashes.
+- **Least privilege by role,** enforced on the server for every route (see the table above).
+- **Agents are fenced:**
+  - They can read only `docs/`, `tasks/`, `reports/`, `team/`, `asks/` and `decisions/`, checked on the resolved
+    path, so nothing under `.git`, `.jm` or `.env` is reachable.
+  - They write only under `docs/`.
+  - Risky actions need approval.
+  - Model CLIs run sandboxed with no secrets.
+- **The audit log** in the team repo records console actions per person, decisions from every channel, agent
+  actions and model failures. Secret fields, credentials in URLs and token-shaped strings are scrubbed, and the CSV
+  export is protected against spreadsheet formulas.
+- **Git** never prompts (`GIT_TERMINAL_PROMPT=0`, SSH in batch mode), never signs, and uses timeouts.
+
+Found a vulnerability? Please report it privately to the maintainers (CuriousDevs, via the contact on the GitHub
+organisation) instead of opening a public issue.
+
+## 🗺 Roadmap
+
+Planned, and **not** in the code today:
+
+- [ ] Weekly planning and a standup ritual
+- [ ] A cost-per-model view in the console
+- [ ] Native Slack threads for replies (today a reply is mirrored with a `↩ quote` line)
+- [ ] A coding tool per project (today there is one company-wide executor)
+- [ ] A versioned public API
+- [ ] Validation against real Slack workspaces, Telegram groups and GitHub Projects at scale (these paths are
+      covered by tests with fakes)
+
+## 🤝 Contributing
+
+Contributions are welcome.
+
+1. **Fork and branch:** `git checkout -b feature/short-name`
+2. **Set up:** `python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"`
+3. **Test:** `pytest -q` must pass. Add tests for new behavior (see `tests/test_workforce.py` for end-to-end style
+   tests over the real HTTP API).
+4. **Keep the style:**
+   - small modules and plain functions;
+   - comments that explain *why*;
+   - user-facing text in plain, first-person language;
+   - no new runtime dependency without discussion;
+   - the console stays a single file with no build step.
+5. **Open a pull request** describing the change and how you verified it.
+
+For the design, start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Note that `config.yaml`, `.env` and
+`team-workspace/` hold private data and are gitignored.
+
+## 📄 License
+
+[MIT](LICENSE) © 2026 CuriousDevs
