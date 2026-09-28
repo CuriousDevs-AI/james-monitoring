@@ -599,3 +599,12 @@ def test_an_approval_asked_in_a_project_room_shows_there(app):
     ask_id = card["ask_id"]
     app.decide(ask_id, "approved")
     assert any(t.title == "FAQ copy" for t in app.rt.tasks.all())
+
+
+def test_report_sees_a_block_on_the_founders_first_name(app):
+    t = app.task_create({"title": "Waitlist", "owner": "riya", "notify": False})
+    app.rt.tasks.set_status(t["id"], "blocked", by="riya", blocked_on="Maria — which email provider")
+    from james_monitoring.monitor import build_report, on_owner
+    rep = build_report(app.rt.cfg, app.rt.ws, app.rt.tasks, app.rt.asks)
+    assert "1 block(s) waiting on Maria Lopez" in rep and f"Unblock {t['id']}" in rep
+    assert not on_owner(app.rt.cfg, "Mariana from marketing — the copy")     # whole words only

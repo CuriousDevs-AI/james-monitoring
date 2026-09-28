@@ -8,4 +8,6 @@ RUN pip install --no-cache-dir ".[all]"
 WORKDIR /data
 RUN git config --global user.name "james-monitoring" && git config --global user.email "jm@localhost" \
  && git config --global --add safe.directory '*'
-CMD ["jm", "-c", "/data/config.yaml", "run"]
+EXPOSE 8765
+# 0.0.0.0 inside the container; docker-compose publishes it on 127.0.0.1 of the host only
+CMD ["jm", "-c", "/data/config.yaml", "run", "--host", "0.0.0.0", "--no-browser"]
