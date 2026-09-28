@@ -487,6 +487,14 @@ def providers_in_use(cfg) -> list[dict]:
         g["people"].append(m.id)
         if not m.llm:
             g["default"] = True
+    for pid, p in (getattr(cfg, "projects", None) or {}).items():       # project models are in use too
+        for m in cfg.project_members(pid):
+            if cfg.llm_source(m, pid) not in ("project", "person_project"):
+                continue
+            c = cfg.llm_for(m, pid)
+            key = (_kind(c.provider), c.model, c.base_url, c.api_key_env)
+            g = groups.setdefault(key, {"config": c, "people": [], "default": False})
+            g["people"].append(f"{m.id}@{pid}")
     return list(groups.values()) or [{"config": cfg.llm, "people": [], "default": True}]
 
 

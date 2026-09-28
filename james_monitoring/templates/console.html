@@ -612,7 +612,7 @@ function hashOf() { const v = VIEW_HASH[VIEW] || VIEW;
   return "#" + (VIEW === "project" ? `project/${PROJECT}/${PTAB}` : VIEW === "chat" && ROOM ? `chat/${ROOM}` : v); }
 function readHash() { const [v, a, b] = decodeURIComponent(location.hash.slice(1)).split("/"); if (!v) return false;
   const view = HASH_VIEW[v] || v; if (!TITLES[view]) return false;
-  VIEW = view; if (view === "project") { PROJECT = a || ""; PTAB = ["overview", "chat", "board", "team"].includes(b) ? b : "overview"; } else if (view === "chat" && a) ROOM = a;
+  VIEW = view; if (view === "project") { PROJECT = a || ""; PTAB = ["overview", "chat", "board", "team", "settings"].includes(b) ? b : "overview"; } else if (view === "chat" && a) ROOM = a;
   return true; }
 window.addEventListener("hashchange", () => { document.body.classList.remove("nav-open"); $("#side")?.classList.remove("open");
   if (location.hash !== hashOf() && readHash() && S && !S.setup_needed) { closeSheet(); boot(); } });
@@ -1103,7 +1103,8 @@ async function vProject() {
   let p;
   try { p = await api("/api/project?id=" + encodeURIComponent(PROJECT)); } catch { toast("That project no longer exists", "warning"); return go("projects"); }
   const lead = S.members.find(m => m.id === p.lead), pct = pctOf(p);
-  const tabs = [["overview", "Overview", "overview"], ["chat", "Room", "hash"], ["board", "Board", "board", p.counts.open], ["team", "Team", "team", p.members.length]];
+  const tabs = [["overview", "Overview", "overview"], ["chat", "Room", "hash"], ["board", "Board", "board", p.counts.open], ["team", "Team", "team", p.members.length],
+    ...(can("admin") ? [["settings", "Settings", "settings"]] : [])];
   const head = h("div", {class: "phead"},
     h("div", {class: "row", style: "flex-wrap:nowrap;align-items:flex-start;gap:14px"}, projMark(p, "lg"),
       h("div", {class: "grow", style: "min-width:0"}, h("div", {class: "row"}, h("h1", {}, p.name), badge(p.status, P_TONE[p.status]), p.client ? h("span", {class: "badge outline click", onclick: () => go("clients")}, "for " + ((S.clients || []).find(c => c.id === p.client)?.name || p.client)) : null, badge("room on " + (p.home ? p.home[0].toUpperCase() + p.home.slice(1) : "console only"), "outline")),
@@ -1123,6 +1124,7 @@ async function vProject() {
     return body.put(h("div", {class: "row", style: "margin-bottom:12px"}, fo, h("span", {class: "grow"}), h("span", {class: "xs muted"}, "Drag cards between columns · Done = accepted by you")),
       boardPanel(p.tasks.filter(t => !FILTER.powner || t.owner === FILTER.powner)));
   }
+  if (PTAB === "settings" && can("admin")) return projectSettings(p, body);
   if (PTAB === "team") return body.put(can("admin") ? projectTeam(p) : h("div", {class: "card list"}, p.people.map(x => h("div", {class: "li"}, avatar(x.name), h("div", {class: "grow"}, h("span", {class: "t"}, x.name), h("div", {class: "xs muted"}, x.role)), x.lead ? badge("Lead", "info") : null))));
   // overview
   const attention = p.tasks.filter(t => t.status === "blocked" || t.overdue || t.status === "review");
@@ -1149,6 +1151,64 @@ async function vProject() {
             h("div", {class: "grow", style: "min-width:0"}, h("div", {class: "xs muted"}, (m.who === S.owner_key ? "You" : nameOf(m.who)) + " · " + new Date(m.ts * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"})),
               h("div", {class: "small clamp"}, m.text))))) : h("div", {class: "card-b muted small"}, "No messages yet."),
           h("button", {class: "btn ghost sm", onclick: () => { PTAB = "chat"; render(); }}, "Open room", icon("arrow"))))));
+}
+
+// Project settings: this project's own model, rules and instructions — for everyone on it, or per person.
+// The most specific wins: the person on this project → the project → the person's own → the company's.
+const SRC_TXT = {person_project: "set for them here", project: "this project", person: "their own", company: "company"};
+async function projectSettings(p, body) {
+  body.put(h("div", {class: "card card-b row"}, h("span", {class: "spin"}), " Loading settings…"));
+  const d = await api("/api/project/settings?id=" + encodeURIComponent(p.id));
+  const companyModel = d.company.llm.provider + (d.company.llm.model ? "/" + d.company.llm.model : "");
+  const modelPick = (cur, fallback) => { const prov = h("select", {"aria-label": "Provider"}, h("option", {value: ""}, fallback), PROVIDERS.map(([v, t]) => h("option", {value: v, selected: cur.provider === v}, t)));
+    const model = h("input", {value: cur.model || "", placeholder: "blank = the tool's default"}); const free = h("input", {type: "checkbox", checked: !!cur.allow_free});
+    setTimeout(() => modelSuggest(model, prov), 0);
+    const el = h("div", {}, h("div", {class: "two"}, prov, model), h("label", {class: "row xs", style: "gap:6px;margin-top:6px;flex-wrap:nowrap"}, free, "Allow a free OpenCode model (isolated)"));
+    el.value = () => prov.value ? {provider: prov.value, model: model.value.trim(), allow_free: free.checked} : null; return el; };
+  const permGrid = (cur, fallbackOf) => { const sel = Object.fromEntries(S.action_types.map(a => [a, h("select", {"aria-label": ACTION_TXT[a] || a},
+      h("option", {value: ""}, fallbackOf(a)), ["green", "yellow", "red"].map(l => h("option", {value: l, selected: cur[a] === l}, LEVEL_TXT[l])))]));
+    const el = h("div", {class: "perm"}, S.action_types.map(a => [h("span", {class: "small"}, ACTION_TXT[a] || a), sel[a]]));
+    el.value = () => Object.fromEntries(Object.entries(sel).map(([k, e]) => [k, e.value]).filter(([, v]) => v)); return el; };
+  // for everyone
+  const pModel = modelPick(d.llm, `Default (company: ${companyModel})`);
+  const pInstr = h("textarea", {placeholder: "What everyone on this project should know and follow — the client, tone, definitions of done, what never to do…", style: "min-height:110px"}, d.instructions);
+  const pPerms = permGrid(d.permissions, a => `Default (${LEVEL_TXT[d.company.permissions[a]]})`);
+  // per person
+  const rows = d.people.map(x => { const a = d.agents[x.id] || {};
+    const role = h("input", {value: a.role || "", placeholder: `e.g. tech reviewer on ${p.name} (their role elsewhere: ${x.role})`});
+    const model = modelPick(a.llm || {}, `Default (now: ${x.model})`);
+    const instr = h("textarea", {placeholder: `Only for ${x.name} on ${p.name} — e.g. “review every PR within a day”`, style: "min-height:70px"}, a.instructions || "");
+    const perms = permGrid(a.permissions || {}, act => `Default (${LEVEL_TXT[x.permissions[act].level]})`);
+    const custom = !!(a.role || a.llm || a.instructions || Object.keys(a.permissions || {}).length);
+    const det = h("details", {class: "card", style: "margin-bottom:10px", open: custom || null},
+      h("summary", {class: "card-h", style: "cursor:pointer;list-style:none"}, avatar(x.name, "sm"), h("b", {}, x.name), h("span", {class: "xs muted"}, a.role || x.role), h("span", {class: "grow"}),
+        custom ? badge("custom here", "accent") : null, h("span", {class: "badge outline mono", title: "The model they use on this project"}, x.model), h("span", {class: "xs muted"}, "· " + SRC_TXT[x.model_source])),
+      h("div", {class: "card-b"}, h("label", {class: "f", style: "margin-top:0"}, "Role on this project"), role,
+        h("label", {class: "f"}, "Model on this project"), model,
+        h("label", {class: "f"}, "Instructions for them here"), instr,
+        h("label", {class: "f"}, "What they may do on their own here"), perms));
+    return {id: x.id, el: det, value: () => ({role: role.value, llm: model.value(), instructions: instr.value, permissions: perms.value()})}; });
+  // who ends up with what (after saving)
+  const TONE = {green: "success", yellow: "warning", red: "danger"};
+  const summary = d.people.length ? h("div", {style: "overflow-x:auto"}, h("table", {class: "small", style: "border-collapse:collapse;width:100%"},
+    h("tr", {}, h("th", {style: "text-align:left;padding:6px"}, "Person"), h("th", {style: "text-align:left;padding:6px"}, "Model"), S.action_types.map(a => h("th", {class: "xs muted", style: "text-align:left;padding:6px;font-weight:500"}, ACTION_TXT[a] || a))),
+    d.people.map(x => h("tr", {style: "border-top:1px solid var(--border)"}, h("td", {style: "padding:6px;white-space:nowrap"}, x.name),
+      h("td", {style: "padding:6px"}, h("span", {class: "mono xs"}, x.model), h("div", {class: "xs muted"}, SRC_TXT[x.model_source])),
+      S.action_types.map(a => h("td", {style: "padding:6px", title: "from: " + SRC_TXT[x.permissions[a].source]}, badge(LEVEL_TXT[x.permissions[a].level], TONE[x.permissions[a].level]))))))) : h("div", {class: "small muted"}, "Nobody on this project yet.");
+  const err = h("div", {class: "err"}), out = h("span", {class: "small"});
+  const save = h("button", {class: "btn primary", onclick: async () => { err.textContent = ""; save.disabled = true;
+    try { await api("/api/project/settings", {id: p.id, llm: pModel.value(), instructions: pInstr.value, permissions: pPerms.value(), agents: Object.fromEntries(rows.map(r => [r.id, r.value()]))});
+      toast(`${p.name} settings saved`); S = await api("/api/state"); AI_HEALTH = null; aiCheck(); projectSettings(p, body); }
+    catch (e) { err.textContent = e.message; save.disabled = false; } }}, icon("check"), "Save project settings");
+  body.put(h("p", {class: "small muted", style: "margin-top:0"}, `Settings that apply only when people work on ${p.name} — in its room, on its tasks and in work sessions. The most specific wins: the person here → this project → their own → the company's. Leave anything blank to use the next one.`),
+    h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon("eye"), h("h3", {}, "Who ends up with what"), h("span", {class: "xs muted"}, "as saved · hover a level to see where it comes from")),
+      h("div", {class: "card-b"}, summary)),
+    h("div", {class: "cols"},
+      h("div", {class: "card", style: "margin-bottom:16px;align-self:start"}, h("div", {class: "card-h"}, icon("projects"), h("h3", {}, "Everyone on this project")),
+        h("div", {class: "card-b"}, h("label", {class: "f", style: "margin-top:0"}, "Model"), pModel, h("label", {class: "f"}, "Project instructions"), pInstr,
+          h("label", {class: "f"}, "What people may do on their own here"), pPerms)),
+      h("div", {}, h("h2", {class: "sec"}, "Per person on this project"), rows.length ? rows.map(r => r.el) : h("div", {class: "small muted"}, "Add people on the Team tab first."))),
+    h("div", {class: "row", style: "margin-top:6px;position:sticky;bottom:0;background:var(--background);padding:10px 0;border-top:1px solid var(--border)"}, save, out, err));
 }
 
 function projectTeam(p) {

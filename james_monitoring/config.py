@@ -62,6 +62,15 @@ class User:
 
 
 @dataclass
+class ProjectAgent:
+    """How one person works on one project — overrides their own and the company's settings, only there."""
+    role: str = ""                 # their role on this project (e.g. "tech reviewer")
+    llm: "LLMConfig | None" = None
+    permissions: dict[str, str] = field(default_factory=dict)
+    instructions: str = ""         # extra instructions for this person on this project
+
+
+@dataclass
 class Project:
     id: str
     repo: str = ""                 # local path of the project's git repo (optional)
@@ -74,6 +83,10 @@ class Project:
     telegram_chat_id: int = 0      # optional Telegram group for this project's room
     channel: str = ""              # telegram | slack | console — where this project's room lives ("" = company default)
     client: str = ""               # client id this project is for (optional)
+    llm: "LLMConfig | None" = None   # the project's model for everyone on it (overrides their own and the company's)
+    permissions: dict[str, str] = field(default_factory=dict)   # the project's rules (override person and company)
+    instructions: str = ""         # read by everyone working on this project
+    agents: dict[str, ProjectAgent] = field(default_factory=dict)   # per person on this project
 
 
 @dataclass
@@ -216,12 +229,26 @@ class Config:
     def is_authorized(self, user_id: int | None) -> bool:
         return user_id is not None and (user_id == self.owner_user_id or user_id in self.extra_user_ids)
 
-    def permission(self, member: Member, action: str) -> str:
-        """green | yellow | red for this person and action type."""
-        return member.permissions.get(action) or self.permissions.get(action) or "green"
+    def permission(self, member: Member, action: str, project: str = "") -> str:
+        """green | yellow | red for this person and action — the most specific setting wins:
+        this person on this project → the project → the person → the company."""
+        p = self.projects.get(project) if project else None
+        pa = p.agents.get(member.id) if p else None
+        return ((pa.permissions.get(action) if pa else None) or (p.permissions.get(action) if p else None)
+                or member.permissions.get(action) or self.permissions.get(action) or "green")
 
-    def llm_for(self, member: Member) -> "LLMConfig":
-        return member.llm or self.llm
+    def llm_for(self, member: Member, project: str = "") -> "LLMConfig":
+        """The model for this person — on a project: their project model → the project's → theirs → the company's."""
+        p = self.projects.get(project) if project else None
+        pa = p.agents.get(member.id) if p else None
+        return (pa.llm if pa and pa.llm else None) or (p.llm if p and p.llm else None) or member.llm or self.llm
+
+    def llm_source(self, member: Member, project: str = "") -> str:
+        """Where this person's model comes from: person_project | project | person | company."""
+        p = self.projects.get(project) if project else None
+        pa = p.agents.get(member.id) if p else None
+        return ("person_project" if pa and pa.llm else "project" if p and p.llm else "person" if member.llm
+                else "company")
 
     def channel_for(self, room: str, connected: tuple[str, ...] = ()) -> str:
         """The one outside channel a room lives on: "telegram", "slack" or "" (console only).
@@ -344,8 +371,17 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         raise ConfigError("config: only one member can have `monitor: true`")
 
     projects = {}
+    llm_or_none = lambda d: parse_llm(d, llm_raw) if isinstance(d, dict) and d.get("provider") else None   # noqa: E731
     for pid, p in (raw.get("projects") or {}).items():
         p = p or {}
+        agents = {}
+        for aid, a in (p.get("agents") or {}).items():
+            a = a or {}
+            if str(aid) not in seen:
+                raise ConfigError(f"config: projects.{pid}.agents.{aid} is not on the team")
+            agents[str(aid)] = ProjectAgent(role=str(a.get("role") or ""), llm=llm_or_none(a.get("llm")),
+                                            permissions=_levels(a.get("permissions"), f"projects.{pid}.agents.{aid}.permissions"),
+                                            instructions=str(a.get("instructions") or ""))
         projects[str(pid)] = Project(id=str(pid), repo=str(p.get("repo") or ""),
                                      main_branch=str(p.get("main_branch") or "main"),
                                      push=bool(p.get("push", False)), name=str(p.get("name") or pid),
@@ -353,7 +389,9 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
                                      status=str(p.get("status") or "active"),
                                      telegram_chat_id=int(p.get("telegram_chat_id") or 0),
                                      channel=str(p.get("channel") or "").lower(),
-                                     client=str(p.get("client") or ""))
+                                     client=str(p.get("client") or ""), llm=llm_or_none(p.get("llm")),
+                                     permissions=_levels(p.get("permissions"), f"projects.{pid}.permissions"),
+                                     instructions=str(p.get("instructions") or ""), agents=agents)
 
     sl = raw.get("slack") or {}
     slack = SlackConfig(bot_token_env=str(sl.get("bot_token_env") or "SLACK_BOT_TOKEN"),

@@ -412,6 +412,87 @@ class App:
         return {**self._project_json(p), "people": people, "tasks": tasks,
                 "last": (self.chat.since(PROJECT_ROOM + pid, -1) or [])[-3:]}
 
+    # -- project settings: this project's own model, rules and instructions — for everyone, or per person --------
+    def project_settings(self, pid: str) -> dict:
+        cfg = self.rt.cfg
+        p = cfg.projects.get(pid)
+        if not p:
+            raise ValueError(f"no project {pid}")
+        raw = (self.raw().get("projects") or {}).get(pid) or {}
+        llm_view = lambda c: {"provider": c.provider, "model": c.model, "allow_free": c.allow_free}   # noqa: E731
+
+        def perm_source(m, a):
+            pa = p.agents.get(m.id)
+            if pa and pa.permissions.get(a):
+                return "person_project"
+            if p.permissions.get(a):
+                return "project"
+            return "person" if m.permissions.get(a) else "company"
+        people = []
+        for m in cfg.project_members(pid):
+            people.append({"id": m.id, "name": m.name, "role": m.role,
+                           "model": self.rt.model_name(m, pid), "model_source": cfg.llm_source(m, pid),
+                           "permissions": {a: {"level": cfg.permission(m, a, pid), "source": perm_source(m, a)}
+                                           for a in ACTION_TYPES}})
+        return {"id": pid, "llm": raw.get("llm") or {}, "permissions": raw.get("permissions") or {},
+                "instructions": raw.get("instructions") or "", "agents": raw.get("agents") or {},
+                "company": {"llm": llm_view(cfg.llm), "permissions": cfg.permissions}, "people": people}
+
+    @config_txn
+    def project_settings_save(self, b: dict) -> dict:
+        """Save a project's settings. Anything left empty falls back (the person's own → the company's)."""
+        pid = str(b.get("id") or "")
+        raw = self.raw()
+        p = (raw.get("projects") or {}).get(pid)
+        if p is None:
+            raise ValueError(f"no project {pid}")
+        team = {str(m.get("id")) for m in raw.get("team", [])}
+
+        def clean_llm(d):
+            d = d or {}
+            if not d.get("provider"):
+                return None
+            if d["provider"] not in PROVIDERS:
+                raise ValueError(f"Unknown AI provider {d['provider']}.")
+            out = {k: str(d[k]).strip() for k in ("provider", "model", "base_url") if str(d.get(k) or "").strip()}
+            if d.get("allow_free"):
+                out["allow_free"] = True
+            if out["provider"] == "opencode" and "/" not in out.get("model", ""):
+                raise ValueError("Pick an OpenCode model (provider/model) for this project.")
+            return out
+
+        def clean_perms(d):
+            return {k: v for k, v in (d or {}).items() if k in ACTION_TYPES and v in LEVELS}
+
+        def put(target, key, value):
+            if value:
+                target[key] = value
+            else:
+                target.pop(key, None)
+        if "llm" in b:
+            put(p, "llm", clean_llm(b.get("llm")))
+        if "permissions" in b:
+            put(p, "permissions", clean_perms(b.get("permissions")))
+        if "instructions" in b:
+            put(p, "instructions", str(b.get("instructions") or "").strip())
+        if isinstance(b.get("agents"), dict):
+            agents = {}
+            for mid, a in b["agents"].items():
+                if str(mid) not in team:
+                    raise ValueError(f"{mid} isn't on the team.")
+                a = a or {}
+                entry = {}
+                put(entry, "role", " ".join(str(a.get("role") or "").split()))
+                put(entry, "llm", clean_llm(a.get("llm")))
+                put(entry, "permissions", clean_perms(a.get("permissions")))
+                put(entry, "instructions", str(a.get("instructions") or "").strip())
+                if entry:
+                    agents[str(mid)] = entry
+            put(p, "agents", agents)
+        self.save_raw(raw)                   # config.yaml (validated, .bak); the change is in the audit log
+        self.load()
+        return self.project_settings(pid)
+
     @config_txn
     def project_members(self, pid: str, members: list[str]) -> dict:
         raw = self.raw()
@@ -655,6 +736,16 @@ class App:
             if not t["ok"] or t["error"]:
                 k = (t["label"], t["model"], t["detail"], t["fix"])
                 problems.setdefault(k, []).append(t["name"])
+        cfg = self.rt.cfg
+        for pid, p in cfg.projects.items():                     # models a project gives its people
+            for m in cfg.project_members(pid):
+                if cfg.llm_source(m, pid) not in ("project", "person_project"):
+                    continue
+                c = cfg.llm_for(m, pid)
+                chk = cx.check(c)
+                if not chk["ok"]:
+                    k = (chk.get("label", c.provider), c.model, chk["detail"], chk.get("fix", ""))
+                    problems.setdefault(k, []).append(f"{m.name} on {p.name or pid}")
         oc = cx._cached("opencode-info", 60, cx.opencode_info)
         return {"ok": not problems, "problems": [{"label": k[0], "model": k[1], "detail": k[2], "fix": k[3],
                                                   "who": v} for k, v in problems.items()],
@@ -1611,7 +1702,7 @@ GET_PERMS = {
     "/api/chat": "read", "/api/rooms": "read", "/api/pulse": "read", "/api/thread": "read", "/api/member": "read",
     "/api/project": "read", "/api/team": "read", "/api/decisions": "read", "/api/reports": "read",
     "/api/report": "read", "/api/budget": "read", "/api/search": "read", "/api/memory": "read",
-    "/api/notifications": "read", "/api/clients": "read", "/api/doc": "read", "/api/client_report": "read",
+    "/api/notifications": "read", "/api/clients": "read", "/api/doc": "read", "/api/project/settings": "admin", "/api/client_report": "read",
     "/api/portal": "portal", "/api/github/status": "admin", "/api/models/catalog": "admin",
     "/api/models/team": "admin", "/api/models/health": "read", "/api/connections": "admin",
     "/api/opencode/models": "admin", "/api/settings": "admin", "/api/audit": "admin", "/api/audit.csv": "admin",
@@ -1619,7 +1710,7 @@ GET_PERMS = {
     "/api/model_login": "admin", "/api/connections/login": "admin",
 }
 POST_PERMS = {
-    "/api/chat": "chat", "/api/tasks": "task", "/api/task": "task", "/api/ask": "approve",
+    "/api/chat": "chat", "/api/tasks": "task", "/api/task": "task", "/api/ask": "approve", "/api/project/settings": "admin",
     "/api/notifications/read": "read", "/api/projects": "admin", "/api/project/members": "admin",
     "/api/member": "admin", "/api/decisions": "admin", "/api/settings": "admin", "/api/upload": "admin",
     "/api/upload_folder": "admin", "/api/token": "admin", "/api/links": "admin", "/api/member_status": "admin",
@@ -1643,7 +1734,7 @@ NO_AUDIT = {"/api/chat", "/api/ask", "/api/token", "/api/links", "/api/member_st
             "/api/telegram/code", "/api/notifications/read", "/api/studio/try", "/api/upload", "/api/upload_folder",
             "/api/telegram/detect", "/api/slack/detect"}
 AUDIT_LABEL = {"/api/tasks": "create task", "/api/task": "task", "/api/projects": "save project",
-               "/api/project/members": "project team", "/api/member": "edit profile", "/api/decisions": "edit decisions",
+               "/api/project/members": "project team", "/api/project/settings": "project settings", "/api/member": "edit profile", "/api/decisions": "edit decisions",
                "/api/settings": "change settings", "/api/add": "add person", "/api/remove": "remove person",
                "/api/report/run": "write report", "/api/work": "run work session", "/api/pause": "pause/resume",
                "/api/models/assign": "assign model", "/api/models/default": "use default model",
@@ -1756,6 +1847,7 @@ def make_handler(app: App, key: str):
                     "/api/search": lambda: app.search(q.get("q", ""), user),
                     "/api/memory": lambda: app.memory_get(q.get("id", "")),
                     "/api/doc": lambda: app.doc(q.get("path", "")),
+                    "/api/project/settings": lambda: app.project_settings(q.get("id", "")),
                     "/api/notifications": lambda: app.notifications(user),
                     "/api/audit": lambda: app.audit_list(q),
                     "/api/health": lambda: app.health(),
@@ -1902,6 +1994,7 @@ def make_handler(app: App, key: str):
                 "/api/studio/try": lambda: app.studio_try(b),
                 "/api/studio/hire": lambda: app.studio_hire(b),
                 "/api/departments": lambda: app.departments_save(b),
+                "/api/project/settings": lambda: app.project_settings_save(b),
                 "/api/clients": lambda: app.clients_save(b),
                 "/api/reminders": lambda: app.reminders_save(b),
                 "/api/users": lambda: app.users_save(b),

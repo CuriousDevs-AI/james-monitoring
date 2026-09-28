@@ -377,3 +377,67 @@ def test_transient_model_errors_are_retried(app, monkeypatch):
     app.chat_send("riya", "again?")
     settle(app, lambda: any("couldn't think" in m["text"] for m in app.chat.since("riya", -1)))
     assert dead.n == 1                                        # a login problem isn't retried
+
+
+# -- project settings: a project's own model, rules and instructions, for everyone or per person ------------------
+def test_project_settings_override_company_and_person(app, monkeypatch):
+    import james_monitoring.runtime as rtmod
+    app.member_update({"id": "sam", "permissions": {"write_file": "yellow"}})
+    r = app.project_settings_save({
+        "id": "site", "instructions": "Client is Globex. British spelling.",
+        "permissions": {"write_file": "red"},
+        "agents": {"riya": {"role": "Tech reviewer", "instructions": "Review every PR within a day.",
+                            "permissions": {"write_file": "green"}, "llm": {"provider": "fake", "model": "riya-site"}}}})
+    cfg = app.rt.cfg
+    riya, sam = cfg.member("riya"), cfg.member("sam")
+    # most specific wins: person-on-project → project → person → company
+    assert cfg.permission(riya, "write_file", "site") == "green"
+    assert cfg.permission(sam, "write_file", "site") == "red"          # the project's rule beats Sam's own
+    assert cfg.permission(sam, "write_file") == "yellow"                # elsewhere Sam's own still applies
+    assert cfg.llm_for(riya, "site").model == "riya-site" and cfg.llm_source(riya, "site") == "person_project"
+    assert cfg.llm_source(riya) == "company" and cfg.llm_source(sam, "site") == "company"
+    people = {x["id"]: x for x in r["people"]}
+    assert people["sam"]["permissions"]["write_file"] == {"level": "red", "source": "project"}
+    assert people["riya"]["model_source"] == "person_project"
+
+    # in the project room Riya runs on her project model and reads the project's settings
+    made = {}
+    orig = rtmod.make_llm
+
+    def fake_make(conf):
+        made["model"] = conf.model
+        return app.rt.llm
+    monkeypatch.setattr(rtmod, "make_llm", fake_make)
+    app.rt.llm.push({"reply": "ok", "actions": []})
+    app.chat_send("p-site", "@riya status of the review?")
+    settle(app, lambda: len(app.chat.since("p-site", -1)) >= 2)
+    assert made["model"] == "riya-site"
+    system, _ = app.rt.llm.calls[-1]
+    assert "your role is: Tech reviewer" in system and "British spelling" in system and "within a day" in system
+    # …but in her 1:1 she's on the company model, without the project's instructions
+    app.rt.llm.push({"reply": "ok", "actions": []})
+    app.chat_send("riya", "hi")
+    settle(app, lambda: len(app.chat.since("riya", -1)) >= 2)
+    assert "British spelling" not in app.rt.llm.calls[-1][0]
+    monkeypatch.setattr(rtmod, "make_llm", orig)
+
+    # Sam's write_file in the project room becomes an approval card (the project says "ask me first")
+    app.rt.llm.push({"reply": "Drafted.", "actions": [{"type": "write_file", "path": "docs/site/copy.md", "content": "x"}]})
+    app.chat_send("p-site", "@sam write the copy doc")
+    settle(app, lambda: app.rt.asks.pending())
+    assert "write docs/site/copy.md" in app.rt.asks.pending()[0].summary
+
+    # clearing falls back; bad input is refused
+    app.project_settings_save({"id": "site", "permissions": {}, "agents": {}})
+    assert app.rt.cfg.permission(app.rt.cfg.member("sam"), "write_file", "site") == "yellow"
+    with pytest.raises(ValueError, match="OpenCode model"):
+        app.project_settings_save({"id": "site", "llm": {"provider": "opencode", "model": "glm"}})
+    with pytest.raises(ValueError, match="isn't on the team"):
+        app.project_settings_save({"id": "site", "agents": {"ghost": {"role": "x"}}})
+
+
+def test_project_model_problems_show_in_health(app, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    app.project_settings_save({"id": "site", "llm": {"provider": "openrouter", "model": "z-ai/glm-4.6"}})
+    h = app.models_health()
+    assert not h["ok"] and any("Riya on Site" in p["who"] for p in h["problems"])

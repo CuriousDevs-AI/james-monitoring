@@ -102,6 +102,7 @@ Terminal alternatives still exist: `jm init` (setup wizard), `jm add-member`, `j
 - **Agent Studio**: hire from a role template, shape the persona with a form, try them in a throwaway chat, then hire.
 - **Memory editor** on each profile: add, edit, pin as a binding correction, unpin, forget.
 - **Tasks**: reassign (both people are told), reviewer, depends-on, and every change from git.
+- **Project settings**: a project's own model, rules and instructions, for everyone on it or per person. The most specific wins.
 - **Departments** (with heads, `@engineering`) and **Clients** (a client-safe report and an optional read-only portal).
 - **Personal assistant**: one teammate who works only for you. It has a private chat and tasks, reminders and a morning brief.
 - **Sign-in links** for a co-founder, teammates or clients, with roles (admin, member, viewer, client).

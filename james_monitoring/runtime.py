@@ -249,13 +249,16 @@ class Runtime:
             self._locks, self._bg, self.turns = shared._locks, shared._bg, shared.turns
             self._coding, self._ask_locks, self._gh_lock = shared._coding, shared._ask_locks, shared._gh_lock
 
-    def llm_for(self, m: Member) -> LLM:
-        """Each person can run on their own model (Claude, Codex, a local model…); default: the company's."""
-        if not m.llm:
+    def llm_for(self, m: Member, project: str = "") -> LLM:
+        """Each person can run on their own model (Claude, Codex, a local model…) — and on a project, on that
+        project's model or their own model for that project. Default: the company's."""
+        conf = self.cfg.llm_for(m, project)
+        if conf is self.cfg.llm:
             return self._sandboxed(self.llm)
-        if m.id not in self._llms:
-            self._llms[m.id] = self._sandboxed(make_llm(m.llm))
-        return self._llms[m.id]
+        key = f"{m.id}@{project}" if self.cfg.llm_source(m, project) in ("project", "person_project") else m.id
+        if key not in self._llms:
+            self._llms[key] = self._sandboxed(make_llm(conf))
+        return self._llms[key]
 
     def _sandboxed(self, llm: LLM) -> LLM:
         """CLI models keep their per-person folders (and so their sessions) in the company's own sandbox."""
@@ -282,20 +285,20 @@ class Runtime:
             fn(data)
             atomic_write(self._sessions_path(), json.dumps(data, indent=1))
 
-    def session_for(self, m: Member, room: str):
+    def session_for(self, m: Member, room: str, project: str = ""):
         """This person's session in this room — resumed if it's still the same model and not too long or old."""
         from .llm import Session
         key = f"{m.id}:{room}"
         rec = self._sessions().get(key) or {}
-        fresh = (not rec.get("id") or rec.get("model") != self.model_name(m)
+        fresh = (not rec.get("id") or rec.get("model") != self.model_name(m, project)
                  or int(rec.get("calls", 0)) >= SESSION_MAX_CALLS or int(rec.get("tokens", 0)) >= SESSION_MAX_TOKENS
                  or (time.time() - float(rec.get("started", 0) or 0)) > SESSION_MAX_DAYS * 86400)
         return Session(key, "" if fresh else rec["id"], "" if fresh else rec.get("system_hash", ""))
 
-    def _save_session(self, m: Member, sess, res) -> None:
+    def _save_session(self, m: Member, sess, res, project: str = "") -> None:
         if not res.session_id:
             return
-        model = self.model_name(m)
+        model = self.model_name(m, project)
 
         def fn(data):
             rec = data.get(sess.key) or {}
@@ -336,12 +339,17 @@ class Runtime:
         """The last model error for this person — only if it came from the model they use *now*."""
         hb = (self.ws.state().get("heartbeat") or {}).get(member_id) or {}
         m = self.cfg.member(member_id)
-        if not hb.get("error") or not m or hb.get("model", self.model_name(m)) != self.model_name(m):
+        if not hb.get("error") or not m or hb.get("model", self.model_name(m)) not in self.models_of(m):
             return ""
         return hb["error"]
 
-    def model_name(self, m: Member) -> str:
-        c = self.cfg.llm_for(m)
+    def models_of(self, m: Member) -> set[str]:
+        """Every model this person uses now: their own, and any a project gives them."""
+        return {self.model_name(m)} | {self.model_name(m, p) for p in self.cfg.projects if m.id in
+                                       [x.id for x in self.cfg.project_members(p)]}
+
+    def model_name(self, m: Member, project: str = "") -> str:
+        c = self.cfg.llm_for(m, project)
         if c.provider in ("opencode", "open-code"):
             return f"opencode:{c.model}"                  # OpenCode models already read "provider/model"
         return c.provider + (f"/{c.model}" if c.model else "")
@@ -386,10 +394,10 @@ class Runtime:
                 bm[day][model] = int(bm[day].get(model, 0)) + tokens
         return int(self.ws.update_state(fn)["usage"][day][member_id])
 
-    def _heartbeat(self, member_id: str, error: str = "") -> None:
+    def _heartbeat(self, member_id: str, error: str = "", project: str = "") -> None:
         """Last contact per person; `fails` counts consecutive model failures (one timeout isn't an incident)."""
         m = self.cfg.member(member_id)
-        model = self.model_name(m) if m else ""
+        model = self.model_name(m, project) if m else ""
 
         if error:
             prev_err = ((self.ws.state().get("heartbeat") or {}).get(member_id) or {}).get("error", "")
@@ -567,6 +575,22 @@ class Runtime:
         return (f"the #{name} project room — everyone on project `{pid}` reads it, keep it short and about this project.\n"
                 f"Project brief: {(p.description if p else '') or '-'} · status {(p.status if p else 'active')} · lead {lead}\n"
                 f"On this project: {people}\nOpen tasks in this project (create new ones with project `{pid}`):\n{board}")
+
+    def project_brief(self, m: Member, pid: str) -> str:
+        """The project's own instructions and this person's role and instructions on it (project settings)."""
+        p = self.cfg.projects.get(pid) if pid else None
+        if not p:
+            return ""
+        pa = p.agents.get(m.id)
+        parts = []
+        if pa and pa.role:
+            parts.append(f"On {p.name or pid} your role is: {pa.role}.")
+        if p.instructions.strip():
+            parts.append(f"Project instructions (everyone on {p.name or pid}):\n{p.instructions.strip()}")
+        if pa and pa.instructions.strip():
+            parts.append(f"Your instructions for {p.name or pid} (from {self.cfg.owner_name} — binding here):\n"
+                         f"{pa.instructions.strip()}")
+        return ("## This project's settings\n" + "\n\n".join(parts)) if parts else ""
 
     def context_for(self, m: Member) -> str:
         tz = self.cfg.timezone
@@ -771,10 +795,13 @@ class Runtime:
                        f"personal tasks (create_task with owner = you), reminders (remind), and delegate company work "
                        f"to the team with create_task / message_agent when they ask.")
         context = self.context_for(m)
+        brief = self.project_brief(m, ev.project)
+        if brief:
+            context = brief + "\n\n" + context
         convo = self.conversation_context(m, ev)
         if convo:
             context += "\n\n" + convo
-        gated = {a: self.cfg.permission(m, a) for a in ("create_task", "update_task", "write_file", "message_agent",
+        gated = {a: self.cfg.permission(m, a, ev.project) for a in ("create_task", "update_task", "write_file", "message_agent",
                                                         "post_group", "post_room", "run_code")}
         system = build_system(
             company=self.cfg.company, today=today(self.cfg.timezone).isoformat(),
@@ -785,9 +812,9 @@ class Runtime:
                                              and (a != "run_code" or (self.executor.enabled and not m.monitor))],
             extra_actions=REMIND_SPEC if m.assistant else "")
         try:
-            llm = self.llm_for(m)
+            llm = self.llm_for(m, ev.project)
         except LLMError as e:
-            self._heartbeat(m.id, error=str(e)[:200])
+            self._heartbeat(m.id, error=str(e)[:200], project=ev.project)
             return f"⚠️ My AI model isn't available right now: {e}"
         room = self.room_of(m, ev)
         hkey = f"{m.id}:{room}"
@@ -803,7 +830,7 @@ class Runtime:
         last_error = ""
         deadline = time.monotonic() + TURN_SECONDS           # one turn never holds this person's lock for long
 
-        sess = self.session_for(m, room) if getattr(llm, "sessions", False) else None
+        sess = self.session_for(m, room, ev.project) if getattr(llm, "sessions", False) else None
 
         async def call(msgs):
             nonlocal last_error
@@ -814,7 +841,7 @@ class Runtime:
                 try:
                     if sess is not None:
                         res = await asyncio.to_thread(llm.complete, system, msgs, sess)
-                        self._save_session(m, sess, res)       # resumed next time, even after a restart
+                        self._save_session(m, sess, res, ev.project)   # resumed next time, even after a restart
                     else:
                         res = await asyncio.to_thread(llm.complete, system, msgs)
                     break
@@ -826,11 +853,11 @@ class Runtime:
                         await asyncio.sleep(wait)                 # rate limit / overload / network: try again
                         continue
                     log.error("llm failed for %s: %s", m.id, e)
-                    self._heartbeat(m.id, error=str(e)[:200])
+                    self._heartbeat(m.id, error=str(e)[:200], project=ev.project)
                     return None
-            self._heartbeat(m.id)
+            self._heartbeat(m.id, project=ev.project)
             billable = getattr(res, "billable_tokens", res.total_tokens)
-            used = self._add_usage(m.id, billable, self.model_name(m))
+            used = self._add_usage(m.id, billable, self.model_name(m, ev.project))
             if cap and used >= 0.8 * cap and used - billable < 0.8 * cap:
                 await self.bus.send_owner(self.cfg.monitor.id, f"💸 {m.name} used 80% of today's token budget.")
             return res
@@ -940,7 +967,7 @@ class Runtime:
 
     async def _apply(self, m: Member, a: dict, ev: Event) -> str:
         t = a["type"]
-        level = "green" if t in NO_GATE or ev.meta.get("approved") else self.cfg.permission(m, t)
+        level = "green" if t in NO_GATE or ev.meta.get("approved") else self.cfg.permission(m, t, ev.project)
         if level == "red":
             ask = self.asks.create(requester=m.id, summary=f"{m.name} wants to {self.describe(m, a)}",
                                    details=str(a.get("why") or a.get("description") or ""), level="red",

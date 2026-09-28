@@ -129,6 +129,26 @@ department in All hands; the report has a section per department. **Clients** (`
 get a report built from the files (only their projects, no internal names, no chat) and, if you want, a portal
 login.
 
+## Project settings
+
+A project can have its own model, rules and instructions, for everyone on it or per person. These apply when
+someone works on that project: in its room, on its tasks and in work sessions.
+
+```yaml
+projects:
+  website:
+    llm: {provider: opencode, model: zai/glm-4.6}      # everyone on this project
+    permissions: {write_file: red}                      # the project's rules
+    instructions: "Client is Globex. British spelling."
+    agents:
+      riya: {role: Tech reviewer, instructions: "Review every PR within a day.",
+             llm: {provider: claude-code}, permissions: {write_file: green}}
+```
+
+The most specific setting wins: this person on this project, then the project, then the person's own, then the
+company's. The project's Settings tab shows who ends up with what, and where each value comes from. Project models
+are checked by the AI setup check and health, and sessions reset when the model changes.
+
 ## Threads
 
 A reply keeps `reply_to` (the message it answers), `thread` (the thread's first message) and a short quote. Whoever
