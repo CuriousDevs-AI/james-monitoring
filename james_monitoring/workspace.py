@@ -319,8 +319,8 @@ class Workspace:
     def file_history(self, rel: str, n: int = 30) -> list[dict]:
         """Every commit that changed one file (a task, a doc), newest first: the audit trail git already keeps."""
         try:
-            out = self._git("log", f"-{n}", "--follow", "--date=iso-strict", "--pretty=format:%h\x1f%ad\x1f%an\x1f%s",
-                            "--", rel)
+            # no --follow: task files look alike, and git would take one for a copy of another
+            out = self._git("log", f"-{n}", "--date=iso-strict", "--pretty=format:%h\x1f%ad\x1f%an\x1f%s", "--", rel)
         except RuntimeError:
             return []
         rows = []

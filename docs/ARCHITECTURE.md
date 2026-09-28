@@ -42,13 +42,18 @@ model all come from `config.yaml` and the workspace.
 | `commands.py` | Owner commands, shared by Telegram and `jm chat` |
 | `llm/` | `claude-code` and `codex-cli` (subscriptions, via their CLIs), `anthropic`, `openai` (any OpenAI-compatible API), `fake`. Per person: `team[].llm` |
 | `setup.py` | `jm init` wizard, `jm add-member`, persona import |
+| `users.py` | Sign-in links and roles (owner, admin, member, viewer, client); only SHA-256 hashes of the keys are stored |
+| `audit.py` | The audit log in the team repo (`audit/YYYY-MM.jsonl`): console actions per person, decisions from every channel, agent actions, model failures, stuck turns. Secrets never written |
+| `search.py` | Full-text search over every room, task, document and memory entry — only what the viewer may see |
+| `assistant.py` | Personal assistant mode: reminders (`remind` action), the morning brief |
+| `studio.py` | Agent Studio: role templates, skills, the persona form (and back) |
 
 ## The action protocol
 
 Every model reply is one JSON object: `{"reply": "...", "actions": [...]}`. The runtime checks and applies
 each action:
 
-`create_task` · `update_task` · `write_file` (docs/ only) · `read_file` (docs, tasks, reports, team, asks, decisions; up to 2 read rounds) · `ask_permission` · `remember` · `message_agent` · `notify_owner` · `post_group` · `post_room` · `run_code`
+`create_task` · `update_task` · `write_file` (docs/ only) · `read_file` (docs, tasks, reports, team, asks, decisions; up to 2 read rounds) · `ask_permission` · `remember` · `message_agent` · `notify_owner` · `post_group` · `post_room` · `run_code` · `remind` (the personal assistant only)
 
 Each action is normalised (wrong types fixed where possible) and applied on its own: one bad action is reported
 (⚠️) and the rest still run. If any failed, the agent gets **one repair round** with the exact results. Results are
@@ -92,6 +97,43 @@ they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits
   everything, including system follow-ups, which are queued.
 - **Only the founder's own words become pinned corrections** in memory. A teammate's message, a document or a
   GitHub comment can't make itself binding.
+- **Temporary model failures are retried** (rate limit, overload, network: after 3s, then 10s, within the turn's
+  time). Login, key and model errors aren't retried; they're shown with the fix.
+- **A hung turn is stopped** by the hub's watchdog (turn limit + 2 minutes). The person says so in the room, the
+  lock is released, and it shows in Activity & health.
+- **Activity & health** (console) checks the engine, scheduler, git, disk, models, channels, replies in progress,
+  the queue and overdue approvals.
+
+## People, roles and privacy
+
+The founder opens the console with the key `jm run` prints. Everyone else gets a personal link from
+Settings → Sign-in links; each has a role:
+
+| Role | Can |
+|---|---|
+| admin | everything except making sign-in links (settings, people, models, approvals) |
+| member | read; talk in All hands and project rooms; create and move tasks (not accept or cut) |
+| viewer | read only |
+| client | only the client portal: their projects' progress and a client-safe report |
+
+Every API route declares the permission it needs (`GET_PERMS` / `POST_PERMS` in `server.py`); anything else is
+refused. Messages from signed-in people are recorded as them, and agents are told they're a colleague, not the
+founder. Only the founder runs commands or decides approvals in chat.
+
+Private by design: the founder's 1:1 rooms (admins can see them), and everything of the **personal assistant**
+(`assistant: true`): its room, its tasks, its reminders. It's left out of @all, the roster, the company report and
+teammates' `message_agent`.
+
+**Departments** (`departments:`, `team[].department`) group people with a head; `@engineering` reaches a whole
+department in All hands; the report has a section per department. **Clients** (`clients:`, `projects.<id>.client`)
+get a report built from the files (only their projects, no internal names, no chat) and, if you want, a portal
+login.
+
+## Threads
+
+A reply keeps `reply_to` (the message it answers), `thread` (the thread's first message) and a short quote. Whoever
+you reply to answers (unless you @mention someone), inside the thread, and the agent sees the quote. Telegram
+swipe-replies bring their quote in; Telegram and Slack show a `↩ quote` line on replies.
 
 ## One conversation, every channel
 

@@ -94,6 +94,20 @@ Terminal alternatives still exist: `jm init` (setup wizard), `jm add-member`, `j
 | Daily report time | The report is posted in the group and committed to `reports/`, including your open decisions (`decisions/OPEN.md`). |
 | `/pause all` · `/resume all` | Everyone stops or starts. |
 
+### In the console
+
+- **⌘K search**: every message, task, document and memory note; Enter jumps to it.
+- **@mentions** with a picker, and **threads**: reply to any message; whoever you reply to answers inside the thread.
+- **The bell**: approvals, reviews, whoever is blocked on you, mentions, replies, model or system problems, reports.
+- **Agent Studio**: hire from a role template, shape the persona with a form, try them in a throwaway chat, then hire.
+- **Memory editor** on each profile: add, edit, pin as a binding correction, unpin, forget.
+- **Tasks**: reassign (both people are told), reviewer, depends-on, and every change from git.
+- **Departments** (with heads, `@engineering`) and **Clients** (a client-safe report and an optional read-only portal).
+- **Personal assistant**: one teammate who works only for you. It has a private chat and tasks, reminders and a morning brief.
+- **Sign-in links** for a co-founder, teammates or clients, with roles (admin, member, viewer, client).
+- **Activity & health**: an audit log of who did what (CSV export) and a live check of every part of the system.
+- Light and dark theme; works on a phone.
+
 ### Try it without Telegram
 
 ```bash

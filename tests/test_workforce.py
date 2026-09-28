@@ -200,6 +200,16 @@ def test_threads_reply_and_agents_answer_in_the_thread(app):
     assert [m["i"] for m in app.chat_thread("riya", first)["messages"]] == [first, r["i"], answer["i"]]
     system, sent = app.rt.llm.calls[-1]
     assert "replying to “Maria Lopez: Plan for the API?”" in sent[-1]["content"]
+    # in a project room, replying to Sam's message goes to Sam (not the lead)
+    app.rt.llm.push({"reply": "Hi from Sam.", "actions": []})
+    app.chat_send("p-site", "@sam can you do the hero?")
+    settle(app, lambda: len(app.chat.since("p-site", -1)) >= 2)
+    sam_msg = app.chat.since("p-site", -1)[-1]
+    assert sam_msg["who"] == "sam"
+    app.rt.llm.push({"reply": "Sure, Friday.", "actions": []})
+    app.chat_send("p-site", "and when?", reply_to=sam_msg["i"])
+    settle(app, lambda: len(app.chat.since("p-site", -1)) >= 4)
+    assert app.chat.since("p-site", -1)[-1]["who"] == "sam"
 
 
 # -- tasks: reassign, dependencies, history -------------------------------------------------------------
@@ -217,6 +227,7 @@ def test_reassign_tells_both_and_dependencies_are_checked(app):
     assert d["depends_on"] == [a["id"]] and d["reviewer"] == "riya" and d["deps"][0]["title"] == "Schema"
     assert app.task_detail(a["id"])["needed_by"][0]["id"] == b["id"]
     assert len(d["history"]) >= 2 and all(h["hash"] for h in d["history"])
+    assert all(a["id"] not in h["subject"] for h in d["history"])      # never another task's commits
 
 
 # -- personal assistant -----------------------------------------------------------------------------------

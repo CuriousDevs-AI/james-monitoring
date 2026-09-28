@@ -784,6 +784,16 @@ class App:
         return self.rt.audit.entries(limit=min(int(q.get("limit") or 200), 1000), kind=q.get("kind", ""),
                                      who=q.get("who", ""), q=q.get("q", ""), before=before)
 
+    def doc(self, rel: str) -> dict:
+        """A team document (docs/, reports/, decisions/, projects/) — nothing outside them."""
+        from .search import DOC_DIRS
+        rel = str(rel or "").strip().lstrip("/")
+        p = (self.rt.ws.root / rel).resolve()
+        ok = any(p.is_relative_to((self.rt.ws.root / d).resolve()) for d in DOC_DIRS)
+        if not ok or p.suffix != ".md" or not p.is_file():
+            raise ValueError("That isn't a team document.")
+        return {"path": rel, "text": p.read_text(errors="replace"), "history": self.rt.ws.file_history(rel, 10)}
+
     def memory_get(self, mid: str) -> dict:
         m = self.rt.cfg.member(mid)
         if not m:
@@ -837,8 +847,9 @@ class App:
                     ts=self._ts(t.doc.meta.get("status_since")), link={"task": t.id})
         # mentions of you, and replies to what you wrote (last 7 days, rooms you can see)
         first = user["name"].split()[0].lower() if user["name"].split() else ""
-        pat = re.compile(r"(?<![\w@])@?(" + "|".join(re.escape(x) for x in {user["id"], user["name"].lower(), first}
-                                                   if len(x) >= 3) + r")\b", re.I) if first else None
+        handles = {user["id"], first, re.sub(r"[^a-z0-9]+", "_", user["name"].lower()).strip("_")}
+        pat = re.compile(r"(?<![\w@])@(" + "|".join(re.escape(x) for x in handles if len(x) >= 2) + r")\b", re.I) \
+            if first else None                                  # a real @mention, not just your name in a sentence
         cut = _t.time() - 7 * 86400
         for room in self.hub.rooms():
             if not self.can_see_room(user, room):
@@ -849,7 +860,8 @@ class App:
                 if x.get("who") == user["id"] or x.get("kind") == "system":
                     continue
                 replied = x.get("reply_to") in mine
-                if replied or (pat and pat.search(str(x.get("text", ""))) and room not in (user["id"],)):
+                shared = room in (TEAM_ROOM, BACKCHANNEL) or room.startswith(PROJECT_ROOM)   # a 1:1 is all "to you"
+                if replied or (shared and pat and pat.search(str(x.get("text", "")))):
                     add(id=f"msg:{room}:{x['i']}", kind="reply" if replied else "mention", tone="accent",
                         title=f"{rt.name_of(x.get('who', ''))} {'replied to you' if replied else 'mentioned you'}",
                         detail=" ".join(str(x.get("text", "")).split())[:160], ts=x.get("ts", 0),
@@ -1599,7 +1611,7 @@ GET_PERMS = {
     "/api/chat": "read", "/api/rooms": "read", "/api/pulse": "read", "/api/thread": "read", "/api/member": "read",
     "/api/project": "read", "/api/team": "read", "/api/decisions": "read", "/api/reports": "read",
     "/api/report": "read", "/api/budget": "read", "/api/search": "read", "/api/memory": "read",
-    "/api/notifications": "read", "/api/clients": "read", "/api/client_report": "read",
+    "/api/notifications": "read", "/api/clients": "read", "/api/doc": "read", "/api/client_report": "read",
     "/api/portal": "portal", "/api/github/status": "admin", "/api/models/catalog": "admin",
     "/api/models/team": "admin", "/api/models/health": "read", "/api/connections": "admin",
     "/api/opencode/models": "admin", "/api/settings": "admin", "/api/audit": "admin", "/api/audit.csv": "admin",
@@ -1743,6 +1755,7 @@ def make_handler(app: App, key: str):
                     "/api/budget": lambda: app.rt.cmd_budget(),
                     "/api/search": lambda: app.search(q.get("q", ""), user),
                     "/api/memory": lambda: app.memory_get(q.get("id", "")),
+                    "/api/doc": lambda: app.doc(q.get("path", "")),
                     "/api/notifications": lambda: app.notifications(user),
                     "/api/audit": lambda: app.audit_list(q),
                     "/api/health": lambda: app.health(),

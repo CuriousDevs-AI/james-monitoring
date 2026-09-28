@@ -214,6 +214,11 @@ class Hub:
             return await self._command(room, f"/{cmd} {m.group(2).upper()} {m.group(3).strip()}".strip())
         pid = room[len(PROJECT_ROOM):] if room.startswith(PROJECT_ROOM) else ""
         is_all, targets = room_targets(room, text, cfg, self.usernames)
+        if msg and msg.get("reply_to") is not None and not re.search(r"(?<![\w.+-])@\w", text):
+            parent = self.chat.get(room, msg["reply_to"])         # replying to a teammate's message talks to them
+            pm = cfg.member(parent.get("who", "")) if parent else None
+            if pm and (not pm.assistant or room == pm.id):
+                is_all, targets = False, [pm.id]
         if not targets:
             await self.post(room, cfg.monitor.id, "Nobody is on this project yet — add people on the project page.",
                             kind="notice")
