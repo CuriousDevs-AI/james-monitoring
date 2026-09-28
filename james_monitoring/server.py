@@ -81,6 +81,11 @@ class App:
         self.sched: Scheduler | None = None
         self.admin: TeamAdmin | None = None
         self.llm_error = ""
+        from .public import FailedKeys, PublicLink
+        self.public = PublicLink()                # the console on a public https URL (Cloudflare Tunnel)
+        self.failed_keys = FailedKeys()
+        self.console_key = ""
+        self.port = 0
         self.telegram_error = ""
         self.slack_error = ""
         self._lock = threading.RLock()
@@ -133,6 +138,7 @@ class App:
                 slack = SlackTransport(cfg)
             hub = Hub()
             rt = Runtime(cfg, llm, bus=hub, shared=self.rt)
+            rt.console_link = self.console_link           # for /link in chat
             hub.attach(rt)
             admin = TeamAdmin(self.cfg_path)
 
@@ -188,6 +194,29 @@ class App:
 
     def save_raw(self, raw: dict) -> None:
         write_config(self.cfg_path, raw)          # validated, backed up (.bak), atomic
+
+    # -- the public link (Cloudflare Tunnel) ------------------------------------------------------
+    def public_status(self) -> dict:
+        st = self.public.status()
+        st["named_url"] = self.rt.cfg.public_url if self.rt else ""
+        st["link"] = f"{st['url']}/?k={self.console_key}" if st.get("url") else ""
+        return st
+
+    def public_set(self, on: bool) -> dict:
+        if on:
+            self.public.start(self.port, self.console_key, named_url=self.rt.cfg.public_url if self.rt else "")
+        else:
+            self.public.stop()
+        st = self.public_status()
+        if self.rt:
+            self.rt._audit("system", self.rt.cfg.owner_name, "public link " + ("on" if st["on"] else "off"),
+                           st.get("url", ""), st.get("error", ""))
+        return st
+
+    def console_link(self) -> str:
+        """The link that opens the console as the founder: public if the tunnel is on, else this machine's."""
+        base = self.public.url if self.public.on else f"http://localhost:{self.port}"
+        return f"{base}/?k={self.console_key}"
 
     # -- who is asking, and what may they see -------------------------------------------------
     def owner_user(self) -> dict:
@@ -368,6 +397,8 @@ class App:
             "departments": [{"id": d.id, "name": d.name, "head": d.head} for d in cfg.departments.values()],
             "clients": [{"id": c.id, "name": c.name} for c in cfg.clients.values()],
             "users": [{"id": u.id, "name": u.name, "role": u.role} for u in cfg.users],
+            "public": ({k: v for k, v in self.public_status().items() if k != "link"} if user["role"] in ("owner", "admin")
+                       else {"url": self.public.url if self.public.on else ""}),
             "projects": [self._project_json(p) for p in cfg.projects.values()],
             "priorities": PRIORITIES, "workspace": str(cfg.workspace_path),
             "permissions": cfg.permissions, "action_types": ACTION_TYPES, "backchannel": BACKCHANNEL,
@@ -1806,11 +1837,11 @@ GET_PERMS = {
     "/api/models/team": "admin", "/api/models/health": "read", "/api/connections": "admin",
     "/api/opencode/models": "admin", "/api/settings": "admin", "/api/audit": "admin", "/api/audit.csv": "admin",
     "/api/health": "admin", "/api/studio/templates": "admin", "/api/reminders": "owner", "/api/users": "owner",
-    "/api/model_login": "admin", "/api/connections/login": "admin",
+    "/api/model_login": "admin", "/api/connections/login": "admin", "/api/public": "owner",
 }
 POST_PERMS = {
     "/api/chat": "chat", "/api/tasks": "task", "/api/task": "task", "/api/ask": "approve", "/api/project/settings": "admin",
-    "/api/project/pause": "admin",
+    "/api/project/pause": "admin", "/api/public": "owner",
     "/api/notifications/read": "read", "/api/projects": "admin", "/api/project/members": "admin",
     "/api/member": "admin", "/api/decisions": "admin", "/api/settings": "admin", "/api/upload": "admin",
     "/api/upload_folder": "admin", "/api/token": "admin", "/api/links": "admin", "/api/member_status": "admin",
@@ -1835,7 +1866,7 @@ NO_AUDIT = {"/api/chat", "/api/ask", "/api/token", "/api/links", "/api/member_st
             "/api/telegram/detect", "/api/slack/detect"}
 AUDIT_LABEL = {"/api/tasks": "create task", "/api/task": "task", "/api/projects": "save project",
                "/api/project/members": "project team", "/api/project/settings": "project settings",
-               "/api/project/pause": "pause/resume project", "/api/member": "edit profile", "/api/decisions": "edit decisions",
+               "/api/project/pause": "pause/resume project", "/api/public": "public link", "/api/member": "edit profile", "/api/decisions": "edit decisions",
                "/api/settings": "change settings", "/api/add": "add person", "/api/remove": "remove person",
                "/api/report/run": "write report", "/api/work": "run work session", "/api/pause": "pause/resume",
                "/api/models/assign": "assign model", "/api/models/default": "use default model",
@@ -1871,8 +1902,23 @@ def make_handler(app: App, key: str):
         def _json(self, status, obj):
             self._send(status, json.dumps(obj, default=str).encode(), "application/json")
 
+        def _visitor(self) -> str:
+            # behind the tunnel every request comes from 127.0.0.1: Cloudflare says who the visitor is
+            return self.headers.get("CF-Connecting-IP") or self.client_address[0]
+
         def _user(self) -> dict | None:
-            return app.user_for_key(self.headers.get("X-JM-Key", ""), key)
+            who = self._visitor()
+            if app.failed_keys.blocked(who):
+                return None
+            u = app.user_for_key(self.headers.get("X-JM-Key", ""), key)
+            if u is None:
+                app.failed_keys.fail(who)
+            return u
+
+        def _refuse(self):
+            if app.failed_keys.blocked(self._visitor()):
+                return self._json(429, {"error": "Too many wrong keys — try again in a few minutes."})
+            return self._json(403, {"error": "forbidden"})
 
         def _q(self) -> dict:
             from urllib.parse import parse_qs, urlparse
@@ -1893,7 +1939,7 @@ def make_handler(app: App, key: str):
                 return self._send(204, b"", "image/x-icon")
             user = self._user()
             if not user:
-                return self._json(403, {"error": "forbidden"})
+                return self._refuse()
             perm = GET_PERMS.get(path)
             if perm is None:
                 return self._json(404, {"error": "not found"})
@@ -1960,6 +2006,7 @@ def make_handler(app: App, key: str):
                     "/api/portal": lambda: app.portal(user),
                     "/api/reminders": lambda: app.reminders(),
                     "/api/users": lambda: app.users_list(),
+                    "/api/public": lambda: app.public_status(),
                 }
                 return self._json(200, routes[path]())
             except PermissionError as e:
@@ -1973,7 +2020,7 @@ def make_handler(app: App, key: str):
         def do_POST(self):
             user = self._user()
             if not user:
-                return self._json(403, {"error": "forbidden"})
+                return self._refuse()
             try:
                 n = int(self.headers.get("Content-Length") or 0)
             except ValueError:
@@ -2107,17 +2154,25 @@ def make_handler(app: App, key: str):
                 "/api/clients": lambda: app.clients_save(b),
                 "/api/reminders": lambda: app.reminders_save(b),
                 "/api/users": lambda: app.users_save(b),
+                "/api/public": lambda: app.public_set(bool(b.get("on"))),
             }
             return routes[path]()
     return H
 
 
 def serve(base_dir: Path, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True,
-          telegram: bool = True, key: str | None = None) -> None:
+          telegram: bool = True, key: str | None = None, public: bool = False) -> None:
     app = App(base_dir, telegram=telegram)
     app.load()
     key = key or os.environ.get("JM_CONSOLE_KEY") or secrets.token_urlsafe(18)
     srv = ThreadingHTTPServer((host, port), make_handler(app, key))
+    app.console_key, app.port = key, srv.server_address[1]
+    # A stop from Docker/systemd (SIGTERM) shuts down like Ctrl-C, so the tunnel and the team stop cleanly too.
+    import atexit
+    import signal
+    atexit.register(app.public.stop)
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     shown = "localhost" if host in ("127.0.0.1", "0.0.0.0") else host
     url = f"http://{shown}:{srv.server_address[1]}/?k={key}"
     status = "setup needed — finish it in the browser" if not app.ready else (
@@ -2127,6 +2182,8 @@ def serve(base_dir: Path, host: str = "127.0.0.1", port: int = 8765, open_browse
     print(f"james-monitoring console: {url}\n{status}\nCtrl-C to stop.", flush=True)   # shows under Docker/systemd too
     if host == "0.0.0.0":
         print("⚠️  Listening on all interfaces. Anyone with the link can control the team — prefer an SSH tunnel.")
+    if public or (app.ready and app.rt.cfg.public_auto):
+        threading.Thread(target=lambda: _announce_public(app), daemon=True, name="jm-public").start()
     if open_browser:
         try:
             import webbrowser
@@ -2139,8 +2196,18 @@ def serve(base_dir: Path, host: str = "127.0.0.1", port: int = 8765, open_browse
         pass
     finally:
         srv.server_close()
+        app.public.stop()
         if app.ready:
             try:
                 app.submit(app._stop_services(app.sched, app.gw, app.slack, drain=True), timeout=90)
             except Exception:  # noqa: BLE001
                 pass
+
+
+def _announce_public(app: App) -> None:
+    st = app.public_set(True)
+    if st.get("on"):
+        print(f"🌐 Public console: {st['url']}/?k={app.console_key}\n   (anyone with this link is you — share sign-in "
+              f"links from Settings for others)", flush=True)
+    else:
+        print(f"⚠️  Public link not started: {st.get('error')}", flush=True)

@@ -1716,10 +1716,10 @@ function usersCard() {
   userSheet.after = draw; draw(); return el;
 }
 function showLink(name, key) {
-  const url = `${location.origin}/?k=${key}`;
+  const url = `${S.public?.url || location.origin}/?k=${key}`;
   openSheet("Link for " + name, h("p", {class: "small"}, "Send this link to ", h("b", {}, name), " privately. It's shown only now — if it's lost, make a new one."),
     h("div", {class: "row", style: "flex-wrap:nowrap"}, h("input", {class: "mono", value: url, readonly: true, onclick: e => e.target.select()}), h("button", {class: "btn primary sm", onclick: () => { navigator.clipboard?.writeText(url); toast("Link copied"); }}, "Copy")),
-    h("p", {class: "xs muted"}, location.hostname === "localhost" || location.hostname === "127.0.0.1" ? "This console listens on this machine only — for others to use the link, run it where they can reach it (e.g. behind an SSH tunnel or a private network)." : ""));
+    h("p", {class: "xs muted"}, !S.public?.url && (location.hostname === "localhost" || location.hostname === "127.0.0.1") ? "This console is on this machine only — turn on the public link (Settings → Channels) so they can open it." : ""));
 }
 function userSheet(u) {
   const isNew = !u.id;
@@ -2013,7 +2013,7 @@ async function vSettings() {
       card("Permissions", "approvals", h("p", {class: "small muted", style: "margin:0 0 10px"}, "“Ask me first” turns the action into an Approve/Reject card — it runs only after you approve. Money, anything public, production, deleting and legal always ask."),
         h("div", {class: "perm"}, S.action_types.map(a => [h("span", {class: "small"}, ACTION_TXT[a] || a), perms[a]])),
         h("div", {class: "card card-b xs", style: "margin-top:12px;background:var(--surface-2)"}, h("b", {}, "Which rule applies: "), "the person on a project (Project → Settings) → the project (Project → Settings) → the person (their profile) → these company defaults. The most specific wins."))), saveBar()]},
-    {id: "channels", title: "Channels", ic: "send", desc: "Where the team talks to you: the console always; Telegram and Slack if you want them on your phone.", body: () => [connectionsCard(), form(
+    {id: "channels", title: "Channels", ic: "send", desc: "Where the team talks to you: the console always — from anywhere with the public link — and Telegram and Slack if you want them on your phone.", body: () => [S.me?.role === "owner" ? publicCard() : null, connectionsCard(), form(
       card("Where conversations live", "refresh", h("label", {class: "f", style: "margin-top:0"}, "All hands and the 1:1s live on (each project can choose its own in Project → Settings)"), channel,
         h("div", {class: "xs muted", style: "margin:4px 0 10px"}, "Each room lives on one channel — Telegram or Slack, never both — so a conversation is never split. The console always shows everything."),
         h("label", {class: "row small", style: "gap:8px;flex-wrap:nowrap"}, mirror, h("span", {}, "Show my messages in every channel, so each one is the full conversation."))),
@@ -2043,6 +2043,29 @@ async function vSettings() {
   $("#main").put(pageHeader("Settings", "Company-wide settings. Projects have their own (open a project → Settings); people have theirs (their profile)."),
     h("div", {class: "setwrap"}, nav, content));
   show(STAB);
+}
+// The public link: this machine's console on an https URL through a Cloudflare Tunnel (jm run stays local).
+function publicCard() {
+  const el = h("div", {class: "card", style: "margin-bottom:16px"}), body = h("div", {class: "card-b"});
+  el.put(h("div", {class: "card-h"}, icon("link"), h("h3", {}, "Public link"), h("span", {class: "xs muted"}, "open this console from anywhere — phone, another laptop"), h("span", {class: "grow"})), body);
+  const draw = async (busyText) => {
+    if (busyText) return body.put(h("div", {class: "row small"}, h("span", {class: "spin"}), " " + busyText));
+    const st = await api("/api/public").catch(e => ({error: e.message}));
+    const link = st.link || "";
+    body.put(
+      st.on ? h("div", {}, h("div", {class: "row"}, badge("● Public", "success"), badge(st.kind === "named" ? "your domain" : "quick tunnel (new URL each start)", "outline")),
+          h("label", {class: "f"}, "Your link — anyone with it is you; keep it private"),
+          h("div", {class: "row", style: "flex-wrap:nowrap"}, h("input", {class: "mono", value: link, readonly: true, onclick: e => e.target.select()}),
+            h("button", {class: "btn primary sm", onclick: () => { navigator.clipboard?.writeText(link); toast("Link copied"); }}, "Copy"),
+            h("button", {class: "btn outline sm", onclick: async () => { draw("Stopping…"); await api("/api/public", {on: false}); S = await api("/api/state"); draw(); }}, "Stop")),
+          h("div", {class: "xs muted", style: "margin-top:6px"}, "Teammates and clients: give them their own sign-in links (Settings → Sign-in links) — they'll use this address too. In chat, /link sends you this link privately."))
+        : h("div", {}, h("p", {class: "small", style: "margin:0 0 8px"}, h("b", {}, "Off. "), "The console runs on this machine only. Turn this on to reach it over https from anywhere — through a Cloudflare Tunnel, without opening any port."),
+          st.error ? h("div", {class: "err small", style: "margin-bottom:8px"}, st.error) : null,
+          st.installed ? h("button", {class: "btn primary sm", onclick: async () => { draw("Starting the tunnel (up to 40 s)…"); const r = await api("/api/public", {on: true}).catch(e => ({error: e.message})); if (r.error) toast(r.error, "danger"); S = await api("/api/state"); draw(); }}, icon("link"), "Make it public")
+            : h("div", {class: "small"}, "Install ", h("code", {class: "mono"}, "cloudflared"), " first: ", h("code", {class: "mono"}, "brew install cloudflared"), " (macOS) — then reload."),
+          h("div", {class: "xs muted", style: "margin-top:8px"}, st.named_url ? `Uses your domain ${st.named_url} (CLOUDFLARE_TUNNEL_TOKEN).` : "Quick tunnel: a random trycloudflare.com address. For a fixed address, set public.url in config.yaml and CLOUDFLARE_TUNNEL_TOKEN in .env. Or start it with `jm run --public`.")));
+  };
+  draw(); return el;
 }
 function openSettings(tab) { STAB = tab; closeSheet(); go("settings"); }
 

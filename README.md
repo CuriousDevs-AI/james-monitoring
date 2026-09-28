@@ -94,6 +94,7 @@ It runs as **one Python process** with no database. Everything lives in files an
 - Telegram: one bot per person, a group for All hands, and approval buttons
 - Slack: one app (Socket Mode), everyone posts under their own name, approval buttons
 - Each room lives on **one** channel, so a conversation is never split
+- **Public link**: the console on an https URL from anywhere, through a Cloudflare Tunnel (`jm run --public`)
 - GitHub: tasks mirrored to a GitHub Project in both directions, and code tasks as real pull requests (via `gh`)
 - Every commit uses **your** git identity
 
@@ -460,7 +461,7 @@ room in the other channel gets a pointer back, and the console always shows ever
 
 | Command | What it does |
 |---|---|
-| `jm run [--port 8765] [--host 127.0.0.1] [--no-browser] [--no-telegram] [--no-web]` | start everything: console, team, Telegram/Slack, scheduler |
+| `jm run [--port 8765] [--host 127.0.0.1] [--no-browser] [--no-telegram] [--no-web] [--public]` | start everything: console, team, Telegram/Slack, scheduler (`--public`: also on an https URL through Cloudflare Tunnel) |
 | `jm init` | terminal setup wizard (verifies Telegram links live) |
 | `jm add-member [name --role R --persona FILE --token T]` · `jm remove-member ID` | manage people |
 | `jm chat <member\|team\|p-<project>> ["message"]` | talk to someone from the terminal (interactive without a message) |
@@ -470,7 +471,7 @@ room in the other channel gets a pointer back, and the console always shows ever
 
 All commands accept `-c path/to/config.yaml` (default `./config.yaml`). In chat (console, Telegram or Slack) the
 founder can use `/status` `/board` `/assign` `/accept` `/feedback` `/changes` `/cut` `/asks` `/approve` `/reject`
-`/pause` `/resume` `/log` `/budget` `/report` `/work` `/onboard` `/whoami` `/groupid` `/help`.
+`/pause` `/resume` `/log` `/budget` `/report` `/work` `/onboard` `/link` `/whoami` `/groupid` `/help`.
 In Slack, `!status` works like `/status`.
 
 ## 🌐 HTTP API
@@ -501,7 +502,7 @@ isn't versioned yet; use it at your own risk.
 | `/api/audit` · `/api/audit.csv` · `/api/health` [admin] | the audit log (filters: `kind`, `who`, `q`, `before`) · CSV · system checks |
 | `/api/studio/templates` · `/api/github/status` [admin] | Studio templates and skills · `gh` status |
 | `/api/model_login` [admin] | the state of a running CLI login |
-| `/api/users` · `/api/reminders` [owner] | sign-in links · reminders |
+| `/api/users` · `/api/reminders` · `/api/public` [owner] | sign-in links · reminders · the public link |
 | `/api/portal` [client] | the client's projects and report |
 
 </details>
@@ -524,7 +525,7 @@ isn't versioned yet; use it at your own risk.
 | `/api/model_login` · `/api/model_login/input` · `/api/model_login/cancel` · `/api/model_key` · `/api/connections/*` [admin] | log in to a CLI from the console · save an API key |
 | `/api/telegram/*` · `/api/slack/*` · `/api/github/*` [admin] | connect channels and GitHub |
 | `/api/upload` · `/api/upload_folder` · `/api/token` · `/api/links` · `/api/member_status` [admin] | import personas · check Telegram bots |
-| `/api/users` · `/api/reminders` [owner] | `{action: add\|update\|rotate\|remove}` (the link is returned once) · reminders |
+| `/api/users` · `/api/reminders` · `/api/public` [owner] | `{action: add\|update\|rotate\|remove}` (the link is returned once) · reminders · `{on: true\|false}` |
 | `/api/setup` [owner] | first-run setup (only while there's no `config.yaml`) |
 
 </details>
@@ -585,9 +586,28 @@ Otherwise use an API provider or Ollama.
 **systemd:** see [`deploy/james-monitoring.service`](deploy/james-monitoring.service). It runs
 `jm -c <data>/config.yaml run` as a dedicated user, with `Restart=always`.
 
-**Remote access:** the console listens on localhost by default. Reach it through an SSH tunnel
-(`ssh -L 8765:localhost:8765 server`) or a private network. `--host 0.0.0.0` exposes it to anyone who has the link,
-and `jm run` warns you when you do this.
+**Public link (from anywhere).** `jm run` stays on your machine (127.0.0.1), and a Cloudflare Tunnel gives the same
+console an https URL you can open from a phone or another laptop. No port is opened and no server is needed:
+
+```bash
+brew install cloudflared      # or: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+jm run --public               # prints 🌐 Public console: https://<random>.trycloudflare.com/?k=<key>
+```
+
+You can also turn it on and off in **Settings → Channels → Public link**, or type `/link` in a private chat
+(console, Telegram or Slack) to get it sent to you.
+- **Quick tunnel:** no account needed, and a new URL each time it starts.
+- **Your own domain:** create a named tunnel in Cloudflare that points to `http://127.0.0.1:8765`. Put its token in
+  `CLOUDFLARE_TUNNEL_TOKEN` and its URL in `public.url` (`public.auto: true` starts it with `jm run`).
+- **Safeguards:**
+  - The console key must be at least 16 characters to go public.
+  - Every request still needs a key.
+  - 20 wrong keys from one visitor lock that visitor out for 10 minutes.
+  - Sign-in links use the public address.
+  - Stopping `jm run` (Ctrl-C or SIGTERM) stops the tunnel too.
+
+**Other remote access:** an SSH tunnel (`ssh -L 8765:localhost:8765 server`) or a private network also work.
+`--host 0.0.0.0` exposes the console to anyone who has the link, and `jm run` warns you when you do this.
 
 ## 🧪 Testing
 
@@ -607,7 +627,8 @@ CI runs the suite on Python 3.10 and 3.12 for every push and pull request.
 
 ## 🛡 Security
 
-- **Local by default.** The server binds `127.0.0.1`. Every API call needs a key, compared in constant time.
+- **Local by default.** The server binds `127.0.0.1`. A public link goes through a Cloudflare Tunnel, never an open
+  port. It requires a key of 16+ characters and locks out a visitor after 20 wrong keys. Every API call needs a key, compared in constant time.
   Responses are sent with `no-store`, `nosniff`, `no-referrer` and `X-Frame-Options: DENY`.
 - **Secrets stay in `.env`,** written with mode 0600 and never committed. Sign-in keys are stored only as SHA-256
   hashes.

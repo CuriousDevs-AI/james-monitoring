@@ -55,6 +55,10 @@ permissions:                     # what people may do on their own: green = do i
   run_code: red                  # the default; merging code into main always asks, whatever this says
   # create_task, update_task, write_file, message_agent, post_room: green by default
 
+public:                          # optional — the console on an https URL (Cloudflare Tunnel); see README
+  url: ""                        # your own domain for a named tunnel (with CLOUDFLARE_TUNNEL_TOKEN); "" = quick tunnel
+  auto: false                    # true = start it with `jm run` (same as `jm run --public`)
+
 sync:
   mirror_owner: true             # my messages appear in every channel (console ↔ Telegram ↔ Slack)
 

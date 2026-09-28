@@ -23,6 +23,7 @@ HELP = [
     ("report", "Generate and post the status report now"),
     ("work", "Start a work session now: everyone moves their top task"),
     ("onboard", "Post team intros in the group"),
+    ("link", "The console link (private chats only)"),
     ("whoami", "Show your Telegram user id"),
     ("groupid", "Show this chat's id"),
     ("help", "All commands"),
@@ -46,8 +47,19 @@ async def run_command(rt: Runtime, cmd: str, args: str, member_id: str, private:
         return "\n".join(f"/{c} — {d}" for c, d in HELP)
     if cmd == "status":
         return rt.cmd_status()
-    if cmd == "board":
-        return rt.tasks.board()
+    if cmd == "board":                              # the personal assistant's tasks are private
+        return rt.tasks.board(skip_owners={m.id for m in cfg.assistants})
+    if cmd == "link":
+        if not private:
+            return "I'll only send the console link in a private chat — it opens the console as you."
+        link = getattr(rt, "console_link", None)
+        if not link:
+            return "The console isn't running here (start it with `jm run`)."
+        url = link()
+        local = "localhost" in url
+        return (f"🔗 Your console: {url}" + ("\nIt's only reachable from the machine running it — turn on the public "
+                                              "link in Settings → Channels (or `jm run --public`) to open it anywhere."
+                                              if local else "\nAnyone with this link is you — don't forward it."))
     if cmd == "assign":
         text, who = await asyncio.to_thread(rt.cmd_assign, args)      # git commit off the event loop
         coro = ack_assignment(rt, who, text)

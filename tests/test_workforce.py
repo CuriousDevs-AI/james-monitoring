@@ -608,3 +608,46 @@ def test_report_sees_a_block_on_the_founders_first_name(app):
     rep = build_report(app.rt.cfg, app.rt.ws, app.rt.tasks, app.rt.asks)
     assert "1 block(s) waiting on Maria Lopez" in rep and f"Unblock {t['id']}" in rep
     assert not on_owner(app.rt.cfg, "Mariana from marketing — the copy")     # whole words only
+
+
+# -- the public link (Cloudflare Tunnel) ------------------------------------------------------------------------------
+def test_public_link_starts_a_tunnel_and_guards_the_key(app, http, tmp_path, monkeypatch):
+    fake = tmp_path / "cloudflared"
+    fake.write_text("#!/bin/sh\necho 'INF Starting tunnel'\necho 'INF |  https://brave-otter-12.trycloudflare.com  |'\n"
+                    "sleep 30\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("JM_CLOUDFLARED_BIN", str(fake))
+    app.console_key, app.port = "short", 8765
+    assert "too short" in app.public_set(True)["error"]                  # a guessable key never goes public
+    app.console_key = KEY + "-long-enough-key"
+    st = app.public_set(True)
+    assert st["on"] and st["url"] == "https://brave-otter-12.trycloudflare.com"
+    assert st["link"].endswith("/?k=" + app.console_key)
+    assert app.console_link().startswith("https://brave-otter-12.trycloudflare.com/?k=")
+    # /link: in a private chat only
+    app.rt.console_link = app.console_link
+    mgr = app.rt.cfg.monitor.id
+    app.chat_send(mgr, "/link")
+    assert "trycloudflare.com/?k=" in settle(app, lambda: [m for m in app.chat.since(mgr, -1) if m["who"] == mgr])[-1]["text"]
+    app.chat_send("team", "/link")
+    assert "private chat" in settle(app, lambda: [m for m in app.chat.since("team", -1) if m["who"] != "maria_lopez"])[-1]["text"]
+    assert not app.public_set(False)["on"] and app.public.proc is None
+
+
+def test_wrong_keys_lock_out_that_visitor_only(app, http):
+    for _ in range(20):
+        http("/api/state", key="guess")
+    st, body = http("/api/state", key="guess")
+    assert st == 429 and "Too many" in body["error"]
+    assert http("/api/state")[0] == 429                                  # same visitor (this test's IP), even with the key
+    app.failed_keys.hits.clear()
+    assert http("/api/state")[0] == 200
+
+
+def test_board_command_hides_personal_tasks(app):
+    app.studio_hire({"name": "Ada", "role": "Assistant", "assistant": True})
+    app.task_create({"title": "Renew passport", "owner": "ada", "notify": False})
+    app.task_create({"title": "Ship v1", "owner": "riya", "notify": False})
+    app.chat_send("team", "/board")
+    out = settle(app, lambda: [m for m in app.chat.since("team", -1) if m.get("kind") == "system"])[-1]["text"]
+    assert "Ship v1" in out and "Renew passport" not in out

@@ -191,6 +191,8 @@ class Config:
     clients: dict[str, Client] = field(default_factory=dict)
     users: list[User] = field(default_factory=list)
     daily_brief: str = "08:30"     # the personal assistant's morning brief (if there is an assistant)
+    public_url: str = ""           # your own domain for the console (a named Cloudflare tunnel); "" = quick tunnel
+    public_auto: bool = False      # start the public link with `jm run`
 
     @property
     def assistants(self) -> list[Member]:
@@ -505,4 +507,6 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         clients=clients,
         users=users,
         daily_brief=brief,
+        public_url=str(_get(raw, "public.url", "") or "").rstrip("/"),
+        public_auto=bool(_get(raw, "public.auto", False)),
     )

@@ -90,7 +90,7 @@ def cmd_run(args) -> None:
         return
     from .server import serve
     serve(cfg_path.parent, host=args.host, port=args.port, open_browser=not args.no_browser,
-          telegram=not args.no_telegram)
+          telegram=not args.no_telegram, public=getattr(args, "public", False))
 
 
 class _Print:
@@ -335,6 +335,8 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--no-browser", action="store_true")
     s.add_argument("--no-telegram", action="store_true", help="console only")
     s.add_argument("--no-web", action="store_true", help="Telegram + schedule only, no console")
+    s.add_argument("--public", action="store_true",
+                   help="also open the console on a public https URL (Cloudflare Tunnel; needs cloudflared)")
     s.set_defaults(fn=cmd_run)
 
     s = sub.add_parser("chat", help="talk to a member (or `team`, or a project room p-<id>) from the terminal")
