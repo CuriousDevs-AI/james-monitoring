@@ -25,7 +25,10 @@ def parse_when(value: str, tz: str, base: datetime | None = None) -> datetime:
     """'2026-10-02 09:30', '18:00' (today, or tomorrow if passed), 'in 45m', 'in 2h', 'in 1d', 'tomorrow 9:00'."""
     from zoneinfo import ZoneInfo
     base = base or now(tz)
-    v = " ".join(str(value or "").lower().split())
+    raw = " ".join(str(value or "").split())
+    v = raw.lower()
+    if v in ("tomorrow", "tomorrow morning"):
+        v = "tomorrow 09:00"
     m = re.fullmatch(r"in (\d+)\s*(m|min|mins|minutes?|h|hrs?|hours?|d|days?)", v)
     if m:
         n, unit = int(m.group(1)), m.group(2)[0]
@@ -42,7 +45,7 @@ def parse_when(value: str, tz: str, base: datetime | None = None) -> datetime:
             at += timedelta(days=1)
         return at
     try:
-        at = datetime.fromisoformat(v.replace(" ", "T"))
+        at = datetime.fromisoformat(raw.replace(" ", "T").replace("z", "Z").replace("Z", "+00:00"))
     except ValueError:
         raise ValueError(f"I can't read the time “{value}” — use YYYY-MM-DD HH:MM, HH:MM or 'in 2h'.") from None
     return at if at.tzinfo else at.replace(tzinfo=ZoneInfo(tz))
@@ -76,23 +79,19 @@ class Reminders:
         self.rt.ws.update_state(fn)
 
     def due(self, at: datetime) -> list[dict]:
-        """Reminders whose time has come; marked done in the same step (each fires once)."""
-        out: list[dict] = []
+        """Reminders whose time has come (the caller removes each one once it's sent)."""
+        return due_in(self.rt.ws.state(), at)
 
-        def fn(s):
-            keep = []
-            for r in s.get("reminders") or []:
-                try:
-                    when = datetime.fromisoformat(r["at"])
-                except (KeyError, ValueError):
-                    continue
-                if when <= at:
-                    out.append(r)
-                elif when > at - timedelta(days=60):
-                    keep.append(r)
-            s["reminders"] = keep
-        self.rt.ws.update_state(fn)
-        return out
+
+def due_in(state: dict, at: datetime) -> list[dict]:
+    out = []
+    for r in state.get("reminders") or []:
+        try:
+            if datetime.fromisoformat(r["at"]) <= at:
+                out.append(r)
+        except (KeyError, ValueError, TypeError):
+            continue
+    return out
 
 
 def brief(rt, m) -> str:

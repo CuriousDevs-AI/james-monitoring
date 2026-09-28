@@ -31,7 +31,7 @@ def snippet(text: str, terms: list[str], width: int = 160) -> str:
     return ("…" if start else "") + out + ("…" if start + width < len(flat) else "")
 
 
-def search(rt, q: str, rooms: list[str], include_memory: bool = True, include_tasks=None) -> dict:
+def search(rt, q: str, rooms: list[str], include_memory: bool = True, include_tasks=None, members=None) -> dict:
     """{"messages", "tasks", "docs", "memory"} — newest first, at most PER_KIND of each."""
     terms = _terms(q)
     out: dict[str, list] = {"messages": [], "tasks": [], "docs": [], "memory": []}
@@ -69,7 +69,7 @@ def search(rt, q: str, rooms: list[str], include_memory: bool = True, include_ta
     out["docs"].sort(key=lambda x: -x["mtime"])
     out["docs"] = out["docs"][:PER_KIND]
     if include_memory:
-        for m in rt.cfg.team:
+        for m in (members if members is not None else rt.cfg.team):
             for e in rt.ws.memory_entries(m.id):
                 if _hit(e["text"], terms):
                     out["memory"].append({"member": m.id, "pinned": e["pinned"], "date": e["date"],

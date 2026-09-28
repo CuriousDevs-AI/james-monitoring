@@ -35,6 +35,7 @@ HISTORY_TURNS = 8
 TURN_SECONDS = 420
 # A person's CLI session (Claude Code / Codex / OpenCode) is kept across calls and restarts, and started fresh when
 # the model changes or it gets long or old (the fresh one is seeded with the recent conversation).
+WATCHDOG_SECONDS = TURN_SECONDS + 120  # a turn still running after this is stopped (a hung CLI, a dead network)
 RETRY_BACKOFF = (3, 10)             # seconds between retries of a model call that hit a temporary problem
 SESSION_MAX_CALLS = 40
 SESSION_MAX_TOKENS = 600_000
@@ -355,6 +356,38 @@ class Runtime:
         return c.provider + (f"/{c.model}" if c.model else "")
 
     # -- state helpers ---------------------------------------------------------
+    def project_paused(self, pid: str) -> bool:
+        """A project on pause: nobody works on it (its room, its tasks, work sessions, coding) until it resumes."""
+        p = self.cfg.projects.get(pid) if pid else None
+        return bool(p and p.status == "paused")
+
+    def action_project(self, a: dict, ev: "Event") -> str:
+        """The project an action touches — the one it names, its task's, or the conversation's — whose rules apply."""
+        if a.get("project") and a["project"] in self.cfg.projects:
+            return a["project"]
+        tid = a.get("task") or (a.get("id") if a.get("type") == "update_task" else "")
+        if tid:
+            try:
+                pid = self.tasks.get(str(tid)).project
+                if pid:
+                    return pid
+            except TaskError:
+                pass
+        return self.project_of(ev)
+
+    def project_of(self, ev: "Event") -> str:
+        """The project an event is about: its room's project, or its task's."""
+        if ev.project:
+            return ev.project
+        if ev.room and ev.room.startswith(PROJECT_ROOM):
+            return ev.room[len(PROJECT_ROOM):]
+        if ev.task:
+            try:
+                return self.tasks.get(ev.task).project
+            except TaskError:
+                return ""
+        return ""
+
     def paused(self, member_id: str) -> bool:
         s = self.ws.state()
         return bool(s.get("paused_all")) or member_id in (s.get("paused") or [])
@@ -431,7 +464,10 @@ class Runtime:
             for it in s.get("queue") or []:
                 mid = it.get("member", "")
                 cap = self.cfg.daily_tokens_per_agent
-                ok = self.cfg.member(mid) and not self.paused(mid) and not (cap and self._usage_today(mid) >= cap)
+                ev_ = it.get("event") or {}
+                pid = self.project_of(Event(**ev_)) if ev_ else ""
+                ok = (self.cfg.member(mid) and not self.paused(mid) and not (cap and self._usage_today(mid) >= cap)
+                      and not self.project_paused(pid))
                 (ready if ok else keep).append(it)
             s["queue"] = keep
         self.ws.update_state(take)
@@ -749,6 +785,12 @@ class Runtime:
             return f"Unknown team member `{member_id}`."
         cap = self.cfg.daily_tokens_per_agent
         why = "paused" if self.paused(m.id) else "over today's budget" if cap and self._usage_today(m.id) >= cap else ""
+        pid = self.project_of(ev)
+        if not why and self.project_paused(pid):
+            p = self.cfg.projects[pid]
+            self._enqueue(m, ev, f"{p.name or pid} is paused")
+            return (f"⏸ {p.name or pid} is paused — this waits in the queue and is answered when you resume the "
+                    f"project.")
         if why:
             # Paused means paused — owner messages, teammates' questions and system follow-ups all wait in the
             # queue and are handled on /resume (or when the budget resets). Nothing is lost, nothing runs.
@@ -762,9 +804,15 @@ class Runtime:
             if cap and self._usage_today(m.id) >= cap:    # re-checked: others may have spent it while we waited
                 self._enqueue(m, ev, "over today's budget")
                 return f"💸 I've used today's budget ({cap:,} tokens) — your message is queued."
-            self.turns[m.id] = {"room": self.room_of(m, ev), "since": time.time(), "source": ev.source}
-            try:
-                return await self._turn(m, ev)
+            room = self.room_of(m, ev)
+            self.turns[m.id] = {"room": room, "since": time.time(), "source": ev.source}
+            try:     # watchdog — counted from when they start, not while they wait for their previous turn
+                return await asyncio.wait_for(self._turn(m, ev), WATCHDOG_SECONDS)
+            except asyncio.TimeoutError:
+                self.note_stuck(m.id, room)
+                self.reset_sessions(m.id, room)            # the hung call may still hold that session: start fresh
+                return (f"⚠️ I got stuck on this and stopped after {max(1, WATCHDOG_SECONDS // 60)} minute(s) — please send "
+                        f"it again (if it keeps happening, check my model in Settings → AI models).")
             finally:
                 self.turns.pop(m.id, None)
 
@@ -967,7 +1015,8 @@ class Runtime:
 
     async def _apply(self, m: Member, a: dict, ev: Event) -> str:
         t = a["type"]
-        level = "green" if t in NO_GATE or ev.meta.get("approved") else self.cfg.permission(m, t, ev.project)
+        level = ("green" if t in NO_GATE or ev.meta.get("approved")
+                 else self.cfg.permission(m, t, self.action_project(a, ev)))
         if level == "red":
             ask = self.asks.create(requester=m.id, summary=f"{m.name} wants to {self.describe(m, a)}",
                                    details=str(a.get("why") or a.get("description") or ""), level="red",
@@ -1105,7 +1154,8 @@ class Runtime:
                 raise ValueError(f"{target.name} is {self.cfg.owner_name}'s personal assistant, not reachable by "
                                  f"the team — message {self.cfg.owner_name} instead")
             self.ws.log(m.id, f"to {target.id}: {a.get('text', '')[:300]}")
-            room = self._handoff_room(ev, a.get("task", ""))
+            # the personal assistant's hand-offs are private: they go in the teammate's own 1:1, not the backchannel
+            room = target.id if m.assistant else self._handoff_room(ev, a.get("task", ""))
             await self._internal(room, m.id, f"→ {target.name}: {a.get('text', '')}")
             origin = ev.meta.get("origin_room") or self.room_of(m, ev)
             self._spawn(self._deliver(target.id, Event("inbox", a.get("text", ""), sender=m.id, hop=ev.hop + 1,
@@ -1145,6 +1195,8 @@ class Runtime:
             if m.monitor:
                 raise ValueError(f"{m.name} coordinates the team and does not write code")
             tid, pid = a.get("task", ""), a.get("project", "")
+            if self.project_paused(pid):
+                raise ValueError(f"{pid} is paused — no coding runs until it's resumed")
             self.executor.project(pid)            # validate now, run in background
             self.tasks.get(tid)
             if tid in self._coding:
@@ -1631,11 +1683,19 @@ class Runtime:
     async def run_reminders(self, at=None) -> int:
         """Send every reminder whose time has come (the scheduler calls this each tick)."""
         from .assistant import Reminders
-        due = Reminders(self).due(at or now(self.cfg.timezone))
+        rem = Reminders(self)
+        due = rem.due(at or now(self.cfg.timezone))
+        sent = 0
         for r in due:
             who = r.get("member") if self.cfg.member(r.get("member", "")) else self.cfg.monitor.id
-            await self.bus.send_owner(who, f"⏰ Reminder: {r['text']}", urgent=True)
-        return len(due)
+            try:
+                await self.bus.send_owner(who, f"⏰ Reminder: {r['text']}", urgent=True)
+            except Exception:  # noqa: BLE001 - kept: it's tried again on the next tick
+                log.exception("reminder %s not delivered", r.get("id"))
+                continue
+            rem.delete(r["id"])                           # removed only once it has been sent
+            sent += 1
+        return sent
 
     async def run_brief(self) -> int:
         from .assistant import brief
@@ -1674,14 +1734,15 @@ class Runtime:
 
     def blocked_on_member(self, m: Member) -> list:
         return [t for t in self.tasks.all() if t.is_open and t.status == "blocked" and t.owner != m.id
-                and any(x.id == m.id for x in self.people_in(t.blocked_on))]
+                and not self.project_paused(t.project) and any(x.id == m.id for x in self.people_in(t.blocked_on))]
 
     def next_work(self, m: Member) -> tuple[str, object] | None:
         """What a person does first: unblock others → rework asked for by the owner → their top task."""
         waiting = self.blocked_on_member(m)
         if waiting:
             return "unblock", waiting[0]
-        mine = [t for t in self.tasks.for_owner(m.id) if t.status in ("todo", "doing")]
+        mine = [t for t in self.tasks.for_owner(m.id) if t.status in ("todo", "doing")
+                and not self.project_paused(t.project)]          # paused projects wait
         rework = [t for t in mine if t.doc.meta.get("rework")]
         if rework:
             return "rework", rework[0]

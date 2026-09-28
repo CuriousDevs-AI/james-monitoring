@@ -20,19 +20,35 @@ SECRET_KEYS = re.compile(r"token|key|secret|password|code|data|files|persona|tex
 KINDS = ("console", "decision", "agent", "model", "system", "login")
 
 
+_URL_CREDS = re.compile(r"(\b[a-z][a-z0-9+.-]*://)[^/@\s]+@", re.I)     # https://user:token@host → https://***@host
+_TOKENS = re.compile(r"\b(sk-[\w-]{8,}|xox[abpr]-[\w-]{8,}|xapp-[\w-]{8,}|gh[pousr]_\w{16,}|u_[\w-]{20,}|\d{6,}:[\w-]{30,})")
+
+
+def _scrub(v):
+    """Drop secret-looking keys at every level; hide credentials in URLs and anything shaped like a token."""
+    if isinstance(v, dict):
+        return {k: (x[:120] + ("…" if len(x) > 120 else "") if k == "text" and isinstance(x, str) else _scrub(x))
+                for k, x in v.items() if not SECRET_KEYS.search(str(k)) or k in ("note", "text")}
+    if isinstance(v, list):
+        return [_scrub(x) for x in v]
+    if isinstance(v, str):
+        return _TOKENS.sub("***", _URL_CREDS.sub(r"\1***@", v))
+    return v
+
+
 def _clean(detail) -> str:
+    detail = _scrub(detail)
     if isinstance(detail, dict):
-        keep = {}
-        for k, v in detail.items():
-            if SECRET_KEYS.search(str(k)) and k not in ("note",):
-                if k == "text" and isinstance(v, str):
-                    keep[k] = v[:120] + ("…" if len(v) > 120 else "")
-                continue
-            if isinstance(v, (dict, list)):
-                v = json.dumps(v, ensure_ascii=False)[:160]
-            keep[k] = v
+        keep = {k: (json.dumps(v, ensure_ascii=False)[:160] if isinstance(v, (dict, list)) else v)
+                for k, v in detail.items()}
         detail = ", ".join(f"{k}={v}" for k, v in keep.items() if v not in ("", None, [], {}))
     return " ".join(str(detail or "").split())[:400]
+
+
+def _cell(v) -> str:
+    """No spreadsheet formulas from a task title or a message (=, +, -, @ at the start)."""
+    v = str(v if v is not None else "")
+    return "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
 
 
 class AuditLog:
@@ -44,7 +60,7 @@ class AuditLog:
         from .util import now
         ts = time.time()
         ev = {"ts": ts, "at": now(self.tz).isoformat(timespec="seconds"), "kind": kind, "who": who,
-              "action": action, "target": target, "detail": _clean(detail), "via": via}
+              "action": action, "target": _clean(target), "detail": _clean(detail), "via": via}
         path = self.dir / f"{ev['at'][:7]}.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         with path_lock(path):
@@ -81,5 +97,5 @@ class AuditLog:
         w = csv.writer(buf)
         w.writerow(["at", "kind", "who", "action", "target", "detail", "via"])
         for ev in self.entries(limit=100_000, **filters):
-            w.writerow([ev.get(k, "") for k in ("at", "kind", "who", "action", "target", "detail", "via")])
+            w.writerow([_cell(ev.get(k, "")) for k in ("at", "kind", "who", "action", "target", "detail", "via")])
         return buf.getvalue()

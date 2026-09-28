@@ -441,3 +441,143 @@ def test_project_model_problems_show_in_health(app, monkeypatch):
     app.project_settings_save({"id": "site", "llm": {"provider": "openrouter", "model": "z-ai/glm-4.6"}})
     h = app.models_health()
     assert not h["ok"] and any("Riya on Site" in p["who"] for p in h["problems"])
+
+
+# -- pause a project; removing someone leaves nothing dangling --------------------------------------------------
+def test_pause_a_project_queues_its_work_and_resume_answers_it(app):
+    rt = app.rt
+    t = app.task_create({"title": "Hero copy", "owner": "sam", "project": "site", "notify": False,
+                         "done_means": ["copy doc"]})
+    other = app.task_create({"title": "Payroll", "owner": "sam", "notify": False, "done_means": ["done"]})
+    r = app.project_pause("site", True)
+    assert "paused" in r["message"] and app.rt.cfg.projects["site"].status == "paused"
+    rt = app.rt
+    assert rt.next_work(rt.cfg.member("sam"))[1].id == other["id"]          # only work outside the paused project
+    app.chat_send("p-site", "@sam how is the hero going?")
+    settle(app, lambda: any("is paused" in m["text"] and m["who"] == "sam" for m in app.chat.since("p-site", -1)))
+    assert rt.queued() and rt.queued()[0]["member"] == "sam"
+    assert app.submit(rt.drain_queue()) == 0                                # still paused: stays queued
+    # nor can a coding run start there
+    with pytest.raises(ValueError, match="paused"):
+        app.submit(rt._do(rt.cfg.member("sam"), {"type": "run_code", "task": t["id"], "project": "site",
+                                                 "instructions": "x"}, __import__("james_monitoring.runtime", fromlist=["Event"]).Event("dm", "x", sender="maria_lopez")))
+    rt.llm.push({"reply": "Hero is half done.", "actions": []})
+    r = app.project_pause("site", False)
+    assert "running again" in r["message"] and "1 waiting message" in r["message"]
+    settle(app, lambda: any(m["text"].startswith("(queued while I was Site is paused)") and m["who"] == "sam"
+                            for m in app.chat.since("p-site", -1)))       # answered after the resume (a reload)
+    assert not app.rt.queued()
+
+
+def test_removing_someone_cleans_every_reference(app):
+    app.departments_save({"name": "Design", "head": "sam", "members": ["sam"]})
+    app.project_settings_save({"id": "site", "agents": {"sam": {"role": "Art director"}}})
+    t = app.task_create({"title": "Logo", "owner": "sam", "project": "site", "notify": False})
+    r = app.remove_person("sam")                          # used to fail: config refused the dangling references
+    assert r["removed"] == "Sam" and r["tasks_moved"] == [t["id"]]
+    cfg = app.rt.cfg
+    assert not cfg.member("sam") and cfg.departments["design"].head == "" and "sam" not in cfg.projects["site"].agents
+    task = app.rt.tasks.get(t["id"])
+    assert task.owner == cfg.monitor.id and "left the team" in task.doc.sections["Log"]
+    settle(app, lambda: any("Their open tasks are with me" in m["text"] for m in app.chat.since(cfg.monitor.id, -1)))
+
+
+# -- the review's findings stay fixed ------------------------------------------------------------------------------
+def test_roles_cant_bend_the_rules(app, http):
+    member = http("/api/users", {"action": "add", "name": "Mia", "role": "member"})[1]["key"]
+    admin = http("/api/users", {"action": "add", "name": "Tom", "role": "admin"})[1]["key"]
+    t = app.task_create({"title": "Copy", "owner": "sam", "project": "site", "notify": False})
+    app.rt.tasks.set_status(t["id"], "review", by="sam")
+    # a member's "feedback" would be a founder's binding correction → refused
+    assert http("/api/task", {"id": t["id"], "action": "feedback", "text": "redo"}, key=member)[0] == 403
+    assert app.rt.tasks.get(t["id"]).status == "review"
+    # a member can't reshape a project's team by assigning an outsider
+    app.admin.add(name="Leo", role="Marketing", token=""); app.load()
+    assert http("/api/tasks", {"title": "x", "owner": "leo", "project": "site", "notify": False}, key=member)[0] == 403
+    # only the founder sets up (or unmasks) the personal assistant
+    app.member_update({"id": "sam", "assistant": True})
+    assert http("/api/member", {"id": "sam", "assistant": False}, key=admin)[0] == 403
+    assert http("/api/memory", {"id": "sam", "action": "add", "text": "x"}, key=admin)[0] == 403
+    assert http("/api/memory?id=riya", key=member)[0] == 403                       # memory is for admins
+    assert http("/api/member?id=riya", key=member)[1]["memory"] == ""
+    # the assistant's requests are private too
+    app.rt.asks.create(requester="sam", summary="Buy a gift", details="", level="red", task="", kind="")
+    assert all(a["from"] != "sam" for a in http("/api/asks", key=admin)[1])
+    assert any(a["from"] == "sam" for a in http("/api/asks")[1])
+    # …and nobody can hand company work to it but the founder
+    t2 = app.task_create({"title": "Logo", "owner": "riya", "notify": False})
+    assert http("/api/task", {"id": t2["id"], "action": "edit", "owner": "sam"}, key=admin)[0] == 403
+
+
+def test_project_rules_follow_the_action_not_the_room(app):
+    app.project_settings_save({"id": "site", "permissions": {"create_task": "red"}})
+    app.rt.llm.push({"reply": "Done.", "actions": [{"type": "create_task", "title": "Site banner", "project": "site",
+                                                    "owner": "riya"}]})
+    app.chat_send("riya", "add a banner task for the site")          # a 1:1, not the project room
+    settle(app, lambda: app.rt.asks.pending())
+    assert "Site banner" in app.rt.asks.pending()[0].summary and not [t for t in app.rt.tasks.all()
+                                                                        if t.title == "Site banner"]
+
+
+def test_a_failed_studio_hire_leaves_nothing_behind(app):
+    with pytest.raises(ValueError, match="department"):
+        app.studio_hire({"name": "Quinn", "role": "QA", "department": "nope"})
+    assert not app.rt.cfg.member("quinn")
+    import james_monitoring.server as srv
+    orig = srv.App._studio_finish
+    srv.App._studio_finish = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("disk full"))
+    try:
+        with pytest.raises(RuntimeError):
+            app.studio_hire({"name": "Quinn", "role": "QA"})
+    finally:
+        srv.App._studio_finish = orig
+    assert not app.rt.cfg.member("quinn")
+    assert app.studio_hire({"name": "Quinn", "role": "QA"})["id"] == "quinn"      # and hiring again works
+
+
+def test_reminders_survive_a_failed_send_and_times_parse(app):
+    from datetime import timedelta
+    from james_monitoring.assistant import Reminders, parse_when
+    from james_monitoring.util import now
+    app.studio_hire({"name": "Ada", "role": "Assistant", "assistant": True})
+    rt = app.rt
+    Reminders(rt).add("ada", "in 1m", "Call the bank")
+    later = now(rt.cfg.timezone) + timedelta(minutes=2)
+    real = rt.bus.send_owner
+
+    async def boom(*a, **k):
+        raise RuntimeError("network down")
+    rt.bus.send_owner = boom
+    assert app.submit(rt.run_reminders(later)) == 0 and len(Reminders(rt).all()) == 1   # kept for the next tick
+    rt.bus.send_owner = real
+    assert app.submit(rt.run_reminders(later)) == 1 and not Reminders(rt).all()
+    base = now(rt.cfg.timezone)
+    assert parse_when("tomorrow", rt.cfg.timezone, base).hour == 9
+    assert parse_when("2030-01-02T09:30Z", rt.cfg.timezone).utcoffset().total_seconds() == 0
+
+
+def test_audit_never_keeps_credentials_and_csv_is_safe(app):
+    app.rt.audit.record("console", "Maria", "set up", "https://bob:tok@github.com/x",
+                        {"clone_url": "https://bob:ghp_abcdefghijklmnopqrstuv@github.com/x",
+                         "llm": {"provider": "openai", "api_key": "sk-live-123456789"}, "title": "=HYPERLINK(1)"})
+    row = app.rt.audit.entries(limit=1)[0]
+    blob = json.dumps(row)
+    assert "tok@" not in blob and "ghp_" not in blob and "sk-live" not in blob and "***@github.com" in blob
+    csv = app.rt.audit.csv()
+    assert "\n'=" not in csv.split("\n", 1)[0] and ",=" not in csv
+
+
+def test_a_hung_turn_is_stopped_without_blocking_the_next(app, monkeypatch):
+    import james_monitoring.runtime as rtmod
+    monkeypatch.setattr(rtmod, "WATCHDOG_SECONDS", 1)
+
+    class Slow:
+        name = "slow"
+
+        def complete(self, system, messages):
+            time.sleep(3)
+            return LLMResult(text='{"reply": "late", "actions": []}', input_tokens=1, output_tokens=1)
+    app.rt.llm = Slow()
+    app.chat_send("riya", "hello?")
+    settle(app, lambda: any("I got stuck" in m["text"] for m in app.chat.since("riya", -1)))
+    assert app.rt.ws.state().get("stuck") and "riya" not in app.rt.turns

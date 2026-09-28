@@ -228,6 +228,10 @@ class App:
         p = self.rt.cfg.projects.get(pid)
         return bool(p and user.get("client") and p.client == user["client"])
 
+    def can_see_ask(self, user: dict, a) -> bool:
+        """Requests from the personal assistant are the founder's alone."""
+        return user["role"] == "owner" or a.requester not in self.private_rooms()
+
     def is_personal(self, t) -> bool:
         return any(m.id == t.owner for m in self.rt.cfg.assistants)
 
@@ -493,6 +497,55 @@ class App:
         self.load()
         return self.project_settings(pid)
 
+    def remove_person(self, mid: str) -> dict:
+        """Take someone off the team. Their open tasks go to the manager (logged), so nothing is left without an
+        owner; their settings on projects and a department they headed are cleared; their files stay in git."""
+        rt = self.rt
+        m = rt.cfg.member(mid)
+        if not m:
+            raise ValueError(f"no member {mid}")
+        name = self.admin.remove(m.id)["removed"]
+        self.load()
+        rt = self.rt
+        mgr = rt.cfg.monitor
+        moved = []
+        for t in rt.tasks.all():                              # reviews they'd have done come back to you
+            if t.is_open and str(t.doc.meta.get("reviewer") or "") == m.id:
+                rt.tasks.update_fields(t.id, rt.owner_id, reviewer=rt.owner_id)
+        for t in rt.tasks.for_owner(m.id):
+            rt.tasks.update_fields(t.id, rt.owner_id, owner=mgr.id)
+            rt.tasks.add_log(t.id, rt.owner_id, f"{name} left the team — handed to {mgr.name} to reassign")
+            moved.append(t.id)
+        rt.ws.commit(f"{name} left the team" + (f"; {', '.join(moved)} → {mgr.name}" if moved else ""),
+                     author=rt.cfg.owner_name)
+        if moved:
+            self.submit(rt.bus.send_owner(mgr.id, f"{name} left the team. Their open tasks are with me now: "
+                                                  f"{', '.join(moved)} — tell me who should take them."), timeout=None)
+        return {"removed": name, "tasks_moved": moved}
+
+    @config_txn
+    def project_pause(self, pid: str, pause: bool) -> dict:
+        """Pause a project: nobody works on it — its room's messages, its tasks and coding wait in the queue."""
+        raw = self.raw()
+        p = (raw.get("projects") or {}).get(pid)
+        if p is None:
+            raise ValueError(f"no project {pid}")
+        name = p.get("name") or pid
+        p["status"] = "paused" if pause else "active"
+        self.save_raw(raw)
+        self.rt.ws.write(f"projects/{pid}.md", re.sub(r"(?m)^Status: .*$", f"Status: {p['status']}",
+                                                      self.rt.ws.read(f"projects/{pid}.md") or f"# {name}\n\nStatus: {p['status']}\n"))
+        self.rt.ws.commit(f"project {pid} {'paused' if pause else 'resumed'}", author=self.rt.cfg.owner_name)
+        self.load()
+        msg = f"{name} is paused — nobody works on it; messages and tasks wait." if pause else f"{name} is running again."
+        if not pause:
+            n = self.submit(self.rt.drain_queue(), timeout=30)
+            if n:
+                msg += f" {n} waiting message{'s' if n != 1 else ''} being answered."
+        self.submit(self.hub.post(PROJECT_ROOM + pid, self.rt.cfg.monitor.id,
+                                  ("⏸ " if pause else "▶️ ") + msg, kind="notice"), timeout=30)
+        return {"message": msg, "project": self._project_json(self.rt.cfg.projects[pid])}
+
     @config_txn
     def project_members(self, pid: str, members: list[str]) -> dict:
         raw = self.raw()
@@ -540,7 +593,7 @@ class App:
                         "tokens": usage.get(next((m.id for m in cfg.team if m.name == n), ""), 0),
                         "error": rt.model_error(next((m.id for m in cfg.team if m.name == n), ""))}
                        for n, st, line in rows],
-            "asks": [self._ask_json(a) for a in rt.asks.pending()],
+            "asks": [self._ask_json(a) for a in rt.asks.pending() if self.can_see_ask(user, a)],
             "decisions": open_decisions(rt.ws),
             "review": [self._task_json(t) for t in tasks if t.status == "review"],
             "blocked_on_you": [self._task_json(t) for t in self._blocked_on_owner()] if user["role"] == "owner" else [],
@@ -588,8 +641,8 @@ class App:
             if i >= 0:
                 m = self.chat.since(r, i - 1)[-1:]
                 last_who[r] = m[0]["who"] if m else ""
-        pend = rt.asks.pending()
-        review = [t for t in rt.tasks.all() if t.status == "review"]
+        pend = [a for a in rt.asks.pending() if self.can_see_ask(user, a)]
+        review = [t for t in rt.tasks.all() if t.status == "review" and self.can_see_task(user, t)]
         approver = can(user, "approve")
         return {"version": h.hexdigest()[:16], "rooms": rooms, "last_who": last_who,
                 "thinking": {k: v for k, v in self.pending.items() if k in rooms},
@@ -845,6 +898,13 @@ class App:
         return st
 
     def member_detail(self, mid: str, user: dict | None = None) -> dict:
+        from .users import can
+        out = self._member_detail(mid)
+        if user and not can(user, "admin"):                   # memory and the private log are for admins
+            out["memory"], out["log"] = "", ""
+        return out
+
+    def _member_detail(self, mid: str) -> dict:
         m = self.rt.cfg.member(mid)
         if not m:
             raise ValueError(f"no member {mid}")
@@ -867,8 +927,9 @@ class App:
         from .search import search
         user = user or self.owner_user()
         rooms = [r for r in self.hub.rooms() if self.can_see_room(user, r)]
+        members = self.rt.cfg.team if user["role"] == "owner" else self.rt.cfg.workers
         return search(self.rt, q, rooms, include_memory=user["role"] in ("owner", "admin"),
-                      include_tasks=lambda t: self.can_see_task(user, t))
+                      include_tasks=lambda t: self.can_see_task(user, t), members=members)
 
     def audit_list(self, q: dict) -> list[dict]:
         before = float(q.get("before") or 0)
@@ -922,7 +983,7 @@ class App:
         items: list[dict] = []
         add = lambda **k: items.append(k)                                  # noqa: E731
         if can(user, "approve"):
-            for a in rt.asks.pending():
+            for a in [x for x in rt.asks.pending() if self.can_see_ask(user, x)]:
                 add(id=f"ask:{a.id}", kind="approval", tone="danger" if a.level == "red" else "warning",
                     title=a.summary, detail=f"{a.id} · from {rt.name_of(a.requester)}",
                     ts=self._ts(a.doc.meta.get("created")), link={"view": "approvals"})
@@ -963,7 +1024,7 @@ class App:
                 if v.get("error") and cfg.member(mid):
                     add(id=f"model:{mid}:{hashlib.sha1(v['error'].encode()).hexdigest()[:8]}", kind="model",
                         tone="danger", title=f"{rt.name_of(mid)}'s AI model is failing", detail=v["error"][:160],
-                        ts=self._ts(v.get("last")), link={"view": "settings", "anchor": "set-models"})
+                        ts=self._ts(v.get("last")), link={"view": "settings", "tab": "models"})
             st = rt.ws.state()
             for key, label in (("push_error", "The team repo can't push"), ("commit_error", "Team repo commits fail")):
                 if st.get(key):
@@ -1094,8 +1155,34 @@ class App:
     def studio_hire(self, b: dict) -> dict:
         from .studio import persona_md
         name, role = " ".join(str(b.get("name") or "").split()), " ".join(str(b.get("role") or "").split())
-        r = self.admin.add(name=name, role=role, token="", projects=list(b.get("projects") or []))
+        cfg = self.rt.cfg
+        llm = b.get("llm") or {}                                    # check everything before anything is written
+        if llm.get("provider"):
+            if llm["provider"] not in PROVIDERS:
+                raise ValueError(f"Unknown AI provider {llm['provider']}.")
+            if llm["provider"] == "opencode" and "/" not in str(llm.get("model") or ""):
+                raise ValueError("Pick an OpenCode model (provider/model).")
+        if b.get("department") and b["department"] not in cfg.departments:
+            raise ValueError(f"There's no department {b['department']}.")
+        bad = [p for p in (b.get("projects") or []) if p not in cfg.projects]
+        if bad:
+            raise ValueError(f"There's no project {', '.join(bad)}.")
+        if b.get("assistant") and cfg.assistants:
+            raise ValueError(f"You already have a personal assistant ({cfg.assistants[0].name}).")
+        r = self.admin.add(name=name, role=role, token="",
+                           projects=[] if b.get("assistant") else list(b.get("projects") or []))
         mid = r["id"]
+        try:
+            return self._studio_finish(mid, name, role, b, llm)
+        except Exception:
+            try:                                                    # never leave half a teammate behind
+                self.admin.remove(mid)
+            finally:
+                self.load()
+            raise
+
+    def _studio_finish(self, mid: str, name: str, role: str, b: dict, llm: dict) -> dict:
+        from .studio import persona_md
         with path_lock(self.cfg_path):
             raw = self.raw()
             for m in raw.get("team", []):
@@ -1104,10 +1191,7 @@ class App:
                         m["department"] = str(b["department"])
                     if b.get("assistant"):
                         m["assistant"] = True
-                    llm = b.get("llm") or {}
                     if llm.get("provider"):
-                        if llm["provider"] not in PROVIDERS:
-                            raise ValueError(f"Unknown AI provider {llm['provider']}.")
                         m["llm"] = {k: str(llm[k]) for k in ("provider", "model", "base_url") if llm.get(k)}
                         if llm.get("allow_free"):
                             m["llm"]["allow_free"] = True
@@ -1319,6 +1403,9 @@ class App:
         if pid and pid not in rt.cfg.projects:
             raise ValueError(f"There's no project {pid}.")
         if pid and pid in rt.cfg.projects and owner not in [m.id for m in rt.cfg.project_members(pid)]:
+            if user["role"] not in ("owner", "admin"):
+                raise PermissionError(f"{rt.cfg.member(owner).name} isn't on {rt.cfg.projects[pid].name or pid} — "
+                                      f"an admin adds people to projects.")
             self.project_members(pid, [m.id for m in rt.cfg.project_members(pid)] + [owner])
             rt = self.rt
         dm = [x.strip() for x in (b.get("done_means") or []) if str(x).strip()]
@@ -1363,6 +1450,8 @@ class App:
                 rt.tasks.clear_due(tid, by)
             if "owner" in fields and not rt.cfg.member(str(fields["owner"])):
                 raise ValueError(f"There's nobody called {fields['owner']} on the team.")
+            if "owner" in fields and rt.cfg.member(str(fields["owner"])).assistant and user["role"] != "owner":
+                raise PermissionError("That's the founder's personal assistant — pick someone on the team.")
             if "reviewer" in fields and fields["reviewer"] != rt.owner_id and not rt.cfg.member(str(fields["reviewer"])):
                 raise ValueError("The reviewer must be you or someone on the team.")
             if "project" in fields and fields["project"] not in rt.cfg.projects:
@@ -1406,6 +1495,9 @@ class App:
             raise ValueError(f"There's already a project “{raw['projects'][pid].get('name') or pid}” — open it to "
                              f"edit it, or pick another name.")
         p = raw.setdefault("projects", {}).setdefault(pid, {"repo": "", "main_branch": "main"})
+        was_paused = p.get("status") == "paused"
+        if "status" in b and str(b["status"]) not in ("active", "paused", "done"):
+            raise ValueError("Status is active, paused or done.")
         for k in ("name", "description", "lead", "repo", "status"):
             if k in b:
                 p[k] = str(b[k]).strip()
@@ -1448,6 +1540,8 @@ class App:
                                                f"Lead: {lead or '-'}\n\n{p.get('description', '')}\n")
         self.rt.ws.commit(f"project {pid} saved", author=self.rt.cfg.owner_name)
         self.load()
+        if was_paused and p.get("status") != "paused":
+            self.submit(self.rt.drain_queue(), timeout=30)       # resumed: what waited is answered now
         return {"id": pid}
 
     @config_txn
@@ -1711,6 +1805,7 @@ GET_PERMS = {
 }
 POST_PERMS = {
     "/api/chat": "chat", "/api/tasks": "task", "/api/task": "task", "/api/ask": "approve", "/api/project/settings": "admin",
+    "/api/project/pause": "admin",
     "/api/notifications/read": "read", "/api/projects": "admin", "/api/project/members": "admin",
     "/api/member": "admin", "/api/decisions": "admin", "/api/settings": "admin", "/api/upload": "admin",
     "/api/upload_folder": "admin", "/api/token": "admin", "/api/links": "admin", "/api/member_status": "admin",
@@ -1734,7 +1829,8 @@ NO_AUDIT = {"/api/chat", "/api/ask", "/api/token", "/api/links", "/api/member_st
             "/api/telegram/code", "/api/notifications/read", "/api/studio/try", "/api/upload", "/api/upload_folder",
             "/api/telegram/detect", "/api/slack/detect"}
 AUDIT_LABEL = {"/api/tasks": "create task", "/api/task": "task", "/api/projects": "save project",
-               "/api/project/members": "project team", "/api/project/settings": "project settings", "/api/member": "edit profile", "/api/decisions": "edit decisions",
+               "/api/project/members": "project team", "/api/project/settings": "project settings",
+               "/api/project/pause": "pause/resume project", "/api/member": "edit profile", "/api/decisions": "edit decisions",
                "/api/settings": "change settings", "/api/add": "add person", "/api/remove": "remove person",
                "/api/report/run": "write report", "/api/work": "run work session", "/api/pause": "pause/resume",
                "/api/models/assign": "assign model", "/api/models/default": "use default model",
@@ -1812,6 +1908,8 @@ def make_handler(app: App, key: str):
                     return self._json(403, {"error": "That room is private."})
                 if path == "/api/task" and not app.can_see_task(user, app.rt.tasks.get(q.get("id", ""))):
                     return self._json(403, {"error": "That task is private."})
+                if path == "/api/memory" and not can(user, "admin"):
+                    return self._json(403, {"error": "Memory is visible to the founder and admins."})
                 if path in ("/api/member", "/api/memory") and q.get("id") in app.private_rooms() and user["role"] != "owner":
                     return self._json(403, {"error": "That profile is private."})
                 if path == "/api/client_report" and user["role"] == "client" and q.get("id") != user.get("client"):
@@ -1824,7 +1922,7 @@ def make_handler(app: App, key: str):
                     "/api/dashboard": lambda: app.dashboard(user),
                     "/api/tasks": lambda: [app._task_json(t) for t in app.rt.tasks.all() if app.can_see_task(user, t)],
                     "/api/task": lambda: app.task_detail(q.get("id", "")),
-                    "/api/asks": lambda: [app._ask_json(a) for a in reversed(app.rt.asks.all())][:50],
+                    "/api/asks": lambda: [app._ask_json(a) for a in reversed(app.rt.asks.all()) if app.can_see_ask(user, a)][:50],
                     "/api/chat": lambda: app.chat_since(room, int(q.get("after", -1))),
                     "/api/thread": lambda: app.chat_thread(room, int(q.get("root", -1))),
                     "/api/rooms": lambda: [r for r in app.rooms() if app.can_see_room(user, r["room"])],
@@ -1943,8 +2041,13 @@ def make_handler(app: App, key: str):
                 return None
             a = app.admin
             if path == "/api/task" and not can(user, "approve") and (
-                    str(b.get("action")) in ("accept", "cut", "changes") or str(b.get("status")) in ("done", "cut")):
-                raise PermissionError("Only the founder or an admin can accept, cut or send back work.")
+                    str(b.get("action")) in ("accept", "cut", "changes", "feedback") or str(b.get("status")) in ("done", "cut")):
+                raise PermissionError("Only the founder or an admin can accept, cut, send back or give feedback on work "
+                                      "(feedback becomes a binding correction).")
+            if path in ("/api/member", "/api/studio/hire") and "assistant" in b and user["role"] != "owner":
+                raise PermissionError("Only the founder can set up their personal assistant.")
+            if path == "/api/memory" and str(b.get("id", "")) in app.private_rooms() and user["role"] != "owner":
+                raise PermissionError("That profile is private.")
             if path in ("/api/task",) and not app.can_see_task(user, app.rt.tasks.get(str(b.get("id", "")))):
                 raise PermissionError("That task is private.")
             routes = {
@@ -1969,7 +2072,8 @@ def make_handler(app: App, key: str):
                 "/api/add": lambda: (a.add(name=str(b.get("name", "")), role=str(b.get("role", "")),
                                            token=str(b.get("token", "")), projects=list(b.get("projects") or []),
                                            upload_id=str(b.get("upload_id", ""))), app.load())[0],
-                "/api/remove": lambda: (a.remove(str(b.get("id", ""))), app.load())[0],
+                "/api/remove": lambda: app.remove_person(str(b.get("id", ""))),
+                "/api/project/pause": lambda: app.project_pause(str(b.get("id", "")), bool(b.get("pause"))),
                 "/api/report/run": lambda: {"file": app.submit(app.rt.run_daily_report())},
                 "/api/work": lambda: {"digest": app.submit(app.rt.run_work_session(), timeout=1800)},
                 "/api/pause": lambda: app.pause(str(b.get("who", "all")), bool(b.get("pause"))),

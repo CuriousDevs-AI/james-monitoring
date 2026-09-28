@@ -466,9 +466,23 @@ def remove_member(cfg_path: Path, member_id: str) -> str:
         if target[0].get("monitor"):
             raise ValueError("can't remove the manager — make someone else the manager first")
         raw["team"] = [m for m in team if m is not target[0]]
-        for pr in (raw.get("projects") or {}).values():      # a removed person can't stay a project lead
-            if isinstance(pr, dict) and str(pr.get("lead", "")).lower() == str(target[0].get("id")).lower():
+        mid = str(target[0].get("id")).lower()
+        for pr in (raw.get("projects") or {}).values():      # a removed person can't stay a project lead…
+            if not isinstance(pr, dict):
+                continue
+            if str(pr.get("lead", "")).lower() == mid:
                 pr["lead"] = ""
+            agents = pr.get("agents") or {}
+            if mid in agents:                                  # …or keep settings on a project
+                agents.pop(mid)
+                if not agents:
+                    pr.pop("agents", None)
+        for d in (raw.get("departments") or {}).values():    # …or head a department
+            if isinstance(d, dict) and str(d.get("head", "")).lower() == mid:
+                d["head"] = ""
+        sl = raw.get("slack") or {}
+        if isinstance(sl.get("channels"), dict):
+            sl["channels"].pop(mid, None)
         removed.append(target[0].get("name", member_id))
     update_config(cfg_path, fn)
     return removed[0]

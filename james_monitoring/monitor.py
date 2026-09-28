@@ -199,7 +199,10 @@ def checks(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -> list
                                                     f"waiting on you: {a.summary}"))
     all_tasks = tasks.all()
     stale_cut = d - timedelta(days=cfg.stale_days)
+    quiet = {pid for pid, p in cfg.projects.items() if p.status in ("paused", "done")}   # no chasing there
     for t in all_tasks:
+        if t.project in quiet:
+            continue
         since = t.date_field("status_since") or d
         if t.status == "blocked":
             if (d - since).days >= cfg.blocked_escalate_days:

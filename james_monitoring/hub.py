@@ -15,7 +15,6 @@ teammate hand-offs) is written to the room and delivered to every channel.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from typing import TYPE_CHECKING, Protocol
@@ -254,13 +253,7 @@ class Hub:
                         await typing(room, mid)
                     except Exception:  # noqa: BLE001
                         pass
-            from .runtime import TURN_SECONDS
-            try:     # watchdog: a turn that hangs (a stuck CLI, a dead network) is stopped and said so
-                reply = await asyncio.wait_for(self.rt.dispatch(mid, ev), TURN_SECONDS + 120)
-            except asyncio.TimeoutError:
-                self.rt.note_stuck(mid, room)
-                reply = (f"⚠️ I got stuck on this and stopped after {(TURN_SECONDS + 120) // 60} minutes — please send "
-                         f"it again (if it keeps happening, check my model in Settings → Models).")
+            reply = await self.rt.dispatch(mid, ev)          # a hung turn is stopped inside (the watchdog)
             await self.post(room, mid, reply, reply_to=reply_to)
         except Exception as e:  # noqa: BLE001 - show the problem in the room instead of losing the message
             log.exception("reply from %s failed", mid)

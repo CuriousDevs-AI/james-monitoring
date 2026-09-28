@@ -30,7 +30,9 @@ def due_jobs(cfg, state: dict, at: datetime) -> list[str]:
         if at.time() >= parse_hhmm(cfg.daily_brief) and ran.get("brief") != today:
             jobs.append("brief")
     if state.get("reminders"):
-        jobs.append("reminders")
+        from .assistant import due_in
+        if due_in(state, at):                                  # only when one is actually due
+            jobs.append("reminders")
     gh = getattr(cfg, "github", None)
     if gh is not None and gh.enabled:
         last = ran.get("github")
