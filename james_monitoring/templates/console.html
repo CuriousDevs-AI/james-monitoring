@@ -221,6 +221,11 @@ textarea{min-height:84px;resize:vertical} input[type=checkbox]{width:auto}
 .offline{position:fixed;left:50%;transform:translateX(-50%);top:8px;z-index:70;background:var(--warning-muted);color:var(--warning);border:1px solid var(--warning-border);padding:6px 12px;font-size:12px;backdrop-filter:blur(6px)}
 .skel{background:linear-gradient(90deg,var(--surface-2),var(--surface-3),var(--surface-2));background-size:200% 100%;animation:skel 1.2s infinite;height:14px;margin:8px 0} @keyframes skel{to{background-position:-200% 0}}
 .portal{max-width:980px;margin:0 auto;padding:28px 16px 60px}
+.att{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px} .att .f{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--border);background:var(--surface-2);font-size:12px;cursor:pointer;color:var(--foreground);max-width:260px}
+.att .f:hover{border-color:var(--accent)} .att img{max-width:240px;max-height:180px;border:1px solid var(--border);cursor:zoom-in;display:block;background:var(--surface-2)}
+.msg.me .att .f{background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.35);color:#fff}
+.pending{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px} .pending .f{display:inline-flex;align-items:center;gap:6px;padding:3px 4px 3px 8px;border:1px solid var(--border);font-size:12px;background:var(--surface-2)}
+.conv.dropping{outline:2px dashed var(--accent);outline-offset:-6px}
 .setwrap{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;align-items:start} .setnav{display:flex;flex-direction:column;gap:2px;position:sticky;top:72px}
 .setnav-i{display:flex;align-items:center;gap:9px;padding:7px 10px;cursor:pointer;color:var(--muted);font-size:13px} .setnav-i:hover{background:var(--surface-2);color:var(--foreground)}
 .setnav-i.on{background:var(--accent-muted);color:var(--foreground);font-weight:500} .setnav-i.on svg{color:var(--accent)}
@@ -295,6 +300,7 @@ const ICON = {
   activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
   reply: '<polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>', pin: '<line x1="12" x2="12" y1="17" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>', trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  clip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
   moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>', download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
@@ -833,6 +839,25 @@ function askFooter(id) {
     (a.status === "approved" ? "✅ Approved" : a.status === "rejected" ? "❌ Rejected" : a.status) + (a.decided_by ? ` by ${a.decided_by}` : "") + (a.decided_at ? " · " + a.decided_at.slice(0, 16).replace("T", " ") : ""));
 }
 
+// Attachments: fetched with the key (an <img src> can't send it), cached as blob URLs.
+const FILE_CACHE = {};
+async function fileBlobUrl(room, path) {
+  const k = room + "|" + path; if (FILE_CACHE[k]) return FILE_CACHE[k];
+  const r = await fetch(`/api/file?room=${encodeURIComponent(room)}&path=${encodeURIComponent(path)}`, {headers: {"X-JM-Key": KEY}});
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+  return (FILE_CACHE[k] = URL.createObjectURL(await r.blob()));
+}
+const fmtSize = n => n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1e3)) + " KB";
+function attachments(room, files) {
+  return h("div", {class: "att"}, files.map(f => {
+    if (f.kind === "image") { const img = h("img", {alt: f.name, title: f.name, loading: "lazy"});
+      fileBlobUrl(room, f.path).then(u => { img.src = u; }).catch(() => { img.replaceWith(h("span", {class: "f"}, icon("alert"), f.name)); });
+      img.onclick = async () => window.open(await fileBlobUrl(room, f.path), "_blank", "noopener"); return img; }
+    return h("span", {class: "f", title: `Open ${f.name}`, onclick: async () => { try { window.open(await fileBlobUrl(room, f.path), "_blank", "noopener"); } catch (e) { toast(e.message, "danger"); } }},
+      icon(f.kind === "pdf" ? "reports" : "clip"), h("span", {class: "ellip"}, f.name), h("span", {class: "xs", style: "opacity:.7"}, (f.pages ? f.pages + " p · " : "") + fmtSize(f.size || 0)));
+  }));
+}
+
 // A conversation: header, messages (polled), composer. Works for DMs, All hands and project rooms.
 // Replies: hover a message → Reply; the answer (and the team's answers to it) stay in that thread.
 function chatPanel(room, opts = {}) {
@@ -844,12 +869,21 @@ function chatPanel(room, opts = {}) {
     : `Message ${info.name} — instructions, corrections, questions…`});
   const draftKey = "draft:" + room; box.value = store.get(draftKey, "");
   let replyTo = null; const replyBar = h("div", {});
+  let pending = []; const pendingBar = h("div", {class: "pending"});
+  const drawPending = () => pendingBar.put(pending.map((f, i) => h("span", {class: "f"}, icon(f.type.startsWith("image/") ? "eye" : "clip"), f.name, h("span", {class: "xs muted"}, fmtSize(f.size)),
+    h("button", {class: "btn ghost icon sm", "aria-label": "Remove " + f.name, onclick: () => { pending.splice(i, 1); drawPending(); }}, icon("x")))));
+  const addFiles = list => { for (const f of list) { if (f.size > 15e6) { toast(`${f.name} is over 15 MB`, "danger"); continue; } if (pending.length >= 10) { toast("Up to 10 files at a time", "warning"); break; } pending.push(f); } drawPending(); box.focus(); };
+  const picker_ = h("input", {type: "file", multiple: true, style: "display:none", onchange: e => { addFiles([...e.target.files]); e.target.value = ""; }});
   const setReply = m => { replyTo = m; replyBar.put(m ? h("div", {class: "replying"}, icon("reply"), h("span", {class: "grow ellip"}, "Replying to ", h("b", {}, isMe(m.who) ? "yourself" : nameOf(m.who)), ": ", humanIds(m.text.split("\n")[0]).slice(0, 90)),
     h("button", {class: "btn ghost icon sm", "aria-label": "Cancel reply", onclick: () => setReply(null)}, icon("x"))) : null); if (m) box.focus(); };
   let lastSent = "";
-  const send = async (text) => { const t = (text ?? box.value).trim(); if (!t) return; box.value = ""; store.set(draftKey, ""); closeMentions();
-    lastSent = t; const rt = replyTo; setReply(null);
-    try { await api("/api/chat", {room, text: t, reply_to: rt ? rt.i : null}); poll(); } catch (e) { box.value = t; toast(e.message, "danger"); } };
+  const send = async (text) => { const t = (text ?? box.value).trim(); const toSend = text == null ? pending : []; if (!t && !toSend.length) return;
+    box.value = ""; store.set(draftKey, ""); closeMentions(); lastSent = t; const rt = replyTo; setReply(null);
+    let files = [];
+    if (toSend.length) { pendingBar.put(h("span", {class: "xs muted"}, h("span", {class: "spin"}), ` uploading ${toSend.length} file${toSend.length === 1 ? "" : "s"}…`));
+      files = await Promise.all(toSend.map(async f => ({name: f.name, data: await b64(f)}))); }
+    try { await api("/api/chat", {room, text: t, reply_to: rt ? rt.i : null, files}); pending = []; drawPending(); poll(); }
+    catch (e) { box.value = t; drawPending(); toast(e.message, "danger"); } };
   // @mentions: type @ and pick a person (↑↓ Enter/Tab, Esc)
   const pickFrom = () => { const p = info.project;
     const people = kind === "project" ? S.members.filter(m => p.members.includes(m.id)) : S.members.filter(m => !m.assistant);
@@ -899,7 +933,7 @@ function chatPanel(room, opts = {}) {
         const day = new Date(m.ts * 1000).toDateString();
         if (day !== lastDay) { lastDay = day; msgs.append(h("div", {class: "day"}, day === new Date().toDateString() ? "Today" : new Date(m.ts * 1000).toLocaleDateString([], {weekday: "short", month: "short", day: "numeric"}))); }
         const bubble = h("div", {class: "bubble"}, m.reply_quote ? h("div", {class: "quote", title: "Show the message it answers", onclick: () => jump(m.reply_to)}, "↩ ", humanIds(m.reply_quote)) : null,
-          mine ? m.text : h("div", {class: "md", html: md(m.text)}));
+          mine ? m.text : h("div", {class: "md", html: md(m.text)}), m.files?.length ? attachments(room, m.files) : null);
         if (m.kind === "ask" && m.ask_id) { const slot = h("div", {}, askFooter(m.ask_id)); cards.push([m.ask_id, slot]); bubble.append(slot); }
         if (/^⚠️ (I couldn't think|My AI model|I got stuck)/.test(m.text) || (m.kind === "notice" && /^⚠️/.test(m.text))) bubble.append(h("div", {class: "row", style: "margin-top:6px"},
           lastSent && writable ? h("button", {class: "btn outline sm", onclick: () => send(lastSent)}, icon("refresh"), "Try again") : null,
@@ -934,8 +968,15 @@ function chatPanel(room, opts = {}) {
     kind === "dm" ? h("button", {class: "btn outline sm", onclick: () => memberSheet(room)}, "Profile") : null);
   // Suggestions fill the box (you can edit before sending) — one click never messages everyone.
   const el = h("div", {class: "conv"}, head, msgs, !writable ? h("div", {class: "composer readonly"}, icon("lock"), kind === "back" ? " Read-only — message a person or a project room to join in." : " You can read this room; writing here isn't part of your role.")
-    : h("div", {class: "composer"}, picker, replyBar, h("div", {class: "chips"}, quick.map(q => h("span", {class: "badge outline", title: "Put in the message box", onclick: () => { box.value = q; box.focus(); store.set(draftKey, q); }}, q))),
-    h("div", {class: "box"}, box, h("button", {class: "btn primary icon", onclick: () => send(), title: "Send (Enter)", "aria-label": "Send"}, icon("send")))));
+    : h("div", {class: "composer"}, picker, replyBar, pendingBar, picker_, h("div", {class: "chips"}, quick.map(q => h("span", {class: "badge outline", title: "Put in the message box", onclick: () => { box.value = q; box.focus(); store.set(draftKey, q); }}, q))),
+    h("div", {class: "box"}, h("button", {class: "btn ghost icon", title: "Attach files — documents, PDFs, images (or drop / paste them)", "aria-label": "Attach files", onclick: () => picker_.click()}, icon("clip")),
+      box, h("button", {class: "btn primary icon", onclick: () => send(), title: "Send (Enter)", "aria-label": "Send"}, icon("send")))));
+  if (writable) {       // drop files anywhere on the conversation, or paste a screenshot
+    el.addEventListener("dragover", e => { if ([...(e.dataTransfer?.types || [])].includes("Files")) { e.preventDefault(); el.classList.add("dropping"); } });
+    el.addEventListener("dragleave", e => { if (!el.contains(e.relatedTarget)) el.classList.remove("dropping"); });
+    el.addEventListener("drop", e => { if (e.dataTransfer?.files?.length) { e.preventDefault(); el.classList.remove("dropping"); addFiles([...e.dataTransfer.files]); } });
+    box.addEventListener("paste", e => { const fs = [...(e.clipboardData?.files || [])]; if (fs.length) { e.preventDefault(); addFiles(fs.map((f, i) => f.name && f.name !== "image.png" ? f : new File([f], `pasted-${Date.now()}-${i}.png`, {type: f.type}))); } });
+  }
   poll().then(() => writable && !HIGHLIGHT && box.focus()); timers.push(setInterval(poll, 1500));
   return el;
 }

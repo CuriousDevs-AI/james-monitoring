@@ -19,8 +19,9 @@ dependencies = [
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.40"]
 slack = ["slack_sdk>=3.27"]
-all = ["anthropic>=0.40", "openai>=1.40", "slack_sdk>=3.27"]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "anthropic>=0.40", "openai>=1.40", "slack_sdk>=3.27"]
+files = ["pypdf>=4"]
+all = ["anthropic>=0.40", "openai>=1.40", "slack_sdk>=3.27", "pypdf>=4"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "anthropic>=0.40", "openai>=1.40", "slack_sdk>=3.27", "pypdf>=4"]
 
 [project.scripts]
 jm = "james_monitoring.cli:main"

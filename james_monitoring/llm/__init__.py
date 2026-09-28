@@ -55,6 +55,20 @@ class LLM(Protocol):
         ...
 
 
+def image_blocks(paths: list[str]) -> list[tuple[str, str]]:
+    """[(media type, base64 data)] for images attached to a message (the API adapters send them inline)."""
+    import base64
+    from ..files import media_type
+    out = []
+    for p in paths or []:
+        try:
+            with open(p, "rb") as f:
+                out.append((media_type(p), base64.b64encode(f.read()).decode()))
+        except OSError:
+            continue
+    return out
+
+
 class LLMError(Exception):
     pass
 

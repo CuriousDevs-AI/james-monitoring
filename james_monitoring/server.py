@@ -1402,13 +1402,23 @@ class App:
     def chat_since(self, room: str, after: int) -> dict:
         return {"messages": self.chat.since(room, after), "thinking": self.pending.get(room, 0)}
 
-    def chat_send(self, room: str, text: str, user: dict | None = None, reply_to=None) -> dict:
+    def chat_send(self, room: str, text: str, user: dict | None = None, reply_to=None, files=None) -> dict:
         user = user or self.owner_user()
         if not self.can_write_room(user, room):
             raise PermissionError("You can read this room but not write in it.")
+        saved = []
+        if files:
+            from .files import save
+            if not isinstance(files, list) or len(files) > 10:
+                raise ValueError("Attach up to 10 files at a time.")
+            self.hub.check_room(room)
+            for f in files:
+                saved.append(save(self.rt.ws.root, room, str(f.get("name") or "file"), base64.b64decode(f.get("data") or "")))
+            self.rt.ws.commit(f"files for {room}: " + ", ".join(x["name"] for x in saved), author=user["name"])
         who = "" if user["role"] == "owner" else user["id"]
         rt_ = int(reply_to) if reply_to not in (None, "") else None
-        msg = self.hub.receive(room, text, via="console", who=who, reply_to=rt_)   # shown at once; raises for a bad room
+        msg = self.hub.receive(room, text, via="console", who=who, reply_to=rt_,   # shown at once; raises for a bad room
+                               files=saved or None)
         self.submit(self.hub.handle(room, msg, via="console"), timeout=None)
         return {"ok": True, "i": msg["i"]}
 
@@ -1832,7 +1842,8 @@ GET_PERMS = {
     "/api/chat": "read", "/api/rooms": "read", "/api/pulse": "read", "/api/thread": "read", "/api/member": "read",
     "/api/project": "read", "/api/team": "read", "/api/decisions": "read", "/api/reports": "read",
     "/api/report": "read", "/api/budget": "read", "/api/search": "read", "/api/memory": "read",
-    "/api/notifications": "read", "/api/clients": "read", "/api/doc": "read", "/api/project/settings": "admin", "/api/client_report": "read",
+    "/api/notifications": "read", "/api/clients": "read", "/api/doc": "read", "/api/project/settings": "admin",
+    "/api/file": "read", "/api/client_report": "read",
     "/api/portal": "portal", "/api/github/status": "admin", "/api/models/catalog": "admin",
     "/api/models/team": "admin", "/api/models/health": "read", "/api/connections": "admin",
     "/api/opencode/models": "admin", "/api/settings": "admin", "/api/audit": "admin", "/api/audit.csv": "admin",
@@ -1924,6 +1935,22 @@ def make_handler(app: App, key: str):
             from urllib.parse import parse_qs, urlparse
             return {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
 
+        def _file(self, q: dict):
+            from .files import IMAGE_EXT, room_dir
+            room, rel = q.get("room", ""), q.get("path", "")
+            root = app.rt.ws.root.resolve()
+            p = (root / rel).resolve()
+            if not rel.startswith(room_dir(room) + "/") or not p.is_relative_to((root / room_dir(room)).resolve()) \
+                    or not p.is_file():
+                return self._json(404, {"error": "no such file"})
+            ext = p.suffix.lower()
+            inline = ext in IMAGE_EXT or ext == ".pdf"             # never inline HTML/SVG: it could run in the page
+            ctype = IMAGE_EXT.get(ext) or ("application/pdf" if ext == ".pdf" else "application/octet-stream")
+            name = re.sub(r'[^\w. -]', "_", p.name.split("-", 3)[-1])
+            return self._send(200, p.read_bytes(), ctype,
+                              {"Content-Disposition": f'{"inline" if inline else "attachment"}; filename="{name}"',
+                               "Content-Security-Policy": "sandbox"})
+
         def _deny(self, user, perm) -> bool:
             if perm == "any" or can(user, perm):
                 return False
@@ -1955,7 +1982,7 @@ def make_handler(app: App, key: str):
                 if not app.ready:
                     return self._json(409, {"error": "setup needed"})
                 room = q.get("room", TEAM_ROOM)
-                if path in ("/api/chat", "/api/thread") and not app.can_see_room(user, room):
+                if path in ("/api/chat", "/api/thread", "/api/file") and not app.can_see_room(user, room):
                     return self._json(403, {"error": "That room is private."})
                 if path == "/api/task" and not app.can_see_task(user, app.rt.tasks.get(q.get("id", ""))):
                     return self._json(403, {"error": "That task is private."})
@@ -1965,6 +1992,8 @@ def make_handler(app: App, key: str):
                     return self._json(403, {"error": "That profile is private."})
                 if path == "/api/client_report" and user["role"] == "client" and q.get("id") != user.get("client"):
                     return self._json(403, {"error": "That isn't part of your portal."})
+                if path == "/api/file":                           # an attachment, only for people who see its room
+                    return self._file(q)
                 if path == "/api/audit.csv":
                     body = app.rt.audit.csv(kind=q.get("kind", ""), who=q.get("who", ""), q=q.get("q", "")).encode()
                     return self._send(200, body, "text/csv; charset=utf-8",
@@ -2104,7 +2133,7 @@ def make_handler(app: App, key: str):
                 raise PermissionError("That task is private.")
             routes = {
                 "/api/chat": lambda: app.chat_send(str(b.get("room", TEAM_ROOM)), str(b.get("text", "")), user,
-                                                   b.get("reply_to")),
+                                                   b.get("reply_to"), b.get("files")),
                 "/api/tasks": lambda: app.task_create(b, user),
                 "/api/task": lambda: app.task_action(b, user),
                 "/api/ask": lambda: app.decide(str(b.get("id", "")), str(b.get("decision", "")), str(b.get("note", "")),

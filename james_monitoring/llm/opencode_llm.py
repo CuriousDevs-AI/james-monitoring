@@ -56,6 +56,7 @@ def parse_events(stdout: str) -> tuple[str, int, int, int, str]:
 class OpenCodeLLM:
     name = "opencode"
     sessions = True
+    images = True                                     # --file
 
     def __init__(self, cfg: LLMConfig):
         self.bin = os.environ.get("JM_OPENCODE_BIN") or shutil.which("opencode")
@@ -106,6 +107,10 @@ class OpenCodeLLM:
         cmd = [self.bin, *([] if self.free else ["--pure"]), "run", "--format", "json", "-m", self.cfg.model]
         if resume:
             cmd += ["--session", session.id]
+        for i, img in enumerate((messages[-1] if messages else {}).get("images") or []):
+            dst = os.path.join(cwd, f"attached-{i}{os.path.splitext(img)[1]}")   # inside its own folder (free mode
+            shutil.copyfile(img, dst)                                            # refuses anything outside)
+            cmd.append(f"--file={dst}")
         try:
             r = run(cmd, input=prompt, cwd=cwd, env=self._env(base), what="opencode",
                     timeout=int(os.environ.get("JM_OPENCODE_TIMEOUT", "180")))

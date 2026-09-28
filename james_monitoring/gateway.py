@@ -312,13 +312,36 @@ class TelegramGateway:
         return handler
 
     def _make_other_handler(self, member_id: str):
+        """Photos and documents (PDF, text, images…): saved with the message, the agent reads them."""
         async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-            chat = update.effective_chat
-            if not chat or chat.type != ChatType.PRIVATE or not self._authorized(update) \
-                    or not self._first_time(update, member_id):
+            msg, chat = update.effective_message, update.effective_chat
+            if not msg or not chat or not self._authorized(update):
                 return
-            await self._send(self._bot(member_id), chat.id, "I can only read text for now — send it as a message "
-                                                            "(or paste a link to the file).")
+            doc = getattr(msg, "document", None)
+            photo = (getattr(msg, "photo", None) or [None])[-1]          # the largest size
+            if not doc and not photo:
+                if chat.type == ChatType.PRIVATE and self._first_time(update, member_id):
+                    await self._send(self._bot(member_id), chat.id, "I can read text, documents, PDFs and photos — "
+                                                                    "that kind of message I can't use.")
+                return
+            room, text = self._inbound_room(member_id, update, msg.caption or "")
+            if not room or not self._first_time(update, member_id):
+                return
+            size = getattr(doc or photo, "file_size", 0) or 0
+            from .files import MAX_BYTES, save
+            if size > MAX_BYTES:
+                await self._send(self._bot(member_id), chat.id, f"That file is too big (limit {MAX_BYTES // 1_000_000} MB).")
+                return
+            try:
+                tg_file = await context.bot.get_file((doc or photo).file_id)
+                data = bytes(await tg_file.download_as_bytearray())
+                name = (getattr(doc, "file_name", None) or f"photo-{msg.message_id}.jpg") if doc else f"photo-{msg.message_id}.jpg"
+                meta = save(self.rt.ws.root, room, name, data)
+            except Exception as e:  # noqa: BLE001
+                log.error("telegram: couldn't save a file from %s: %s", member_id, e)
+                await self._send(self._bot(member_id), chat.id, "I couldn't download that file — try again?")
+                return
+            await self.hub.inbound(room, text or "", via="telegram", files=[meta])
         return handler
 
     async def _on_migrate(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

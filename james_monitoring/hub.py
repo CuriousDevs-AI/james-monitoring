@@ -129,6 +129,8 @@ class Hub:
             out = msg
             if msg.get("reply_quote"):                       # outside channels see what it answers
                 out = {**msg, "text": f"↩ {msg['reply_quote']}\n{msg.get('text', '')}"}
+            if msg.get("files"):                             # …and which files came with it (open them in the console)
+                out = {**out, "text": out.get("text", "") + "\n📎 " + ", ".join(f.get("name", "file") for f in msg["files"])}
             try:
                 await t.deliver(room, out, ask=ask)
             except Exception:  # noqa: BLE001 - one broken channel never blocks the others
@@ -162,16 +164,20 @@ class Hub:
 
     # -- input: the owner said something somewhere ----------------------------------------------
     def receive(self, room: str, text: str, via: str = "console", who: str = "", reply_to: int | None = None,
-                reply_quote: str = "") -> dict | None:
+                reply_quote: str = "", files: list[dict] | None = None) -> dict | None:
         """Record a person's message now (so every screen shows it at once): the founder's, or a signed-in
         teammate's (`who`). Raises ValueError for a bad room."""
         text = (text or "").strip()
+        if not text and files:
+            text = "(sent " + ", ".join(f.get("name", "a file") for f in files) + ")"
         if not text:
             raise ValueError("empty message")
         self.check_room(room)
         extra = self.reply_fields(room, reply_to)
         if reply_quote and not extra:                    # a reply in Telegram/Slack to something we can't index
             extra = {"reply_quote": reply_quote[:160]}
+        if files:
+            extra["files"] = files
         return self.chat.append(room, who or self.rt.owner_id, text, via=via, **extra)
 
     async def handle(self, room: str, msg: dict, via: str = "console") -> None:
@@ -180,10 +186,10 @@ class Hub:
             await self.fanout(room, msg, skip=via)
         await self.route(room, msg["text"], sender=msg.get("who") or self.rt.owner_id, msg=msg)
 
-    async def inbound(self, room: str, text: str, via: str, reply_quote: str = "") -> None:
+    async def inbound(self, room: str, text: str, via: str, reply_quote: str = "", files: list | None = None) -> None:
         """For transports: receive + handle in one go. A room that lives on the other channel says where to go."""
         if self.successor is not None:                    # arrived during a reload: the new hub handles it
-            return await self.successor.inbound(room, text, via, reply_quote)
+            return await self.successor.inbound(room, text, via, reply_quote, files)
         if via in ("telegram", "slack") and not self.delivers_to(room, via):
             home = self.home(room) or "the console"
             name = self.rt.room_title(room)
@@ -193,7 +199,7 @@ class Hub:
                                            "text": f"ℹ️ {name} lives on {home.title() if home != 'the console' else home} "
                                                    f"— please write there, so the whole conversation stays in one place."})
             return
-        msg = self.receive(room, text, via=via, reply_quote=reply_quote)
+        msg = self.receive(room, text, via=via, reply_quote=reply_quote, files=files)
         await self.handle(room, msg, via=via)
 
     async def route(self, room: str, text: str, sender: str = "", msg: dict | None = None) -> None:
@@ -236,6 +242,8 @@ class Hub:
         meta = {}
         if msg and msg.get("reply_quote"):
             meta["reply_quote"] = msg["reply_quote"]
+        if msg and msg.get("files"):
+            meta["files"] = msg["files"]
         reply_to = msg.get("i") if msg and msg.get("thread") is not None else None   # a thread stays a thread
         # One after the other, like people in a meeting: each reads what the previous ones just said
         # (the room's recent messages are in their context), instead of parallel monologues.

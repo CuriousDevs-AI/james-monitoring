@@ -47,6 +47,7 @@ DISABLE = ("shell_tool", "unified_exec", "apps", "browser_use", "browser_use_ext
 
 class CodexCLILLM:
     name = "codex-cli"
+    images = True                                     # --image
     sessions = True
 
     def __init__(self, cfg: LLMConfig):
@@ -79,6 +80,10 @@ class CodexCLILLM:
             flags += ["--disable", f]
         if self.cfg.model:
             flags += ["--model", self.cfg.model]
+        for i, img in enumerate((messages[-1] if messages else {}).get("images") or []):
+            dst = Path(cwd) / f"attached-{i}{Path(img).suffix}"          # a copy inside this call's own folder
+            shutil.copyfile(img, dst)
+            flags.append(f"--image={dst}")
         if resume:
             cmd = [self.bin, "exec", "resume", *flags, session.id, "-"]
         else:

@@ -12,6 +12,7 @@ _REASONING = re.compile(r"^(o\d|gpt-5)", re.I)
 class OpenAILLM:
     """Any OpenAI-compatible chat endpoint (OpenAI, Ollama at http://localhost:11434/v1, OpenRouter, vLLM...)."""
     name = "openai"
+    images = True                                    # sent inline; a text-only endpoint gets the message without them
 
     def __init__(self, cfg: LLMConfig):
         try:
@@ -37,9 +38,15 @@ class OpenAILLM:
         return kw
 
     def complete(self, system: str, messages: list[dict]) -> LLMResult:
+        from . import image_blocks
         msgs = [{"role": "system", "content": system},
                 *({"role": m["role"], "content": str(m.get("content") or "") or "(empty)"} for m in messages)]
-        for _attempt in range(3):
+        imgs = image_blocks((messages[-1] if messages else {}).get("images") or [])
+        if imgs:
+            msgs[-1] = {"role": msgs[-1]["role"], "content": [
+                {"type": "text", "text": msgs[-1]["content"]},
+                *({"type": "image_url", "image_url": {"url": f"data:{mt};base64,{d}"}} for mt, d in imgs)]}
+        for _attempt in range(4):
             try:
                 r = self.client.chat.completions.create(messages=msgs, **self._kwargs())
                 break
@@ -54,6 +61,12 @@ class OpenAILLM:
                     continue
                 if "temperature" in err and not self.reasoning:
                     self.reasoning = True
+                    continue
+                if imgs and re.search(r"image|vision|multimodal|content.*(array|list)", err, re.I):
+                    imgs = []                                 # a text-only model: send the words, say so
+                    text = msgs[-1]["content"][0]["text"] if isinstance(msgs[-1]["content"], list) else msgs[-1]["content"]
+                    msgs[-1] = {"role": msgs[-1]["role"], "content": text + "\n\n(An image was attached, but this "
+                                                                             "model can't see images.)"}
                     continue
                 raise LLMError(f"OpenAI-compatible call failed: {e}") from e
         else:  # pragma: no cover

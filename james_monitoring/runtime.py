@@ -30,7 +30,7 @@ log = logging.getLogger("jm.runtime")
 
 MAX_READ_ROUNDS = 2
 MAX_FILE_CHARS = 60_000
-READABLE_DIRS = ("docs", "tasks", "reports", "team", "asks", "decisions")
+READABLE_DIRS = ("docs", "tasks", "reports", "team", "asks", "decisions", "files")
 HISTORY_TURNS = 8
 TURN_SECONDS = 420
 # A person's CLI session (Claude Code / Codex / OpenCode) is kept across calls and restarts, and started fresh when
@@ -736,6 +736,8 @@ class Runtime:
         if len(text) > 400:
             text = text[:400] + "…"
         tag = {"ask": " [approval card]", "system": " [system]", "internal": " [teammates]"}.get(msg.get("kind"), "")
+        if msg.get("files"):
+            text += " [📎 " + ", ".join(f"{f.get('name')} ({f.get('path')})" for f in msg["files"]) + "]"
         if msg.get("reply_quote"):
             tag += f" (replying to “{str(msg['reply_quote'])[:80]}”)"
         return f"- {t} {self._who(msg.get('who', ''))}{tag}: {text}"
@@ -878,7 +880,14 @@ class Runtime:
         where = f"project {ev.project}" if ev.project else ev.source
         quote = f", replying to “{ev.meta['reply_quote']}”" if ev.meta.get("reply_quote") else ""
         user_msg = f"[{where} from {who}{quote}] {ev.text}"
-        messages = [*hist, {"role": "user", "content": user_msg}]
+        files = ev.meta.get("files") or []
+        attached, images = ("", [])
+        if files:                                        # documents, PDFs and images attached to this message
+            from .files import for_agent
+            attached, images = for_agent(self.ws.root, files, bool(getattr(llm, "images", False)))
+        messages = [*hist, {"role": "user", "content": user_msg + attached, **({"images": images} if images else {})}]
+        if files:                                        # history keeps the names, not the whole text again
+            user_msg += " [📎 " + ", ".join(f.get("name", "file") for f in files) + "]"
 
         last_error = ""
         deadline = time.monotonic() + TURN_SECONDS           # one turn never holds this person's lock for long

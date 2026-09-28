@@ -651,3 +651,58 @@ def test_board_command_hides_personal_tasks(app):
     app.chat_send("team", "/board")
     out = settle(app, lambda: [m for m in app.chat.since("team", -1) if m.get("kind") == "system"])[-1]["text"]
     assert "Ship v1" in out and "Renew passport" not in out
+
+
+# -- attachments: documents, PDFs, images ---------------------------------------------------------------------------
+def _pdf_bytes(text: str) -> bytes:
+    """A one-page PDF with a text layer, without extra libraries."""
+    stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode()
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+            b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    out, offs = b"%PDF-1.4\n", []
+    for i, o in enumerate(objs, 1):
+        offs.append(len(out))
+        out += f"{i} 0 obj\n".encode() + o + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode() + b"".join(f"{o:010d} 00000 n \n".encode() for o in offs)
+    out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF".encode()
+    return out
+
+
+def test_attachments_reach_the_agent_and_stay_in_their_room(app, http):
+    import base64
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+    app.rt.llm.push({"reply": "Read both.", "actions": []})
+    r = app.chat_send("p-site", "@riya see the brief and the mock", files=[
+        {"name": "brief.md", "data": base64.b64encode(b"# Brief\nLaunch on Oct 10. Budget 2k.").decode()},
+        {"name": "spec.pdf", "data": base64.b64encode(_pdf_bytes("Pricing tiers: Free, Pro 29, Team 99")).decode()},
+        {"name": "mock.png", "data": base64.b64encode(png).decode()}])
+    settle(app, lambda: len(app.chat.since("p-site", -1)) >= 2)
+    msg = app.chat.since("p-site", -1)[r["i"]]
+    kinds = {f["name"]: f for f in msg["files"]}
+    assert kinds["spec.pdf"]["kind"] == "pdf" and kinds["spec.pdf"]["pages"] == 1 and kinds["mock.png"]["kind"] == "image"
+    sent = app.rt.llm.calls[-1][1][-1]["content"]
+    assert "Launch on Oct 10" in sent and "Pricing tiers: Free, Pro 29, Team 99" in sent
+    assert "can't see images" in sent                                      # the fake model has no eyes
+    assert "files for p-site: brief.md, spec.pdf, mock.png" in app.rt.ws.git_log(5)
+    # served only to people who can see the room, never as a page
+    st, _ = http(f"/api/file?room=p-site&path={kinds['brief.md']['path']}", raw=True)
+    assert st == 200
+    assert http(f"/api/file?room=riya&path={kinds['brief.md']['path']}")[0] == 404      # wrong room
+    assert http("/api/file?room=p-site&path=files/p-site/../../config.yaml")[0] == 404
+    viewer = http("/api/users", {"action": "add", "name": "Vi", "role": "viewer"})[1]["key"]
+    assert http(f"/api/file?room=riya&path=files/riya/x", key=viewer)[0] == 403        # a 1:1 isn't theirs
+    with pytest.raises(ValueError, match="limit"):
+        app.chat_send("p-site", "big", files=[{"name": "big.bin", "data": base64.b64encode(b"0" * 15_000_001).decode()}])
+
+
+def test_images_go_to_models_that_can_see(app, tmp_path):
+    from james_monitoring.files import for_agent, save
+    p = save(app.rt.ws.root, "team", "a.png", b"\x89PNG\r\n\x1a\nxx")
+    text, images = for_agent(app.rt.ws.root, [p], can_see_images=True)
+    assert images and images[0].endswith("a.png") and "you can see it" in text
+    from james_monitoring.llm.anthropic_llm import _with_images
+    msgs = _with_images([{"role": "user", "content": "look"}], [{"role": "user", "content": "look", "images": images}])
+    assert msgs[-1]["content"][0]["type"] == "image" and msgs[-1]["content"][-1]["text"] == "look"

@@ -19,8 +19,19 @@ def clean_messages(messages: list[dict]) -> list[dict]:
     return out
 
 
+def _with_images(msgs: list[dict], original: list[dict]) -> list[dict]:
+    from . import image_blocks
+    imgs = image_blocks((original[-1] if original else {}).get("images") or [])
+    if imgs and msgs and msgs[-1]["role"] == "user":
+        msgs[-1] = {"role": "user", "content": [
+            *({"type": "image", "source": {"type": "base64", "media_type": mt, "data": d}} for mt, d in imgs),
+            {"type": "text", "text": msgs[-1]["content"]}]}
+    return msgs
+
+
 class AnthropicLLM:
     name = "anthropic"
+    images = True                                    # can see images attached to the last message
 
     def __init__(self, cfg: LLMConfig):
         try:
@@ -41,7 +52,7 @@ class AnthropicLLM:
                 model=self.cfg.model, max_tokens=self.cfg.max_tokens, temperature=self.cfg.temperature,
                 # The system prompt (charter, persona, memory, board) is the same across a conversation: cache it.
                 system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                messages=clean_messages(messages),
+                messages=_with_images(clean_messages(messages), messages),
             )
         except Exception as e:
             raise LLMError(f"Anthropic call failed: {e}") from e
