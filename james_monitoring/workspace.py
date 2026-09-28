@@ -207,6 +207,64 @@ class Workspace:
             self.write(rel, "\n".join(out).rstrip("\n") + "\n")
         return {"ok": True}
 
+    # Playbook: what this person has learned doing the work — their own lessons from accepted work, sent-back work
+    # and discoveries. It grows with experience and is in every prompt (newest first, as much as fits).
+    PLAYBOOK_HEAD = "What I've learned doing the work here — I apply these every time. Newest last."
+
+    def lessons(self, member_id: str) -> list[dict]:
+        import hashlib
+        import re as _re
+        out = []
+        for line in self.read(f"team/{member_id}/playbook.md").splitlines():
+            m = _re.match(r"^- (\d{4}-\d{2}-\d{2}) — (?:\[([^\]]+)\] )?(.*?)(?: \(from ([^)]*)\))?$", line)
+            if m:
+                out.append({"id": hashlib.sha1(line.encode()).hexdigest()[:12], "date": m.group(1),
+                            "topic": m.group(2) or "", "text": m.group(3).strip(), "source": m.group(4) or "",
+                            "line": line})
+        return out
+
+    def learn(self, member_id: str, lesson: str, topic: str = "", source: str = "") -> bool:
+        """Add a lesson (False if it's already there, in the same words)."""
+        lesson = " ".join(str(lesson or "").split()).strip(" -")
+        topic = " ".join(str(topic or "").split())[:40].replace("]", "")
+        source = " ".join(str(source or "").split())[:60].replace(")", "")
+        if len(lesson) < 8:
+            raise ValueError("A lesson needs a real sentence: what to do (or avoid) and when.")
+        if len(lesson) > 400:                             # the playbook is in every prompt: keep lessons short
+            lesson = lesson[:397].rsplit(" ", 1)[0] + "…"
+        rel = f"team/{member_id}/playbook.md"
+        with path_lock(self.root / rel):
+            have = self.lessons(member_id)
+            key = lesson.lower().rstrip(".")
+            if any(x["text"].lower().rstrip(".") == key for x in have):
+                return False
+            text = self.read(rel) or f"# Playbook — {member_id}\n\n{self.PLAYBOOK_HEAD}\n"
+            entry = f"- {self._now().date().isoformat()} — " + (f"[{topic}] " if topic else "") + lesson + \
+                    (f" (from {source})" if source else "")
+            self.write(rel, text.rstrip("\n") + "\n" + entry + "\n")
+        return True
+
+    def forget_lesson(self, member_id: str, lesson_id: str) -> None:
+        rel = f"team/{member_id}/playbook.md"
+        with path_lock(self.root / rel):
+            line = next((x["line"] for x in self.lessons(member_id) if x["id"] == lesson_id), None)
+            if line is None:
+                raise ValueError("That lesson changed or is gone — reload and try again.")
+            lines = self.read(rel).splitlines()
+            lines.remove(line)
+            self.write(rel, "\n".join(lines).rstrip("\n") + "\n")
+
+    def playbook(self, member_id: str, max_chars: int = 4000) -> str:
+        """For the prompt: the newest lessons that fit, by topic."""
+        kept, budget = [], max_chars
+        for x in reversed(self.lessons(member_id)):
+            line = f"- " + (f"[{x['topic']}] " if x["topic"] else "") + x["text"]
+            if len(line) + 1 > budget:
+                break
+            kept.insert(0, line)
+            budget -= len(line) + 1
+        return "\n".join(kept)
+
     def remember(self, member_id: str, note: str, pinned: bool = False) -> None:
         """Add one entry: the file is only ever *inserted into*, so hand-written parts are never touched."""
         note = " ".join(str(note or "").split())

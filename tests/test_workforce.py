@@ -706,3 +706,48 @@ def test_images_go_to_models_that_can_see(app, tmp_path):
     from james_monitoring.llm.anthropic_llm import _with_images
     msgs = _with_images([{"role": "user", "content": "look"}], [{"role": "user", "content": "look", "images": images}])
     assert msgs[-1]["content"][0]["type"] == "image" and msgs[-1]["content"][-1]["text"] == "look"
+
+
+# -- getting better at the job: playbook, reflection, related past work --------------------------------------------
+def test_agents_learn_from_accepted_work_and_use_it_next_time(app, http):
+    rt = app.rt
+    t = app.task_create({"title": "Landing page hero copy", "owner": "sam", "notify": False, "done_means": ["copy"]})
+    rt.tasks.set_output(t["id"], "sam", "docs/site/hero-copy.md — headline 'Ship faster', subline with the yearly price")
+    rt.tasks.set_status(t["id"], "review", by="sam")
+    # accepting it asks Sam what's worth keeping — Sam writes a lesson
+    rt.llm.push({"reply": "Noted what worked.", "actions": [
+        {"type": "learn", "lesson": "Hero copy: lead with the customer's problem and show the yearly price", "topic": "copy"}]})
+    app.task_action({"id": t["id"], "action": "accept", "note": "great, the yearly price sells it"})
+    settle(app, lambda: rt.ws.lessons("sam"))
+    lesson = rt.ws.lessons("sam")[0]
+    assert lesson["topic"] == "copy" and lesson["source"] == t["id"]
+    assert "accepted" in rt.llm.calls[-1][1][-1]["content"] and "learn" in rt.llm.calls[-1][1][-1]["content"]
+    settle(app, lambda: any("📚 learned" in m["text"] for m in app.chat.since("sam", -1)))
+    # the same lesson twice is kept once
+    assert rt.ws.learn("sam", "Hero copy: lead with the customer's problem and show the yearly price") is False
+    # next time: the playbook is in the prompt, and the similar finished task shows up as related past work
+    t2 = app.task_create({"title": "Pricing page hero copy", "owner": "sam", "notify": False})
+    rt.llm.push({"reply": "On it.", "actions": []})
+    app.chat_send("sam", f"Please start {t2['id']}: the pricing page hero copy")
+    settle(app, lambda: len([m for m in app.chat.since("sam", -1) if m["who"] == "sam"]) >= 2)
+    system = rt.llm.calls[-1][0]
+    assert "# Your playbook" in system and "show the yearly price" in system
+    assert "Your related past work" in system and "Landing page hero copy" in system and "yearly price sells it" in system
+    # the founder curates it
+    st, pb = http("/api/playbook?id=sam")
+    assert st == 200 and pb["done"] == 1 and len(pb["lessons"]) == 1
+    http("/api/playbook", {"id": "sam", "text": "Always add alt text to hero images", "topic": "design"})
+    assert len(rt.ws.lessons("sam")) == 2
+    http("/api/playbook", {"id": "sam", "action": "delete", "entry": pb["lessons"][0]["id"]})
+    assert [x["topic"] for x in rt.ws.lessons("sam")] == ["design"]
+    member = http("/api/users", {"action": "add", "name": "Mo", "role": "member"})[1]["key"]
+    assert http("/api/playbook", {"id": "sam", "text": "x" * 20}, key=member)[0] == 403
+
+
+def test_sent_back_work_asks_what_to_do_differently(app):
+    t = app.task_create({"title": "Logo", "owner": "sam", "notify": False})
+    app.rt.tasks.set_status(t["id"], "review", by="sam")
+    app.rt.llm.push({"reply": "Will fix.", "actions": [{"type": "learn", "lesson": "Logos: always test at 16px favicon size"}]})
+    app.task_action({"id": t["id"], "action": "changes", "text": "unreadable at small sizes"})
+    settle(app, lambda: app.rt.ws.lessons("sam"))
+    assert "what you'll do differently next time with learn" in app.rt.llm.calls[-1][1][-1]["content"]

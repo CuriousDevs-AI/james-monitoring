@@ -193,6 +193,7 @@ class Config:
     daily_brief: str = "08:30"     # the personal assistant's morning brief (if there is an assistant)
     public_url: str = ""           # your own domain for the console (a named Cloudflare tunnel); "" = quick tunnel
     public_auto: bool = False      # start the public link with `jm run`
+    reflect: bool = True           # after work is accepted, its owner writes the lessons worth keeping
 
     @property
     def assistants(self) -> list[Member]:
@@ -509,4 +510,5 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         daily_brief=brief,
         public_url=str(_get(raw, "public.url", "") or "").rstrip("/"),
         public_auto=bool(_get(raw, "public.auto", False)),
+        reflect=bool(_get(raw, "monitor.reflect", True)),
     )

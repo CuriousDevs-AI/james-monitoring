@@ -1397,7 +1397,7 @@ function memberCard(m) {
     s.ok && s.manager ? badge(s.reads_groups ? "Reads the group" : "Privacy ON → /setprivacy Disable", s.reads_groups ? "success" : "warning") : null)).catch(() => {});
   return h("div", {class: "card"}, h("div", {class: "card-b"}, h("div", {class: "row", style: "flex-wrap:nowrap"}, avatar(m.name, "lg"), h("div", {class: "grow", style: "min-width:0"},
       h("div", {class: "row"}, h("b", {style: "font-size:14px"}, m.name), m.manager ? badge("Manager", "info") : null, S.members.find(x => x.id === m.id)?.assistant ? badge("Personal assistant", "info") : null), h("div", {class: "small muted"}, m.role))),
-    h("div", {class: "row", style: "margin:10px 0 8px"}, (() => { const x = S.members.find(y => y.id === m.id); return x ? badge(modelLabel(x.model), x.own_model ? "info" : "") : null; })(), badge(m.persona_lines ? `Persona · ${m.persona_lines} lines` : "No persona"), m.skill_files ? badge(`${m.skill_files} skill files`) : null, m.projects.map(pid => h("span", {class: "badge outline click", onclick: () => openProject(pid)}, "# " + (projOf(pid)?.name || pid)))), st),
+    h("div", {class: "row", style: "margin:10px 0 8px"}, (() => { const x = S.members.find(y => y.id === m.id); return x ? badge(modelLabel(x.model), x.own_model ? "info" : "") : null; })(), badge(m.persona_lines ? `Persona · ${m.persona_lines} lines` : "No persona"), m.lessons ? h("span", {class: "badge info", title: "Lessons in their playbook — they get better with every task"}, `📚 ${m.lessons} lesson${m.lessons === 1 ? "" : "s"}`) : null, m.skill_files ? badge(`${m.skill_files} skill files`) : null, m.projects.map(pid => h("span", {class: "badge outline click", onclick: () => openProject(pid)}, "# " + (projOf(pid)?.name || pid)))), st),
     h("div", {class: "card-h", style: "border-top:1px solid var(--border);border-bottom:none"}, can("admin") ? h("button", {class: "btn outline sm", onclick: () => { ROOM = m.id; go("chat"); }}, icon("chat"), "Chat") : null,
       h("button", {class: "btn outline sm", onclick: () => memberSheet(m.id)}, "Profile"), h("button", {class: "btn ghost sm", onclick: () => newTaskSheet({owner: m.id})}, icon("plus"), "Task"), h("span", {class: "grow"}),
       m.manager || !can("admin") ? null : h("button", {class: "btn ghost sm", style: "color:var(--danger)", onclick: async () => { if (!confirm(`Remove ${m.name}?\n\nTheir open tasks go to ${nameOf(S.manager)} to hand out, and their files stay in the team repo history.`)) return; try { const r = await api("/api/remove", {id: m.id}); toast(`Removed ${m.name}` + (r.tasks_moved?.length ? ` — ${r.tasks_moved.length} open task(s) went to ${nameOf(S.manager)}` : ""), "warning"); await refresh(); } catch (e) { toast(e.message, "danger"); } }}, "Remove")));
@@ -1491,7 +1491,7 @@ async function memberSheet(id) {
   const paused = (S.paused || []).includes(id), err = h("div", {class: "err"});
   const dept = h("select", {"aria-label": "Department"}, h("option", {value: ""}, "No department"), (S.departments || []).map(d => h("option", {value: d.id, selected: m.department === d.id}, d.name)));
   const assistant = h("input", {type: "checkbox", checked: !!m.assistant, disabled: m.manager || S.me?.role !== "owner"});
-  const memBox = h("div", {}); const admin = can("admin");
+  const memBox = h("div", {}), bookBox = h("div", {}); const admin = can("admin");
   openSheet(m.name,
     h("div", {class: "row", style: "flex-wrap:nowrap"}, avatar(m.name, "lg"), h("div", {class: "grow"}, h("div", {class: "row"}, h("b", {style: "font-size:15px"}, m.name), m.manager ? badge("Manager", "info") : null, badge(m.status[0], STATUS_TONE[m.status[0]]), paused ? badge("Paused", "warning") : null),
       h("div", {class: "small muted"}, m.role))),
@@ -1508,11 +1508,13 @@ async function memberSheet(id) {
     h("label", {class: "f"}, "Persona — what the agent reads"), persona,
     m.skill_files.length ? h("div", {class: "xs muted", style: "margin-top:4px"}, "Stored skill package: ", h("span", {class: "mono"}, m.skill_files.join(", "))) : null,
     h("div", {class: "row", style: "margin-top:8px"}, h("button", {class: "btn primary sm", onclick: async () => { try { await api("/api/member", {id, role: role.value, projects: [...on], persona: persona.value, department: dept.value, ...(S.me?.role === "owner" && !m.manager ? {assistant: assistant.checked} : {}), llm: {provider: prov.value, model: model.value, allow_free: allowFree.checked}, permissions: Object.fromEntries(Object.entries(perms).map(([k, el]) => [k, el.value]).filter(([, v]) => v))}); toast("Profile saved"); S = await api("/api/state"); } catch (e) { err.textContent = e.message; } }}, icon("check"), "Save profile"), err),
+    h("h2", {class: "sec"}, "Playbook — what they've learned doing the work"), bookBox,
     h("h2", {class: "sec"}, "Memory — pinned corrections are binding"), memBox,
     m.assistant ? [h("h2", {class: "sec"}, "Reminders"), remindersBox(id)] : null,
     h("h2", {class: "sec"}, "Activity"), h("pre", {}, m.log || "No activity yet."));
   if (!admin) [...$("#sheet").querySelectorAll("input,select,textarea,.chip")].forEach(el => { if (el.closest(".sheet-b") && !el.closest(".mem-add")) { el.disabled = true; el.style.pointerEvents = "none"; } });
-  if (admin) memoryEditor(id, memBox, admin); else memBox.put(h("div", {class: "small muted"}, "Only the founder and admins see what someone remembers."));
+  if (admin) { memoryEditor(id, memBox, admin); playbookEditor(id, bookBox); }
+  else { memBox.put(h("div", {class: "small muted"}, "Only the founder and admins see what someone remembers.")); bookBox.put(h("div", {class: "small muted"}, "Only the founder and admins see playbooks.")); }
 }
 // Memory: what this person carries into every conversation. Pin = a binding correction; edit or delete anything.
 async function memoryEditor(id, box, editable) {
@@ -1528,6 +1530,18 @@ async function memoryEditor(id, box, editable) {
     editable ? h("div", {class: "row mem-add", style: "margin-top:8px;flex-wrap:nowrap"}, txt, h("label", {class: "row xs", style: "gap:4px;white-space:nowrap"}, pin, "Pin"),
       h("button", {class: "btn secondary sm", onclick: () => txt.value.trim() ? act({action: "add", text: txt.value, pinned: pin.checked}, "Remembered") : txt.focus()}, icon("plus"), "Add")) : null,
     h("div", {class: "xs muted", style: "margin-top:4px"}, `${d.entries.length} entries · ${Math.round(d.prompt_chars / 100) / 10}k characters go into every prompt`));
+}
+// Playbook: lessons they wrote from accepted and sent-back work — it's how they get better at the job.
+async function playbookEditor(id, box) {
+  let d; try { d = await api("/api/playbook?id=" + encodeURIComponent(id)); } catch (e) { return box.put(h("div", {class: "err small"}, e.message)); }
+  const act = async (b, msg) => { try { await api("/api/playbook", {id, ...b}); toast(msg); playbookEditor(id, box); } catch (e) { toast(e.message, "danger"); } };
+  const txt = h("input", {placeholder: "Teach them something — e.g. “Launch posts: lead with the customer's problem”", "aria-label": "New lesson"}), topic = h("input", {placeholder: "topic", style: "width:120px", "aria-label": "Topic"});
+  box.put(h("div", {class: "xs muted", style: "margin-bottom:6px"}, `${d.lessons.length} lesson${d.lessons.length === 1 ? "" : "s"} from ${d.done} finished task${d.done === 1 ? "" : "s"}. They add lessons when you accept work or send it back; everything here is in their prompt.`),
+    d.lessons.length ? h("div", {class: "card"}, [...d.lessons].reverse().map(x => h("div", {class: "mem"}, h("span", {style: "color:var(--info)"}, "📚"),
+        h("div", {class: "grow small", style: "min-width:0"}, x.topic ? badge(x.topic, "outline") : null, " ", humanIds(x.text), h("div", {class: "xs muted"}, x.date + (x.source ? " · from " + humanIds(x.source) : ""))),
+        h("span", {class: "x"}, h("button", {class: "btn ghost icon sm", title: "Remove", "aria-label": "Remove lesson", onclick: () => confirm("Remove this lesson?\n\n" + x.text) && act({action: "delete", entry: x.id}, "Removed")}, icon("trash"))))))
+      : h("div", {class: "small muted"}, "Nothing yet — lessons appear as they finish work and get your feedback."),
+    h("div", {class: "row", style: "margin-top:8px;flex-wrap:nowrap"}, topic, txt, h("button", {class: "btn secondary sm", onclick: () => txt.value.trim() ? act({text: txt.value, topic: topic.value}, "Lesson added") : txt.focus()}, icon("plus"), "Add")));
 }
 function remindersBox(member) {
   const box = h("div", {});

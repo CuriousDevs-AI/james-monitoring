@@ -65,6 +65,9 @@ It runs as **one Python process** with no database. Everything lives in files an
 - **Work sessions** on a schedule: everyone moves their top task forward and saves the real output to `docs/`
 - **Daily report** plus hourly checks: blocked, overdue, stale, waiting on you, failing models
 - **⌘K search** across every message, task, document and memory note
+- **Attachments**: documents, PDFs (text extracted) and images in chat (console and Telegram), and agents read them
+- **They get better at the job**: a playbook of lessons per person, written when work is accepted or sent back;
+  related past work comes back automatically on similar tasks
 
 </td><td width="50%" valign="top">
 
@@ -166,6 +169,7 @@ pip install -e .                 # core (Telegram + YAML)
 pip install -e ".[anthropic]"    # + Anthropic API
 pip install -e ".[openai]"       # + OpenAI-compatible APIs (OpenAI, OpenRouter, Ollama, vLLM…)
 pip install -e ".[slack]"        # + Slack
+pip install -e ".[files]"        # + PDF text for attachments (pypdf)
 pip install -e ".[all]"          # everything above
 pip install -e ".[dev]"          # everything + pytest
 ```
@@ -318,6 +322,28 @@ sequenceDiagram
     Hub-->>You: in every place the room lives
 ```
 
+### How teammates get better with experience
+
+No fine-tuning and no extra framework: experience is kept in the team repo and fed back into every prompt.
+
+```mermaid
+flowchart LR
+    W["Work done"] --> R{"You review"}
+    R -->|Accept + note| L1["Reflection:<br/>what worked → learn"]
+    R -->|Request changes| L2["Rework + what to do<br/>differently → learn"]
+    L1 & L2 --> P["team/&lt;id&gt;/playbook.md<br/>(lessons, in every prompt)"]
+    P --> N["Next similar task"]
+    H["Finished tasks + docs<br/>(outputs, your feedback)"] -->|related past work| N
+```
+
+- **Playbook.** `learn` actions write short, specific lessons to `team/<id>/playbook.md`. The newest are in every
+  prompt, and you can curate them on the person's profile.
+- **Reflection.** After you accept work, its owner is asked what's worth keeping. When you send work back, they
+  record what they'll do differently. You see "📚 learned …" in their chat. You can turn this off with
+  `monitor.reflect: false`.
+- **Related past work.** When a new request looks like something they've finished, those tasks (what they
+  delivered, your feedback and acceptance note) and matching documents are added to the prompt.
+
 **Design principles** (from [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)):
 
 1. **Git is the truth.** Tasks, memory, decisions and reports are markdown in a git repo.
@@ -353,6 +379,7 @@ flowchart LR
         P["team/charter.md<br/>team/&lt;id&gt;/persona.md · memory.md · log.md"]
         D["docs/ · reports/YYYY-MM-DD.md<br/>decisions/OPEN.md · projects/&lt;id&gt;.md"]
         AU["audit/YYYY-MM.jsonl<br/>who did what"]
+        F["files/&lt;room&gt;/ attachments<br/>team/&lt;id&gt;/playbook.md lessons"]
     end
     subgraph Runtime[".jm/  (gitignored — operational)"]
         C["chat/&lt;room&gt;.jsonl"]
@@ -434,6 +461,8 @@ requested.
 - **CLI sessions** are saved per person per room in `.jm/sessions.json`, so a restart resumes the conversation.
   A fresh session starts when the model changes, when the conversation itself passes 150k tokens, or after
   3 days (200 calls at most).
+- **Images.** Images are sent to models that can see them: the Anthropic and OpenAI-compatible APIs, Codex
+  (`--image`) and OpenCode (`--file`). With the `claude` CLI, the agent is told an image is attached.
 - **Reliability.** Temporary failures (rate limits, overload, network) are retried after 3 s and then 10 s. Login
   and key errors aren't retried; they're shown with the fix. A turn is capped at 7 minutes of model calls, and a
   watchdog stops a hung turn after 9 minutes.
@@ -496,7 +525,8 @@ isn't versioned yet; use it at your own risk.
 | `/api/reports` · `/api/report?name=` · `/api/decisions` · `/api/budget` [read] | reports and decisions · token use |
 | `/api/clients` · `/api/client_report?id=` [read] | clients · the client-safe report |
 | `/api/models/health` [read] | the setup check shown when the console opens |
-| `/api/memory?id=` [admin] | memory entries |
+| `/api/memory?id=` · `/api/playbook?id=` [admin] | memory entries · playbook lessons |
+| `/api/file?room=&path=` [read] | an attachment (only from a room you can see) |
 | `/api/settings` · `/api/project/settings?id=` [admin] | company settings · project settings with the effective value per person |
 | `/api/models/catalog` · `/api/models/team` · `/api/connections` · `/api/opencode/models` [admin] | every model option · per person · connections |
 | `/api/audit` · `/api/audit.csv` · `/api/health` [admin] | the audit log (filters: `kind`, `who`, `q`, `before`) · CSV · system checks |
@@ -512,12 +542,12 @@ isn't versioned yet; use it at your own risk.
 
 | Route | Does |
 |---|---|
-| `/api/chat` [chat] | send `{room, text, reply_to?}` |
+| `/api/chat` [chat] | send `{room, text, reply_to?, files?: [{name, data (base64)}]}` (up to 10 files, 15 MB each) |
 | `/api/tasks` · `/api/task` [task] | create · `{id, action: status\|edit\|accept\|cut\|feedback\|changes}` (the last four need approve) |
 | `/api/ask` [approve] | `{id, decision: approved\|rejected, note}` |
 | `/api/notifications/read` [read] | `{ids}` or `{all: true}` |
 | `/api/projects` · `/api/project/members` · `/api/project/settings` · `/api/project/pause` [admin] | project details · team · settings · pause/resume |
-| `/api/member` · `/api/add` · `/api/remove` · `/api/memory` [admin] | profiles · people (removal hands open tasks to the manager) · memory edits |
+| `/api/member` · `/api/add` · `/api/remove` · `/api/memory` · `/api/playbook` [admin] | profiles · people (removal hands open tasks to the manager) · memory and playbook edits |
 | `/api/studio/try` · `/api/studio/hire` [admin] | a trial chat (nothing saved) · hire |
 | `/api/departments` · `/api/clients` [admin] | save or delete |
 | `/api/settings` · `/api/decisions` · `/api/pause` · `/api/work` · `/api/report/run` · `/api/restart` [admin] | company operations |

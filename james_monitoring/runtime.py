@@ -45,7 +45,7 @@ SESSION_MAX_DAYS = 3                # model calls in one turn (retries, file rea
 ROOM_CONTEXT = 16                 # recent messages of the current room shown to the agent
 ELSEWHERE = 4                     # recent messages from each other room the agent is part of
 ELSEWHERE_HOURS = 72
-NO_GATE = {"ask_permission", "remember", "notify_owner", "read_file", "remind"}   # never need approval
+NO_GATE = {"ask_permission", "remember", "notify_owner", "read_file", "remind", "learn"}   # never need approval
 
 
 # -- transport interface --------------------------------------------------------
@@ -89,7 +89,7 @@ class Event:
 _FILE_BLOCK = re.compile(r"^<<<FILE[ \t]+([^\n>]+?)[ \t]*>>>[ \t]*\n(.*?)\n?^<<<END(?:[ \t]+FILE)?>>>[ \t]*$", re.S | re.M)
 _STR_FIELDS = ("title", "owner", "text", "summary", "details", "note", "path", "id", "task", "project", "to",
                "description", "log", "output", "blocked_on", "instructions", "recommendation", "goal", "due",
-               "priority", "status", "level", "default", "why", "at")
+               "priority", "status", "level", "default", "why", "at", "lesson", "topic")
 
 
 @dataclass
@@ -617,6 +617,57 @@ class Runtime:
                 f"Project brief: {(p.description if p else '') or '-'} · status {(p.status if p else 'active')} · lead {lead}\n"
                 f"On this project: {people}\nOpen tasks in this project (create new ones with project `{pid}`):\n{board}")
 
+    _STOP = set("""about after again also been before being could does doing done from have here into just like make
+        more most much need only other over please some such than that their them then there these they this those
+        through very want were what when where which while will with would your yours today tomorrow task tasks""".split())
+
+    def experience(self, m: Member, ev: "Event", limit: int = 3) -> str:
+        """Related past work of this person — finished tasks like this one (what they delivered, the founder's
+        feedback) and documents they wrote — so experience carries over: the second landing page is better than
+        the first. Plain word overlap over the files; no index to keep in sync."""
+        words = lambda s: {w for w in re.findall(r"[a-z0-9]{4,}", str(s).lower()) if w not in self._STOP}   # noqa: E731
+        query = ev.text
+        if ev.task:
+            try:
+                cur = self.tasks.get(ev.task)
+                query += " " + cur.title + " " + cur.doc.sections.get("Goal", "")
+            except TaskError:
+                pass
+        q = words(query)
+        if len(q) < 2:
+            return ""
+        scored = []
+        for t in self.tasks.all():
+            if t.owner != m.id or t.status != "done" or t.id == ev.task:
+                continue
+            hay = words(t.title + " " + t.doc.sections.get("Goal", "") + " " + t.doc.sections.get("Output", ""))
+            hit = len(q & hay)
+            if hit >= 2:
+                scored.append((hit, str(t.doc.meta.get("done_on", "")), t))
+        scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        lines = []
+        for _, _, t in scored[:limit]:
+            out = " ".join(t.doc.sections.get("Output", "").split())[:220]
+            fb = [x for x in t.doc.sections.get("Feedback", "").splitlines() if x.strip()]
+            ok = next((ln.split(": done — ", 1)[1] for ln in t.doc.sections.get("Log", "").splitlines()
+                       if ": done — " in ln and not ln.rstrip().endswith(": done — accepted")), "")
+            lines.append(f"- {t.id} {t.title} (done {t.doc.meta.get('done_on', '')})" + (f" — delivered: {out}" if out else "")
+                         + (f" — feedback: {' '.join(fb[-1].split())[:200]}" if fb else "")
+                         + (f" — accepted with: {' '.join(ok.split())[:160]}" if ok and ok.strip() != "accepted" else ""))
+        docs = []
+        for p in sorted((self.ws.root / "docs").rglob("*.md")) if (self.ws.root / "docs").exists() else []:
+            rel = str(p.relative_to(self.ws.root))
+            try:
+                head = p.read_text(errors="replace")[:1500]
+            except OSError:
+                continue
+            hit = len(q & words(rel + " " + head))
+            if hit >= 2:
+                docs.append((hit, rel))
+        docs.sort(reverse=True)
+        lines += [f"- document {rel} (read_file it if useful)" for _, rel in docs[:2]]
+        return ("## Your related past work — reuse what worked, avoid what was sent back\n" + "\n".join(lines)) if lines else ""
+
     def project_brief(self, m: Member, pid: str) -> str:
         """The project's own instructions and this person's role and instructions on it (project settings)."""
         p = self.cfg.projects.get(pid) if pid else None
@@ -853,6 +904,9 @@ class Runtime:
         brief = self.project_brief(m, ev.project)
         if brief:
             context = brief + "\n\n" + context
+        past = self.experience(m, ev)
+        if past:
+            context += "\n\n" + past
         convo = self.conversation_context(m, ev)
         if convo:
             context += "\n\n" + convo
@@ -865,7 +919,7 @@ class Runtime:
             owner_name=self.cfg.owner_name, can_run_code=self.executor.enabled and not m.monitor,
             channel=channel, needs_approval=[a for a, lv in gated.items() if lv == "red"
                                              and (a != "run_code" or (self.executor.enabled and not m.monitor))],
-            extra_actions=REMIND_SPEC if m.assistant else "")
+            extra_actions=REMIND_SPEC if m.assistant else "", playbook=self.ws.playbook(m.id))
         try:
             llm = self.llm_for(m, ev.project)
         except LLMError as e:
@@ -1038,6 +1092,8 @@ class Runtime:
             return f"run the coding agent on {a.get('task')} in {a.get('project')}: {str(a.get('instructions', ''))[:200]}"
         if t == "remind":
             return f"remind {self.cfg.owner_name} at {a.get('at')}: {str(a.get('text', ''))[:200]}"
+        if t == "learn":
+            return f"learn: {str(a.get('lesson', ''))[:200]}"
         return t
 
     async def _apply(self, m: Member, a: dict, ev: Event) -> str:
@@ -1082,6 +1138,10 @@ class Runtime:
 
     async def _do(self, m: Member, a: dict, ev: Event) -> str:
         t = a["type"]
+        if t == "learn":
+            source = str(a.get("task") or ev.task or "")
+            added = self.ws.learn(m.id, str(a.get("lesson") or ""), str(a.get("topic") or ""), source)
+            return f"📚 learned: {a.get('lesson')}" if added else ""
         if t == "remind":
             if not m.assistant:
                 raise ValueError("only the founder's personal assistant sets reminders — use notify_owner")
@@ -1324,7 +1384,8 @@ class Runtime:
                 reply = await self.dispatch(t.owner, Event(
                     "system", f"{self.cfg.owner_name} reviewed {t.id} ({t.title}) and wants changes: {text}\n"
                               f"Rework it now (write the corrected output, move it back to review when it meets "
-                              f"the feedback). Reply in one line: what you'll change.", sender="system", task=t.id,
+                              f"the feedback), and record what you'll do differently next time with learn. Reply in "
+                              f"one line: what you'll change.", sender="system", task=t.id,
                     project=t.project))
                 await self.bus.send_owner(t.owner, reply)
             self._spawn(tell())
@@ -1532,6 +1593,18 @@ class Runtime:
         task, _ = self.tasks.set_status(task_id, "done", by=self.owner_id, note=note or "accepted")
         await asyncio.to_thread(self.ws.commit, f"{task.id} accepted", self.cfg.owner_name)
         await self.on_done(task)
+        m = self.cfg.member(task.owner)
+        if m and self.cfg.reflect and not self.paused(m.id):
+            async def reflect():                         # the job teaches: what made this good, for next time
+                reply = await self.dispatch(m.id, Event(
+                    "system", f"{self.cfg.owner_name} accepted {task.id} ({task.title})"
+                              + (f": {note}" if note and note != "accepted" else "") + ". Look back at how you did it. If "
+                              f"there's something reusable — what worked, what to do the same way next time — record "
+                              f"1–2 lessons with learn. Nothing worth keeping? No actions. Reply in one line.",
+                    sender="system", task=task.id, project=task.project, meta={"no_repair": True}))
+                if "📚" in (reply or ""):                  # you see what they took from it
+                    await self.bus.send_owner(m.id, reply)
+            self._spawn(reflect())
         return f"✅ {task.id} done — {task.title}"
 
     async def cmd_accept(self, args: str) -> str:

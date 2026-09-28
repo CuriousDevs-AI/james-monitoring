@@ -55,6 +55,8 @@ class TeamAdmin:
                 "username": self.usernames.get(m.id, ""),
                 "persona_lines": len(persona.read_text().splitlines()) if persona.exists() else 0,
                 "skill_files": sum(1 for p in skill_dir.rglob("*") if p.is_file()) if skill_dir.exists() else 0,
+                "lessons": sum(1 for ln in (ws / "team" / m.id / "playbook.md").read_text().splitlines()
+                               if ln.startswith("- ")) if (ws / "team" / m.id / "playbook.md").exists() else 0,
             })
         return {"company": cfg.company, "owner": cfg.owner_name, "owner_id": cfg.owner_user_id,
                 "group_id": cfg.group_chat_id, "timezone": cfg.timezone, "workspace": str(ws),

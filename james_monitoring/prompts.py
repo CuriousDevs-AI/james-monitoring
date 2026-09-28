@@ -24,6 +24,10 @@ Actions you can take (only use what the situation needs):
   <<<END>>>
   (Short files may use "content" inside the action instead.)
 - {"type":"read_file","path":"docs/... | T-001 | reports/..."}  You will get the file, then answer again.
+- {"type":"learn","lesson":"<a reusable lesson: what to do or avoid, and when>","topic":"<short topic>"}
+  Adds to your playbook — how you get better at this job. Write one when work is accepted or sent back, or when
+  you find out how something is done here. One or two sentences, specific and reusable ("Pricing copy: always show
+  the yearly price"), never a diary entry.
 - {"type":"remember","note":"<durable fact to keep for next time>","correction":true|false}
   correction=true for the founder's corrections: they are pinned and never forgotten.
 - {"type":"message_agent","to":"<member id>","text":"<exact request or handoff>","task":"T-001"}
@@ -52,7 +56,8 @@ RUN_CODE_SPEC = """\
 
 def build_system(*, company: str, today: str, charter: str, persona: str, memory: str, member_name: str,
                  member_role: str, roster: str, context: str, owner_name: str, can_run_code: bool,
-                 channel: str, needs_approval: list[str] | None = None, extra_actions: str = "") -> str:
+                 channel: str, needs_approval: list[str] | None = None, extra_actions: str = "",
+                 playbook: str = "") -> str:
     approval = (f"- These actions wait for {owner_name}'s approval before they run: {', '.join(needs_approval)}. "
                 f"Use them normally; say in your reply that it is waiting for approval.\n") if needs_approval else ""
     spec = ACTION_SPEC.replace("{run_code}", (RUN_CODE_SPEC if can_run_code else "") + extra_actions).replace(
@@ -73,6 +78,9 @@ You are talking via: {channel}.
 
 # Your memory (corrections from {owner_name} are binding)
 {memory or '(empty)'}
+
+# Your playbook (what you've learned doing this job — apply it)
+{playbook or '(nothing yet — add lessons with learn as you go)'}
 
 # Current context
 {context}

@@ -979,6 +979,24 @@ class App:
             raise ValueError("That isn't a team document.")
         return {"path": rel, "text": p.read_text(errors="replace"), "history": self.rt.ws.file_history(rel, 10)}
 
+    def playbook_get(self, mid: str) -> dict:
+        m = self.rt.cfg.member(mid)
+        if not m:
+            raise ValueError(f"no member {mid}")
+        done = sum(1 for t in self.rt.tasks.all() if t.owner == m.id and t.status == "done")
+        return {"id": m.id, "lessons": self.rt.ws.lessons(m.id), "done": done}
+
+    def playbook_edit(self, b: dict, by: str = "") -> dict:
+        m = self.rt.cfg.member(str(b.get("id", "")))
+        if not m:
+            raise ValueError("no such person")
+        if b.get("action") == "delete":
+            self.rt.ws.forget_lesson(m.id, str(b.get("entry", "")))
+        else:
+            self.rt.ws.learn(m.id, str(b.get("text", "")), str(b.get("topic", "")), f"{by or self.rt.cfg.owner_name}")
+        self.rt.ws.commit(f"{m.id}: playbook updated by {by or self.rt.cfg.owner_name}", author=by or self.rt.cfg.owner_name)
+        return self.playbook_get(m.id)
+
     def memory_get(self, mid: str) -> dict:
         m = self.rt.cfg.member(mid)
         if not m:
@@ -1843,7 +1861,7 @@ GET_PERMS = {
     "/api/project": "read", "/api/team": "read", "/api/decisions": "read", "/api/reports": "read",
     "/api/report": "read", "/api/budget": "read", "/api/search": "read", "/api/memory": "read",
     "/api/notifications": "read", "/api/clients": "read", "/api/doc": "read", "/api/project/settings": "admin",
-    "/api/file": "read", "/api/client_report": "read",
+    "/api/file": "read", "/api/playbook": "read", "/api/client_report": "read",
     "/api/portal": "portal", "/api/github/status": "admin", "/api/models/catalog": "admin",
     "/api/models/team": "admin", "/api/models/health": "read", "/api/connections": "admin",
     "/api/opencode/models": "admin", "/api/settings": "admin", "/api/audit": "admin", "/api/audit.csv": "admin",
@@ -1852,7 +1870,7 @@ GET_PERMS = {
 }
 POST_PERMS = {
     "/api/chat": "chat", "/api/tasks": "task", "/api/task": "task", "/api/ask": "approve", "/api/project/settings": "admin",
-    "/api/project/pause": "admin", "/api/public": "owner",
+    "/api/project/pause": "admin", "/api/public": "owner", "/api/playbook": "admin",
     "/api/notifications/read": "read", "/api/projects": "admin", "/api/project/members": "admin",
     "/api/member": "admin", "/api/decisions": "admin", "/api/settings": "admin", "/api/upload": "admin",
     "/api/upload_folder": "admin", "/api/token": "admin", "/api/links": "admin", "/api/member_status": "admin",
@@ -1877,7 +1895,7 @@ NO_AUDIT = {"/api/chat", "/api/ask", "/api/token", "/api/links", "/api/member_st
             "/api/telegram/detect", "/api/slack/detect"}
 AUDIT_LABEL = {"/api/tasks": "create task", "/api/task": "task", "/api/projects": "save project",
                "/api/project/members": "project team", "/api/project/settings": "project settings",
-               "/api/project/pause": "pause/resume project", "/api/public": "public link", "/api/member": "edit profile", "/api/decisions": "edit decisions",
+               "/api/project/pause": "pause/resume project", "/api/public": "public link", "/api/playbook": "edit playbook", "/api/member": "edit profile", "/api/decisions": "edit decisions",
                "/api/settings": "change settings", "/api/add": "add person", "/api/remove": "remove person",
                "/api/report/run": "write report", "/api/work": "run work session", "/api/pause": "pause/resume",
                "/api/models/assign": "assign model", "/api/models/default": "use default model",
@@ -1988,7 +2006,7 @@ def make_handler(app: App, key: str):
                     return self._json(403, {"error": "That task is private."})
                 if path == "/api/memory" and not can(user, "admin"):
                     return self._json(403, {"error": "Memory is visible to the founder and admins."})
-                if path in ("/api/member", "/api/memory") and q.get("id") in app.private_rooms() and user["role"] != "owner":
+                if path in ("/api/member", "/api/memory", "/api/playbook") and q.get("id") in app.private_rooms() and user["role"] != "owner":
                     return self._json(403, {"error": "That profile is private."})
                 if path == "/api/client_report" and user["role"] == "client" and q.get("id") != user.get("client"):
                     return self._json(403, {"error": "That isn't part of your portal."})
@@ -2025,6 +2043,7 @@ def make_handler(app: App, key: str):
                     "/api/search": lambda: app.search(q.get("q", ""), user),
                     "/api/memory": lambda: app.memory_get(q.get("id", "")),
                     "/api/doc": lambda: app.doc(q.get("path", "")),
+                    "/api/playbook": lambda: app.playbook_get(q.get("id", "")),
                     "/api/project/settings": lambda: app.project_settings(q.get("id", "")),
                     "/api/notifications": lambda: app.notifications(user),
                     "/api/audit": lambda: app.audit_list(q),
@@ -2127,7 +2146,7 @@ def make_handler(app: App, key: str):
                                       "(feedback becomes a binding correction).")
             if path in ("/api/member", "/api/studio/hire") and "assistant" in b and user["role"] != "owner":
                 raise PermissionError("Only the founder can set up their personal assistant.")
-            if path == "/api/memory" and str(b.get("id", "")) in app.private_rooms() and user["role"] != "owner":
+            if path in ("/api/memory", "/api/playbook") and str(b.get("id", "")) in app.private_rooms() and user["role"] != "owner":
                 raise PermissionError("That profile is private.")
             if path in ("/api/task",) and not app.can_see_task(user, app.rt.tasks.get(str(b.get("id", "")))):
                 raise PermissionError("That task is private.")
@@ -2176,6 +2195,7 @@ def make_handler(app: App, key: str):
                 "/api/slack/email": lambda: app.slack_email(str(b.get("email", ""))),
                 "/api/restart": lambda: (app.load(), {"ok": True})[1],
                 "/api/memory": lambda: app.memory_edit(b, user["name"]),
+                "/api/playbook": lambda: app.playbook_edit(b, user["name"]),
                 "/api/studio/try": lambda: app.studio_try(b),
                 "/api/studio/hire": lambda: app.studio_hire(b),
                 "/api/departments": lambda: app.departments_save(b),
