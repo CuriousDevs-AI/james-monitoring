@@ -82,6 +82,16 @@ they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits
 - **Telegram**: edits never re-trigger work, messages are handled once, 429s are waited out, supergroup upgrades are
   followed (and saved), and a bot that fails to start never leaves others polling.
 - `.jm/` (chats, conversation memory, state) is zipped daily into `.jm/backups/` (last 14).
+- **Model CLIs are sandboxed.** Each call runs in an empty folder with a minimal environment: no API keys, bot
+  tokens or other secrets. Timeouts kill the whole process tree.
+  - `claude`: no tools, no MCP servers, no user settings or hooks.
+  - `codex`: shell, browser, apps, MCP and user config are off, so it can't read files.
+  - `opencode`: empty isolated config (no global MCP servers or plugins); paid models get all tools off and every
+    permission denied. Free models are opt-in (`allow_free`) and use a throwaway home.
+- **One turn is bounded** (7 minutes of model calls), so nobody's lock is held for long. Pause means paused for
+  everything, including system follow-ups, which are queued.
+- **Only the founder's own words become pinned corrections** in memory. A teammate's message, a document or a
+  GitHub comment can't make itself binding.
 
 ## One conversation, every channel
 

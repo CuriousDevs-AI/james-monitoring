@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import concurrent.futures
 import json
 import logging
 import os
 import re
 import secrets
 import threading
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
@@ -197,16 +199,19 @@ class App:
         if not company or not owner:
             raise ValueError("Company and your name are required.")
         provider = str(b.get("provider") or "claude-code")
-        key_env = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(provider, "")
+        from .config import KEY_ENV
+        key_env = KEY_ENV.get(provider, "")
         mgr_name = str(b.get("manager_name") or "James").strip()
         mid = slug(mgr_name)
+        if mid == re.sub(r"[^a-z0-9]+", "_", owner.lower()).strip("_"):
+            raise ValueError("The manager can't have your name — pick another (e.g. James).")
         raw = {
             "company": company, "timezone": normalize_tz(str(b.get("timezone") or detect_timezone())),
             "owner": {"name": owner, "telegram_user_id": 0,
                       "git_name": str(b.get("git_name") or "").strip() or detect_git_identity()[0],
                       "git_email": str(b.get("git_email") or "").strip() or detect_git_identity()[1]},
             "llm": {"provider": provider, "model": str(b.get("model") or ""), "base_url": str(b.get("base_url") or ""),
-                    "api_key_env": key_env, "max_tokens": 8000},
+                    "api_key_env": key_env, "max_tokens": 8000, **({"allow_free": True} if b.get("allow_free") else {})},
             "workspace": {"path": str(b.get("workspace") or "./team-workspace"), "push": bool(b.get("push"))},
             "telegram": {"group_chat_id": 0, "quiet_hours": ["22:00", "08:00"]},
             "monitor": {"daily_report": "18:30", "check_every_minutes": 60, "work_sessions": ["10:00", "15:00"],
@@ -336,7 +341,7 @@ class App:
             "people": [{"name": n, "status": st, "line": line,
                         "id": next((m.id for m in cfg.team if m.name == n), ""),
                         "tokens": usage.get(next((m.id for m in cfg.team if m.name == n), ""), 0),
-                        "error": (hb.get(next((m.id for m in cfg.team if m.name == n), "")) or {}).get("error", "")}
+                        "error": rt.model_error(next((m.id for m in cfg.team if m.name == n), ""))}
                        for n, st, line in rows],
             "asks": [self._ask_json(a) for a in rt.asks.pending()],
             "decisions": open_decisions(rt.ws),
@@ -376,8 +381,11 @@ class App:
 
     def _blocked_on_owner(self) -> list:
         rt, cfg = self.rt, self.rt.cfg
-        keys = (cfg.owner_key, cfg.owner_name.lower(), cfg.owner_name.split()[0].lower())
-        return [t for t in rt.tasks.all() if t.status == "blocked" and any(k in t.blocked_on.lower() for k in keys)
+        names = {cfg.owner_key, cfg.owner_name.lower()} | ({cfg.owner_name.split()[0].lower()}
+                                                           if len(cfg.owner_name.split()[0]) >= 3 else set())
+        pat = re.compile(r"\b(" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True) if n) + r")\b",
+                         re.I)                               # whole words only: "Al" never matches "approval"
+        return [t for t in rt.tasks.all() if t.status == "blocked" and pat.search(t.blocked_on)
                 and "approval ask-" not in t.blocked_on.lower()]
 
     # -- connections: every model, login and channel in one place ---------------------------------
@@ -390,7 +398,7 @@ class App:
             c = g["config"]
             models.append({**cx.check(c), "people": g["people"], "default": g["default"],
                            "base_url": c.base_url, "raw_provider": c.provider,
-                           "failing": {mid: hb[mid]["error"] for mid in g["people"] if (hb.get(mid) or {}).get("error")}})
+                           "failing": {mid: self.rt.model_error(mid) for mid in g["people"] if self.rt.model_error(mid)}})
         gname, gemail = cfg.git_author
         return {"models": models,
                 "git": {"name": gname, "email": gemail, "ok": gemail != "jm@localhost",
@@ -434,7 +442,7 @@ class App:
         from .config import parse_llm
         conf = parse_llm({k: v for k, v in b.items() if k in ("provider", "model", "base_url") and v})
         if b.get("api_key") and conf.api_key_env:
-            os.environ.setdefault(conf.api_key_env, str(b["api_key"]))
+            os.environ[conf.api_key_env] = str(b["api_key"])       # the key you just typed, not an older one
         try:
             r = make_llm(conf).complete('Reply with exactly: {"reply": "pong", "actions": []}',
                                         [{"role": "user", "content": "ping"}])
@@ -511,7 +519,8 @@ class App:
         skill = ws.root / "team" / m.id / "skill"
         llm = self.rt.cfg.llm_for(m)
         return {"id": m.id, "name": m.name, "role": m.role, "projects": m.projects, "manager": m.monitor,
-                "llm": {"provider": llm.provider, "model": llm.model, "base_url": llm.base_url, "own": bool(m.llm)},
+                "llm": {"provider": llm.provider, "model": llm.model, "base_url": llm.base_url, "own": bool(m.llm),
+                        "allow_free": llm.allow_free},
                 "permissions": m.permissions,
                 "persona": ws.read(f"team/{m.id}/persona.md"), "memory": ws.read(f"team/{m.id}/memory.md"),
                 "log": ws.tail_log(m.id, 40), "status": self.rt.tasks.person_status(m.id),
@@ -584,6 +593,8 @@ class App:
             t = rt.tasks.get(tid)
         elif act == "edit":
             fields = {k: b.get(k) for k in ("priority", "due", "title", "owner", "project") if b.get(k)}
+            if "due" in b and not b.get("due"):
+                rt.tasks.clear_due(tid, by)
             if "owner" in fields and not rt.cfg.member(str(fields["owner"])):
                 raise ValueError(f"There's nobody called {fields['owner']} on the team.")
             if "project" in fields and fields["project"] not in rt.cfg.projects:
@@ -615,6 +626,9 @@ class App:
         if not pid:
             raise ValueError("Project name is required.")
         raw = self.raw()
+        if not b.get("id") and pid in (raw.get("projects") or {}):
+            raise ValueError(f"There's already a project “{raw['projects'][pid].get('name') or pid}” — open it to "
+                             f"edit it, or pick another name.")
         p = raw.setdefault("projects", {}).setdefault(pid, {"repo": "", "main_branch": "main"})
         for k in ("name", "description", "lead", "repo", "status"):
             if k in b:
@@ -664,7 +678,12 @@ class App:
                 if b.get("role"):
                     m["role"] = str(b["role"]).strip()
                 if "projects" in b:
-                    m["projects"] = [p.strip() for p in b["projects"] if p.strip()]
+                    if not isinstance(b["projects"], list):
+                        raise ValueError("projects must be a list")
+                    m["projects"] = [str(p).strip() for p in b["projects"] if str(p).strip()]
+                    for pid, pr in (raw.get("projects") or {}).items():   # off a project → no longer its lead
+                        if isinstance(pr, dict) and pr.get("lead") == mid and pid not in m["projects"]:
+                            pr["lead"] = ""
                 if "llm" in b:
                     want = b.get("llm") or {}
                     if not want.get("provider"):
@@ -673,6 +692,8 @@ class App:
                         if want["provider"] not in PROVIDERS:
                             raise ValueError(f"Unknown AI provider {want['provider']} (use {', '.join(PROVIDERS)}).")
                         m["llm"] = {k: str(want[k]) for k in ("provider", "model", "base_url") if want.get(k)}
+                        if want.get("allow_free"):
+                            m["llm"]["allow_free"] = True
                 if "permissions" in b:
                     perms = {k: v for k, v in (b.get("permissions") or {}).items() if k in ACTION_TYPES and v in LEVELS}
                     if perms:
@@ -726,16 +747,20 @@ class App:
         if b.get("budget"):
             raw.setdefault("budget", {})["daily_tokens_per_agent"] = int(b["budget"])
         llm = raw.setdefault("llm", {})
-        if b.get("provider"):
+        if b.get("provider") and str(b["provider"]) != str(llm.get("provider") or ""):
+            # only a *changed* provider resets its key variable — saving Settings never clobbers a custom one
             llm["provider"] = str(b["provider"])
-            llm["api_key_env"] = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(llm["provider"], "")
+            from .config import KEY_ENV
+            llm["api_key_env"] = KEY_ENV.get(llm["provider"], "")
+        if "allow_free" in b:
+            llm["allow_free"] = bool(b["allow_free"])
         if "model" in b:
             llm["model"] = str(b["model"] or "")
         if "base_url" in b:
             llm["base_url"] = str(b["base_url"] or "")
         if b.get("api_key") and llm.get("api_key_env"):
             set_env(self.base / ".env", {llm["api_key_env"]: str(b["api_key"])})
-        if "coding_tool" in b:
+        if "coding_tool" in b and b["coding_tool"] not in ("custom", "keep"):   # "custom": leave your own command
             raw.setdefault("executor", {})["command"] = {
                 "claude": ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits"],
                 "codex": ["codex", "exec", "--full-auto", "{prompt}"]}.get(b["coding_tool"], [])
@@ -973,6 +998,14 @@ def make_handler(app: App, key: str):
                     return self._json(200, app.setup(b))
                 if path == "/api/test_model":
                     return self._json(200, app.test_model(b))
+                if path == "/api/model_check":                 # setup too: is this model ready? (no model call)
+                    from . import connections as cx
+                    from .config import parse_llm
+                    return self._json(200, cx.check(parse_llm({k: v for k, v in b.items()
+                                                               if k in ("provider", "model", "base_url", "allow_free")})))
+                if path == "/api/model_login":
+                    from . import connections as cx
+                    return self._json(200, cx.login(str(b.get("provider", "")), app.base / ".jm-login"))
                 if not app.ready:
                     return self._json(409, {"error": "setup needed"})
                 a = app.admin
@@ -1024,6 +1057,11 @@ def make_handler(app: App, key: str):
                 return self._json(200, fn())
             except (ValueError, TaskError, AskError, ConfigError, FileNotFoundError) as e:
                 return self._json(400, {"error": str(e)})
+            except (AttributeError, TypeError, zipfile.BadZipFile) as e:   # malformed input, not a server fault
+                return self._json(400, {"error": f"That request wasn't in the expected shape ({type(e).__name__})."})
+            except (TimeoutError, concurrent.futures.TimeoutError):
+                return self._json(504, {"error": "That's taking longer than expected — it continues in the "
+                                                 "background; check back in a minute."})
             except Exception as e:  # noqa: BLE001
                 log.exception("POST %s", path)
                 return self._json(500, {"error": f"{type(e).__name__}: {e}"})
@@ -1042,7 +1080,7 @@ def serve(base_dir: Path, host: str = "127.0.0.1", port: int = 8765, open_browse
         f"{app.rt.cfg.company}: {len(app.rt.cfg.team)} people"
         + (", Telegram connected" if app.gw else ", Telegram not connected")
         + (", Slack connected" if app.slack else ""))
-    print(f"james-monitoring console: {url}\n{status}\nCtrl-C to stop.")
+    print(f"james-monitoring console: {url}\n{status}\nCtrl-C to stop.", flush=True)   # shows under Docker/systemd too
     if host == "0.0.0.0":
         print("⚠️  Listening on all interfaces. Anyone with the link can control the team — prefer an SSH tunnel.")
     if open_browser:

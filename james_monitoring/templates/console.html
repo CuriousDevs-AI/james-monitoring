@@ -271,12 +271,16 @@ const roomInfo = id => { if (id === "team") return {kind: "team", name: "All han
 const roomAvatar = (id, size = "") => { const r = roomInfo(id); return r.kind === "team" ? h("span", {class: "av " + size, style: "background:var(--foreground)"}, icon("team"))
   : r.kind === "back" ? h("span", {class: "av " + size, style: "background:var(--muted)"}, icon("bot"))
   : r.kind === "project" ? projMark(r.project, size || "sm2") : avatar(r.name, size); };
-const humanIds = s => String(s ?? "").replace(/\b[a-z][a-z0-9_-]*\b/g, w => (S?.members || []).some(m => m.id === w) ? nameOf(w) : (S && w === S.owner_key) ? S.owner : w);
+// Ids → names ("riya_sharma" → "Riya Sharma") for standalone words only — never inside a link, a path, a file name
+// or code (github.com/sam_lee/api stays as it is), and never for very short ids.
+const humanIds = s => String(s ?? "").replace(/(^|[^\w\/.:@#-])([a-z][a-z0-9_-]{2,})(?![\w\/.-]*[\w\/])/g, (all, pre, w) =>
+  (S?.members || []).some(m => m.id === w) ? pre + nameOf(w) : (S && w === S.owner_key) ? pre + S.owner : all);
 const personLine = l => { const m = /^(T-\d+) \[P\d\] (.+?) — \S+ — (\S+) — due (\S+)(?: date)?(.*)$/.exec(l || ""); return m ? `${m[1]} · ${m[2]} · ${m[3]}${m[4] !== "no" ? " · due " + m[4] : ""}${humanIds(m[5])}` : humanIds(l); };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 function md(src, names = true) {
   let out = "", list = false, fence = null;
-  const inl = s => esc(names ? humanIds(s) : s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+  const human = t => t.split(/(`[^`]*`|https?:\/\/\S+)/).map((x, i) => i % 2 ? x : humanIds(x)).join("");
+  const inl = s => esc(names ? human(s) : s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
     .replace(/(^|[\s(])\*([^*\s][^*]*)\*(?=[\s).,!?]|$)/g, "$1<i>$2</i>")
     .replace(/(https?:\/\/[^\s<)]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
   for (const l of String(src || "").split("\n")) {
@@ -418,14 +422,15 @@ async function boot() {
 }
 async function togglePause() {
   if (!S.paused_all && !confirm("Pause the whole team? Nobody works until you resume; messages to them wait in a queue.")) return;
-  const r = await api("/api/pause", {who: "all", pause: !S.paused_all}); toast(r.message || (S.paused_all ? "Team resumed" : "Team paused"), S.paused_all ? "success" : "warning"); refresh(); }
+  let r; try { r = await api("/api/pause", {who: "all", pause: !S.paused_all}); } catch (e) { return toast(e.message, "danger"); } toast(r.message || (S.paused_all ? "Team resumed" : "Team paused"), S.paused_all ? "success" : "warning"); refresh(); }
 
 // ------------------------------------------------------------------ pulse: live badges, unread, background refresh
 let PULSE = null, PULSE_VERSION = "";
 const seen = r => store.get("seen:" + r, -1);
 const markSeen = (r, i) => { if (i > seen(r)) store.set("seen:" + r, i); };
 function unreadOf(r) {   // messages after the last one you saw; nothing is unread if you spoke last
-  if (!PULSE || PULSE.last_who[r] === S.owner_key) return 0; return Math.max(0, (PULSE.rooms[r] ?? -1) - seen(r)); }
+  if (!PULSE || PULSE.last_who[r] === S.owner_key) return 0;
+  if (r.startsWith(PROOM) && (projOf(r.slice(PROOM.length))?.status === "done" || !projOf(r.slice(PROOM.length)))) return 0; return Math.max(0, (PULSE.rooms[r] ?? -1) - seen(r)); }
 function paintPulse() {
   if (!PULSE || !S || S.setup_needed) return;
   const unread = Object.keys(PULSE.rooms).filter(r => r !== ROOM || VIEW !== "chat").reduce((n, r) => n + unreadOf(r), 0);
@@ -435,7 +440,7 @@ function paintPulse() {
   document.title = (unread + PULSE.needs_you ? `(${unread + PULSE.needs_you}) ` : "") + `${S.company} · Console`;
   document.querySelectorAll(".room[data-room]").forEach(el => { const n = unreadOf(el.dataset.room); el.querySelector(".unread")?.remove(); if (n && el.dataset.room !== ROOM) el.append(h("span", {class: "unread"}, n)); });
 }
-const LIVE_VIEWS = ["overview", "board", "approvals", "projects", "project", "reports"];
+const LIVE_VIEWS = ["overview", "board", "approvals", "projects", "project"];
 async function pulse() {
   if ((document.hidden && PULSE) || !KEY || !S || S.setup_needed) return;     // hidden tabs rest (after the first pulse)
   try { PULSE = await api("/api/pulse"); } catch { return; }
@@ -450,7 +455,10 @@ async function pulse() {
   const busy = $("#sheet").classList.contains("open") || $("#palette").classList.contains("open") ||
     document.activeElement?.matches?.("input,textarea,select") || (VIEW === "project" && PTAB === "chat");
   if (changed && !busy && LIVE_VIEWS.includes(VIEW)) { const y = scrollY; await render(); scrollTo(0, y); }
-  if (PULSE.paused_all !== S.paused_all) refresh();
+  if (PULSE.paused_all !== S.paused_all) {
+    const typing = document.activeElement?.matches?.("input,textarea,select") || $(".dirty")?.textContent || $("#sheet").classList.contains("open");
+    if (typing) S.paused_all = PULSE.paused_all; else refresh();
+  }
 }
 setInterval(pulse, 4000); document.addEventListener("visibilitychange", () => { if (!document.hidden) pulse(); });
 async function refresh() { S = await api("/api/state"); boot(); }
@@ -475,8 +483,9 @@ function render() {
 let BUSY = {};
 async function busy(key, label, fn) {
   if (BUSY[key]) return toast(label + " is already running", "warning");
-  BUSY[key] = true; document.querySelectorAll(`[data-busy="${key}"]`).forEach(b => { b.disabled = true; b.dataset.label = b.textContent; b.put(h("span", {class: "spin"}), " " + label + "…"); });
-  try { return await fn(); } finally { BUSY[key] = false; document.querySelectorAll(`[data-busy="${key}"]`).forEach(b => { b.disabled = false; }); if (LIVE_VIEWS.includes(VIEW)) render(); }
+  const saved = new Map();
+  BUSY[key] = true; document.querySelectorAll(`[data-busy="${key}"]`).forEach(b => { b.disabled = true; saved.set(b, [...b.childNodes]); b.put(h("span", {class: "spin"}), " " + label + "…"); });
+  try { return await fn(); } finally { BUSY[key] = false; saved.forEach((kids, b) => { b.disabled = false; b.replaceChildren(...kids); }); if (LIVE_VIEWS.includes(VIEW)) render(); }
 }
 async function runWork() { await busy("work", "Work session", async () => {
   openSheet("Work session", h("div", {class: "row"}, h("span", {class: "spin"}), "Each person is moving their top task — this can take a few minutes. You can close this; the digest also arrives in ", nameOf(S.manager), "'s chat."));
@@ -485,6 +494,26 @@ async function runWork() { await busy("work", "Work session", async () => {
 async function runReport() { await busy("report", "Writing report", async () => { try { await api("/api/report/run", {}); toast("Report written and posted"); go("reports"); } catch (e) { toast(e.message, "danger"); } }); }
 
 // ------------------------------------------------------------------ setup
+// Setup: show at once whether the chosen model is installed and logged in, with a Log in button — before the team
+// exists, so nobody finishes setup with a model that can't answer.
+function setupStatus(f) {
+  const box = h("div", {class: "small", style: "margin-top:8px;min-height:20px"});
+  const check = async () => {
+    const r = await api("/api/model_check", {provider: f.provider.value, model: f.model.value, base_url: f.base_url.value}).catch(e => ({ok: false, detail: e.message}));
+    f.provider.dataset.ok = r.ok ? "1" : "";
+    const login = r.can_login && !r.ok ? h("button", {class: "btn primary sm", onclick: async () => {
+      const out = h("span", {}, " starting sign-in…"); box.append(out);
+      const l = await api("/api/model_login", {provider: f.provider.value}).catch(e => ({started: false, error: e.message}));
+      out.put(l.started ? [" Your browser is opening to sign in — then ", h("a", {href: "#", onclick: e => { e.preventDefault(); check(); }}, "check again"), ".",
+        l.url ? [" (", h("a", {href: l.url, target: "_blank", rel: "noopener"}, "sign-in page"), ")"] : null] : " " + (l.error || "couldn't start"));
+    }}, "Log in") : null;
+    box.put(r.ok ? badge("✓ " + r.detail, "success") : badge(r.detail || "not ready", "danger"), " ", r.fix ? h("span", {class: "muted"}, r.fix) : null, " ", login);
+  };
+  ["change", "blur"].forEach(ev => { f.provider.addEventListener(ev, check); f.model.addEventListener(ev, check); });
+  setTimeout(check, 0);
+  return box;
+}
+
 function renderSetup() {
   const f = {company: h("input", {placeholder: "e.g. Acme Robotics"}), owner: h("input", {placeholder: "Your name"}), timezone: h("input", {value: S.timezone}),
     goals: h("textarea", {placeholder: "One goal per line (optional)"}),
@@ -496,6 +525,7 @@ function renderSetup() {
   const err = h("div", {class: "err"}), go_ = h("button", {class: "btn primary"}, "Create the team", icon("arrow"));
   go_.onclick = async () => { err.textContent = "";
     if (!f.company.value.trim() || !f.owner.value.trim()) { err.textContent = "Company and your name are required."; return (f.company.value.trim() ? f.owner : f.company).focus(); }
+    if (!f.provider.dataset.ok && !confirm("The AI model isn't ready yet (see step 2) — the team won't be able to answer until you fix it in Settings → Connections. Create the team anyway?")) return;
     go_.disabled = true; go_.textContent = "Setting up…";
     const b = {}; for (const [k, el] of Object.entries(f)) b[k] = el.type === "checkbox" ? el.checked : el.value;
     try { await api("/api/setup", b); VIEW = "team"; await refresh(); toast("Team created — now add people"); } catch (e) { err.textContent = e.message; go_.disabled = false; go_.textContent = "Create the team"; } };
@@ -508,6 +538,7 @@ function renderSetup() {
       h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Your git name"), f.git_name), h("div", {}, h("label", {class: "f"}, "Your git email"), f.git_email)),
       h("div", {class: "xs muted", style: "margin-top:4px"}, "Every commit and pull request the team makes is yours — filled in from your git config.")),
     step("2", "AI model", "any provider, switch any time — and per person later", h("label", {class: "f req"}, "Provider"), f.provider, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Model"), f.model), h("div", {}, h("label", {class: "f"}, "API base URL"), f.base_url)), h("label", {class: "f"}, "API key"), f.api_key,
+      setupStatus(f),
       h("div", {class: "row", style: "margin-top:8px"}, (() => { const out = h("span", {class: "small"}); const b = h("button", {class: "btn outline sm", onclick: async () => { b.disabled = true; out.put(h("span", {class: "spin"}), " asking the model…");
         const r = await api("/api/test_model", {provider: f.provider.value, model: f.model.value, base_url: f.base_url.value, api_key: f.api_key.value}).catch(e => ({ok: false, error: e.message}));
         out.put(r.ok ? badge(`Works · ${r.tokens} tokens`, "success") : badge(r.error || `Odd reply: ${r.reply}`, "danger")); b.disabled = false; }}, "Test model"); return [b, out]; })())),
@@ -536,7 +567,7 @@ async function vOverview() {
       h("div", {class: "grow"}, h("div", {class: "t"}, t.title), h("div", {class: "xs muted"}, h("span", {class: "mono"}, t.id), " · ", nameOf(t.owner), " · ready for review")),
       h("div", {class: "row"}, h("button", {class: "btn outline sm", onclick: () => taskSheet(t.id)}, "Open"),
         h("button", {class: "btn outline sm", onclick: () => changesSheet(t)}, "Request changes"),
-        h("button", {class: "btn primary sm", onclick: async () => { await api("/api/task", {id: t.id, action: "accept"}); toast(t.id + " accepted"); render(); }}, icon("check"), "Accept")))),
+        h("button", {class: "btn primary sm", onclick: () => acceptTask(t)}, icon("check"), "Accept")))),
     ...d.decisions.map(x => h("div", {class: "li click", onclick: () => go("reports")}, h("span", {class: "ico accent"}, icon("target")), h("div", {class: "grow"}, h("div", {class: "t"}, x), h("div", {class: "xs muted"}, "Open decision")), icon("arrow")))];
   const tline = t => h("div", {class: "li click", onclick: () => taskSheet(t.id)}, avatar(nameOf(t.owner), "sm"),
     h("div", {class: "grow"}, h("div", {class: "row"}, h("span", {class: "t"}, t.title), badge(t.priority, PRI_TONE[t.priority]), t.overdue ? badge("Overdue", "danger") : null),
@@ -570,6 +601,11 @@ async function vOverview() {
           : h("div", {class: "card-b muted small"}, "No activity yet.")))));
 }
 // Approving spends money / posts / merges for real: confirm it. Rejecting asks why (the requester is told).
+async function acceptTask(t) {
+  if (!confirm(`Accept ${t.id} as done?\n\n${t.title}`)) return;
+  try { const r = await api("/api/task", {id: t.id, action: "accept"}); toast(humanIds(r.message) || t.id + " accepted"); render(); }
+  catch (e) { toast(e.message, "danger"); }
+}
 async function decide(id, decision, note = "", summary = "") {
   if (decision === "approved" && !confirm(`Approve ${id}?\n\n${summary || "This lets it go ahead."}`)) return false;
   if (decision === "rejected") { const why = prompt(`Reject ${id} — why? (they'll be told; optional)`, note); if (why === null) return false; note = why; }
@@ -629,7 +665,7 @@ function chatPanel(room, opts = {}) {
   const quick = readonly ? [] : kind === "team" ? ["@all give status", "/status", "/board", "/report"]
     : kind === "project" ? ["@all give status", "@all what's the plan for this week?", "What's blocking this project?"]
     : ["What are you working on?", "What's blocking you?", "/log " + room];
-  let after = -1, lastDay = "", polling = false; const cards = [];
+  let after = -1, lastDay = "", polling = false, first = true; const cards = [];
   async function poll() {
     if (polling || (document.hidden && after >= 0)) return; polling = true;
     try {
@@ -656,7 +692,8 @@ function chatPanel(room, opts = {}) {
         kind === "back" ? "When teammates hand work to each other outside a project, it shows up here." : kind === "team" ? "Announcements for everyone. Try “@all give status”." : kind === "project" ? `Only people on ${info.project?.name || "this project"} get these messages. Try “@all give status”.` : `Say hi to ${info.name} — give an instruction or ask a question.`));
       else if (r.messages.length && msgs.querySelector(".empty")) msgs.querySelector(".empty").remove();
       if (r.thinking) msgs.append(think.put(kind === "dm" ? info.name + " is typing" : "The team is replying", h("span", {class: "dots"}, h("span", {}, "."), h("span", {}, "."), h("span", {}, "."))));
-      if (stick || r.messages.length) msgs.scrollTop = msgs.scrollHeight;
+      if (stick || first || r.messages.some(m => m.who === S.owner_key)) msgs.scrollTop = msgs.scrollHeight;
+      first = false;
       if (after >= 0) { markSeen(room, after); paintPulse(); }
     } catch (e) { msgs.append(think.put(h("span", {class: "err"}, e.message))); } finally { polling = false; }
   }
@@ -851,7 +888,7 @@ async function vProject() {
   const tline = t => h("div", {class: "li click", onclick: () => taskSheet(t.id)}, avatar(nameOf(t.owner), "sm"),
     h("div", {class: "grow"}, h("div", {class: "row"}, h("span", {class: "t"}, t.title), badge(t.status, TASK_TONE[t.status]), t.overdue ? badge("Overdue", "danger") : null),
       h("div", {class: "xs muted"}, h("span", {class: "mono"}, t.id), ` · ${nameOf(t.owner)}`, t.blocked_on ? " · blocked on " + humanIds(t.blocked_on) : "", t.due ? h("span", {class: "mono"}, " · due " + t.due) : null)),
-    t.status === "review" ? h("button", {class: "btn primary sm", onclick: async e => { e.stopPropagation(); await api("/api/task", {id: t.id, action: "accept"}); toast(t.id + " accepted"); render(); }}, icon("check"), "Accept") : null);
+    t.status === "review" ? h("button", {class: "btn primary sm", onclick: e => { e.stopPropagation(); acceptTask(t); }}, icon("check"), "Accept") : null);
   const openTasks = p.tasks.filter(t => !["done", "cut"].includes(t.status)).sort((a, b) => (a.priority + a.id).localeCompare(b.priority + b.id));
   body.put(h("div", {class: "metrics"}, metric("Open", p.counts.open), metric("In review", p.counts.review, p.counts.review ? "warning" : ""), metric("Blocked", p.counts.blocked, p.counts.blocked ? "danger" : ""),
       metric("Overdue", p.counts.overdue, p.counts.overdue ? "danger" : ""), metric("Done", p.counts.done, "success")),
@@ -945,7 +982,7 @@ function memberCard(m) {
     h("div", {class: "row", style: "margin:10px 0 8px"}, (() => { const x = S.members.find(y => y.id === m.id); return x ? badge(x.model, x.own_model ? "info" : "") : null; })(), badge(m.persona_lines ? `Persona · ${m.persona_lines} lines` : "No persona"), m.skill_files ? badge(`${m.skill_files} skill files`) : null, m.projects.map(pid => h("span", {class: "badge outline click", onclick: () => openProject(pid)}, "# " + (projOf(pid)?.name || pid)))), st),
     h("div", {class: "card-h", style: "border-top:1px solid var(--border);border-bottom:none"}, h("button", {class: "btn outline sm", onclick: () => { ROOM = m.id; go("chat"); }}, icon("chat"), "Chat"),
       h("button", {class: "btn outline sm", onclick: () => memberSheet(m.id)}, "Profile"), h("button", {class: "btn ghost sm", onclick: () => newTaskSheet({owner: m.id})}, icon("plus"), "Task"), h("span", {class: "grow"}),
-      m.manager ? null : h("button", {class: "btn ghost sm", style: "color:var(--danger)", onclick: async () => { if (!confirm(`Remove ${m.name}? Their files stay in the team repo history.`)) return; await api("/api/remove", {id: m.id}); toast("Removed " + m.name, "warning"); await refresh(); }}, "Remove")));
+      m.manager ? null : h("button", {class: "btn ghost sm", style: "color:var(--danger)", onclick: async () => { if (!confirm(`Remove ${m.name}? Their files stay in the team repo history.`)) return; try { await api("/api/remove", {id: m.id}); toast("Removed " + m.name, "warning"); await refresh(); } catch (e) { toast(e.message, "danger"); } }}, "Remove")));
 }
 const b64 = async f => { const buf = new Uint8Array(await f.arrayBuffer()); let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000)); return btoa(bin); };
 const SKIP_DIR = /(^|\/)(\.git|node_modules|__pycache__|\.venv|__MACOSX)(\/|$)/;
@@ -965,7 +1002,9 @@ async function handleFolder(pairs, ctx) {
   if (!pairs.length) return toast("That folder has no usable files", "warning");
   const name = pairs[0][0].split("/")[0];
   toast(`Reading ${pairs.length} files from ${name}…`);
-  try { const files = await Promise.all(pairs.map(async ([path, f]) => ({path: path.split("/").slice(1).join("/") || path, data: await b64(f)})));
+  const roots = new Set(pairs.map(([p]) => p.split("/")[0]));
+  const strip = roots.size === 1;                       // one parent folder: drop its name; several: keep each
+  try { const files = await Promise.all(pairs.map(async ([path, f]) => ({path: strip ? (path.split("/").slice(1).join("/") || path) : path, data: await b64(f)})));
     const r = await api("/api/upload_folder", {name, files}); r.items.forEach(it => addDraft(it, ctx, true));
     toast(`${r.items.length} ${r.items.length === 1 ? "person" : "people"} found in ${name}`); drawBulk(ctx); }
   catch (e) { toast(`${name}: ${e.message}`, "danger"); }
@@ -1028,6 +1067,7 @@ async function memberSheet(id) {
   const role = h("input", {value: m.role}), persona = h("textarea", {class: "mono", style: "min-height:260px;font-size:12px"}, m.persona);
   const prov = h("select", {}, h("option", {value: ""}, "Company default"), PROVIDERS.map(([v, t]) => h("option", {value: v, selected: m.llm.own && m.llm.provider === v}, t)));
   const model = h("input", {value: m.llm.own ? m.llm.model : "", placeholder: "blank = the tool's default · e.g. sonnet, opus, gpt-5-codex"});
+  const allowFree = h("input", {type: "checkbox", checked: !!(m.llm.own && m.llm.allow_free)});
   setTimeout(() => modelSuggest(model, prov), 0);
   const perms = Object.fromEntries(S.action_types.map(a => [a, h("select", {}, h("option", {value: ""}, `Company (${LEVEL_TXT[S.permissions[a]]})`), ["green", "yellow", "red"].map(l => h("option", {value: l, selected: m.permissions[a] === l}, LEVEL_TXT[l])))]));
   const paused = (S.paused || []).includes(id), err = h("div", {class: "err"});
@@ -1039,11 +1079,12 @@ async function memberSheet(id) {
     h("h2", {class: "sec"}, "Tasks"), m.tasks.length ? h("div", {class: "card list"}, m.tasks.map(t => h("div", {class: "li click", style: "padding:8px 12px", onclick: () => taskSheet(t.id)}, h("span", {class: "mono xs muted"}, t.id), h("span", {class: "grow small"}, t.title), badge(t.status, TASK_TONE[t.status])))) : h("div", {class: "small muted"}, "No tasks."),
     h("h2", {class: "sec"}, "Profile"), h("label", {class: "f"}, "Role"), role, h("label", {class: "f"}, "Projects"), projects,
     h("label", {class: "f"}, "AI model — each person can run on a different one"), h("div", {class: "two"}, prov, model),
+    h("label", {class: "row xs", style: "gap:6px;margin-top:6px;flex-wrap:nowrap"}, allowFree, h("span", {}, "Allow a free OpenCode model for this person (isolated; runs OpenCode's own agent)")),
     h("div", {class: "xs muted", style: "margin-top:4px"}, "Now: ", h("span", {class: "mono"}, (S.members.find(x => x.id === id) || {}).model || "")),
     h("label", {class: "f"}, "What they may do on their own"), h("div", {class: "perm"}, S.action_types.map(a => [h("span", {class: "small"}, ACTION_TXT[a] || a), perms[a]])),
     h("label", {class: "f"}, "Persona — what the agent reads"), persona,
     m.skill_files.length ? h("div", {class: "xs muted", style: "margin-top:4px"}, "Stored skill package: ", h("span", {class: "mono"}, m.skill_files.join(", "))) : null,
-    h("div", {class: "row", style: "margin-top:8px"}, h("button", {class: "btn primary sm", onclick: async () => { try { await api("/api/member", {id, role: role.value, projects: [...on], persona: persona.value, llm: {provider: prov.value, model: model.value}, permissions: Object.fromEntries(Object.entries(perms).map(([k, el]) => [k, el.value]).filter(([, v]) => v))}); toast("Profile saved"); S = await api("/api/state"); } catch (e) { err.textContent = e.message; } }}, icon("check"), "Save profile"), err),
+    h("div", {class: "row", style: "margin-top:8px"}, h("button", {class: "btn primary sm", onclick: async () => { try { await api("/api/member", {id, role: role.value, projects: [...on], persona: persona.value, llm: {provider: prov.value, model: model.value, allow_free: allowFree.checked}, permissions: Object.fromEntries(Object.entries(perms).map(([k, el]) => [k, el.value]).filter(([, v]) => v))}); toast("Profile saved"); S = await api("/api/state"); } catch (e) { err.textContent = e.message; } }}, icon("check"), "Save profile"), err),
     h("h2", {class: "sec"}, "Memory — corrections are binding"), h("div", {class: "card card-b md", html: md(m.memory || "Empty.")}),
     h("h2", {class: "sec"}, "Activity"), h("pre", {}, m.log || "No activity yet."));
 }
@@ -1078,7 +1119,7 @@ async function vReports() {
     h("div", {class: "cols"}, h("div", {class: "card"}, h("div", {class: "card-h"}, icon("reports"), h("h3", {}, current ? "Report · " + current.replace(".md", "") : "Report")), view),
       h("div", {}, h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon("clock"), h("h3", {}, "All reports")), list.length ? listBox : h("div", {class: "card-b muted small"}, "None yet.")),
         h("div", {class: "card"}, h("div", {class: "card-h"}, icon("target"), h("h3", {}, "Open decisions")), h("div", {class: "card-b"}, h("p", {class: "xs muted", style: "margin:0 0 8px"}, "Numbered lines appear in every report under “Needs you”. Remove a line when it's decided."), decBox,
-          h("button", {class: "btn secondary sm", style: "margin-top:8px", onclick: async () => { await api("/api/decisions", {text: decBox.value}); toast("Decisions saved"); }}, icon("check"), "Save"))))));
+          h("button", {class: "btn secondary sm", style: "margin-top:8px", onclick: async () => { try { await api("/api/decisions", {text: decBox.value}); toast("Decisions saved"); } catch (e) { toast(e.message, "danger"); } }}, icon("check"), "Save"))))));
   drawList(); if (list.length) show(list[0]);
 }
 
@@ -1178,9 +1219,12 @@ async function vSettings() {
   const f = {company: h("input", {value: s.company || ""}), owner_name: h("input", {value: s.owner?.name || ""}), timezone: h("input", {value: s.timezone || ""}),
     provider: h("select", {}, PROVIDERS.map(([v, t]) => h("option", {value: v, selected: l.provider === v}, t))),
     model: h("input", {value: l.model || ""}), base_url: h("input", {value: l.base_url || ""}), api_key: h("input", {type: "password", placeholder: "leave blank to keep"}),
+    allow_free: h("input", {type: "checkbox", checked: !!l.allow_free}),
     daily_report: h("input", {type: "time", value: m.daily_report || "18:30"}), work_sessions: h("input", {value: (m.work_sessions || []).join(", "), placeholder: "e.g. 10:00, 15:00 · blank = only when asked"}),
     budget: h("input", {type: "number", value: s.budget?.daily_tokens_per_agent || 300000}),
-    coding_tool: h("select", {}, [["none", "None"], ["claude", "Claude Code"], ["codex", "Codex CLI"]].map(([v, t]) => h("option", {value: v, selected: v === ((s.executor?.command || [])[0] || "none")}, t))),
+    coding_tool: (() => { const cmd = s.executor?.command || [], cur = cmd[0] || "none", known = ["none", "claude", "codex"].includes(cur);
+      return h("select", {}, [...(known ? [] : [["custom", `Your own: ${cmd.join(" ").slice(0, 40)}`]]), ["none", "None"], ["claude", "Claude Code"], ["codex", "Codex CLI"]]
+        .map(([v, t]) => h("option", {value: v, selected: known ? v === cur : v === "custom"}, t))); })(),
     owner_telegram_id: h("input", {class: "mono", value: s.owner?.telegram_user_id || ""}), group_chat_id: h("input", {class: "mono", value: s.telegram?.group_chat_id || ""}),
     git_name: h("input", {value: s.owner?.git_name || S.git.name || ""}), git_email: h("input", {type: "email", value: s.owner?.git_email || S.git.email || ""})};
   const err = h("div", {class: "err"});
@@ -1190,7 +1234,7 @@ async function vSettings() {
   const channel = h("select", {"aria-label": "Where the team talks to you"}, [["", `Automatic — whatever is connected (now: ${S.delivery.home || "console only"})`], ["telegram", "Telegram"], ["slack", "Slack"], ["console", "Console only"]]
     .map(([v, t]) => h("option", {value: v, selected: (s.sync?.channel || "") === v}, t)));
   const slackIds = h("input", {class: "mono", value: (s.slack?.owner_user_ids || []).join(", "), placeholder: "U012AB3CD — Slack: your profile → ⋮ → Copy member ID"});
-  const save = async () => { err.textContent = ""; try { await api("/api/settings", {...Object.fromEntries(Object.entries(f).map(([k, e]) => [k, e.value])), work_sessions: f.work_sessions.value.split(","),
+  const save = async () => { err.textContent = ""; try { await api("/api/settings", {...Object.fromEntries(Object.entries(f).map(([k, e]) => [k, e.type === "checkbox" ? e.checked : e.value])), work_sessions: f.work_sessions.value.split(","),
       permissions: Object.fromEntries(Object.entries(perms).map(([k, e]) => [k, e.value])), mirror_owner: mirror.checked, slack_owner_ids: slackIds.value, channel: channel.value}); toast("Settings saved — restarted"); await refresh(); } catch (e) { err.textContent = e.message; } };
   const tgToken = h("input", {type: "password", placeholder: "Manager bot token from @BotFather"}), tgOut = h("div", {class: "small", style: "min-height:18px;margin-top:8px"});
   const tg = S.telegram;
@@ -1218,7 +1262,9 @@ async function vSettings() {
       card("Company", "overview", h("div", {class: "three"}, h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Name"), f.company), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Owner"), f.owner_name), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Timezone"), f.timezone)),
         h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Your git name (commits & PRs are yours)"), f.git_name), h("div", {}, h("label", {class: "f"}, "Your git email"), f.git_email))),
       card("AI model", "bot", h("label", {class: "f", style: "margin-top:0"}, "Provider"), f.provider, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Model"), f.model), h("div", {}, h("label", {class: "f"}, "Base URL"), f.base_url)),
-        h("label", {class: "f"}, "API key"), f.api_key, h("label", {class: "f"}, "Coding tool for code tasks"), f.coding_tool),
+        h("label", {class: "f"}, "API key"), f.api_key,
+        h("label", {class: "f row", style: "gap:6px;flex-wrap:nowrap"}, f.allow_free, h("span", {}, "Allow free OpenCode models (opencode/…) — they run OpenCode's own agent, isolated: empty folder, throwaway home, no secrets")),
+        h("label", {class: "f"}, "Coding tool for code tasks"), f.coding_tool),
       card("Permissions", "approvals", h("p", {class: "small muted", style: "margin:0 0 10px"}, "What people may do on their own. “Ask me first” turns the action into an Approve/Reject card — it runs only after you approve. Money, anything public, production, deleting and legal always ask. Override per person in their profile."),
         h("div", {class: "perm"}, S.action_types.map(a => [h("span", {class: "small"}, ACTION_TXT[a] || a), perms[a]]))),
       card("Sync", "refresh", h("label", {class: "f", style: "margin-top:0"}, "Where the team talks to you — All hands and the 1:1s (projects can choose their own)"), channel,

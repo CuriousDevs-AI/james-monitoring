@@ -241,22 +241,16 @@ def cmd_doctor(args) -> None:
         ok = ok and cond
 
     print(f"james-monitoring {__version__} — {cfg.path}")
-    print("AI")
-    if cfg.llm.provider in ("claude-code", "claude_code", "claude-cli", "subscription"):
-        check(shutil.which("claude") is not None, "claude CLI installed (uses your subscription login)",
-              "`claude` CLI not found — npm install -g @anthropic-ai/claude-code, then run `claude` and /login")
-        print(f"  ·  model: {cfg.llm.model or 'CLI default'}")
-    else:
-        check(bool(cfg.llm.model), f"model: {cfg.llm.provider}/{cfg.llm.model}", "llm.model is empty")
-        check(bool(cfg.llm.api_key) or cfg.llm.provider in ("fake",) or bool(cfg.llm.base_url),
-              f"API key present ({cfg.llm.api_key_env})", f"{cfg.llm.api_key_env} not set in .env")
-    if args.ping:
-        from .llm import LLMError, make_llm
-        try:
-            r = make_llm(cfg.llm).complete("Reply with the single word: pong", [{"role": "user", "content": "ping"}])
-            check("pong" in r.text.lower(), f"model replied ({r.total_tokens} tokens)", f"odd reply: {r.text[:80]}")
-        except LLMError as e:
-            check(False, "", str(e))
+    print("AI (every model the team uses)")
+    from . import connections as cx
+    for g in cx.providers_in_use(cfg):
+        r = cx.check(g["config"])
+        who = ", ".join((cfg.member(x).name if cfg.member(x) else x) for x in g["people"])
+        check(r["ok"], f"{r['label']} · {g['config'].model or 'default'} — {r['detail']} ({who})",
+              f"{r['label']} — {r['detail']}: {r['fix'] or 'see `jm connection`'} ({who})")
+        if args.ping and r["ok"]:
+            t = cx.test(g["config"])
+            check(t["ok"], f"  answers ({t.get('seconds', 0)}s)", f"  test call failed: {t.get('error', '')}")
     print("Workspace")
     check(shutil.which("git") is not None, "git installed", "git not found")
     check((cfg.workspace_path / ".git").exists(), f"git repo at {cfg.workspace_path}", "workspace is not a git repo (run jm init)")
@@ -264,10 +258,16 @@ def cmd_doctor(args) -> None:
     for m in cfg.team:
         check((cfg.workspace_path / f"team/{m.id}/persona.md").exists(), f"persona: {m.name}", f"persona missing for {m.id}")
     print("Telegram")
-    check(cfg.owner_user_id != 0, f"owner user id {cfg.owner_user_id}", "owner.telegram_user_id not set (use /whoami)")
-    check(cfg.group_chat_id != 0, f"group id {cfg.group_chat_id}", "telegram.group_chat_id not set (use /groupid)")
-    for m in cfg.team:
-        check(bool(m.bot_token), f"bot token: {m.name}", f"{m.bot_token_env} not set — {m.name} will be offline")
+    if not any(m.bot_token for m in cfg.team):
+        print("  ·  not connected (optional — everything works in the console; see Settings → Telegram)")
+    else:
+        check(cfg.owner_user_id != 0, f"owner user id {cfg.owner_user_id}", "owner.telegram_user_id not set (use /whoami)")
+        check(cfg.group_chat_id != 0, f"group id {cfg.group_chat_id}", "telegram.group_chat_id not set (use /groupid)")
+        for m in cfg.team:
+            if m.bot_token or m.monitor:
+                check(bool(m.bot_token), f"bot token: {m.name}", f"{m.bot_token_env} not set — {m.name}'s bot is offline")
+            else:
+                print(f"  ·  {m.name}: no own bot (reachable through {cfg.monitor.name}'s bot with “@{m.id} …”)")
     if args.ping:
         async def tg():
             from telegram import Bot
@@ -359,8 +359,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--no-telegram", action="store_true")
     s.set_defaults(fn=cmd_ui)
 
-    s = sub.add_parser("connection", aliases=["connect", "connections"],
-                       help="check every AI model (installed, logged in, answering) · login · test")
+    s = sub.add_parser("connection", help="check every AI model (installed, logged in, answering) · login · test")
     s.add_argument("action", nargs="?", choices=["check", "test", "login"], default="check")
     s.add_argument("target", nargs="?", help="for login: claude-code | codex-cli | opencode")
     s.set_defaults(fn=cmd_connection)

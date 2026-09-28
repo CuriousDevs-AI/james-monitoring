@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "james-monitoring"
-version = "0.1.0"
+version = "0.2.0"
 description = "Run a company of AI employees like a real team: web console, Telegram and Slack in sync, git-backed tasks and memory, approvals, and a manager who reports daily. Any model."
 readme = "README.md"
 requires-python = ">=3.10"

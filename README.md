@@ -45,10 +45,12 @@ You — web console · Telegram · Slack (all in sync)
 
 ```bash
 git clone https://github.com/CuriousDevs-AI/james-monitoring.git
-cd james-monitoring && python -m venv .venv && . .venv/bin/activate && pip install -e ".[all]"
+cd james-monitoring && python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[all]"
 mkdir -p ../my-company && cd ../my-company
 jm run          # opens the console in your browser
 ```
+
+Then check your AI login: **Settings → Connections** in the console, or `jm connection` in a terminal.
 
 **Everything happens in the console**, on your own machine at `localhost`, protected by a key in the link:
 
@@ -141,7 +143,8 @@ jm status && jm report && jm work
 ```yaml
 llm: { provider: claude-code, model: sonnet }        # your Claude subscription via the `claude` CLI, no API key
 llm: { provider: codex-cli }                         # your ChatGPT subscription via the `codex` CLI, no API key
-llm: { provider: opencode, model: opencode/big-pickle }   # OpenCode: free models, or zhipuai/glm-4.6, anthropic/…
+llm: { provider: opencode, model: zhipuai/glm-4.6 }       # OpenCode: GLM, anthropic/…, openai/…, google/…
+llm: { provider: opencode, model: opencode/big-pickle, allow_free: true }   # OpenCode free models (opt-in)
 llm: { provider: anthropic, model: <claude model id>, api_key_env: ANTHROPIC_API_KEY }
 llm: { provider: openai,    model: <gpt model id>, api_key_env: OPENAI_API_KEY }
 llm: { provider: openai,    model: llama3.1, base_url: http://localhost:11434/v1, api_key_env: "" }   # Ollama
