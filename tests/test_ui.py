@@ -106,3 +106,32 @@ def test_console_http_requires_key_and_serves_page(tmp_path):
     finally:
         srv.shutdown()
         app.submit(app._stop_services(), timeout=10)
+
+
+def test_whole_team_in_one_upload(tmp_path):
+    raw = make_raw(tmp_path)
+    raw["team"] = [raw["team"][0]]
+    cfg = scaffold(raw, base_dir=tmp_path / "jm")
+    admin = TeamAdmin(cfg.path)
+
+    # one zip, a folder per person, each with its own package files
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("team/riya/SKILL.md", "---\nname: riya\ndescription: Backend engineer\n---\n# Riya — Backend lead\nOwns the API.\n")
+        z.writestr("team/riya/references/api.md", "notes")
+        z.writestr("team/omar/SKILL.md", "---\nname: omar\n---\n# Omar — Designer\nDesign.\n")
+        z.writestr("__MACOSX/team/._riya", "junk")
+    r = admin.upload("everyone.zip", buf.getvalue())
+    assert [(i["name"], i["role"]) for i in r["items"]] == [("Omar", "Designer"), ("Riya", "Backend lead")]
+    riya = next(i for i in r["items"] if i["name"] == "Riya")
+    assert riya["files"] == 2
+
+    # a picked folder of plain .md files → one person each
+    f = admin.upload_folder({"lena.md": b"# Lena - Sales\nSells.", "max.md": b"# Max - Ops\nRuns ops."}, "people")
+    assert sorted(i["name"] for i in f["items"]) == ["Lena", "Max"]
+
+    for it in r["items"] + f["items"]:
+        admin.add(name=it["name"], role=it["role"] or "Member", token="", upload_id=it["upload_id"])
+    cfg = load_config(admin.cfg_path)
+    assert {m.id for m in cfg.team} >= {"riya", "omar", "lena", "max"}
+    assert (cfg.workspace_path / "team" / "riya" / "skill" / "references" / "api.md").exists()

@@ -66,6 +66,7 @@ main{padding:20px 24px 60px;animation:fade .15s ease-out}
 .pchat .conv{border:1px solid var(--border);height:calc(100vh - 330px);min-height:420px}
 .rooms-h{padding:12px 12px 6px;font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:rgba(100,112,133,.8);border-bottom:1px solid var(--border);background:var(--surface-2)}
 .chipsel{display:flex;flex-wrap:wrap;gap:6px} .chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 4px;border:1px solid var(--border);cursor:pointer;font-size:12.5px;background:var(--surface);user-select:none}
+.bulkbar{margin-top:12px;border-color:var(--accent);background:var(--accent-muted)} .bulkbar .card-b{gap:16px;align-items:center}
 .chip:hover{border-color:var(--border-strong)} .chip.on{border-color:var(--accent);background:var(--accent-muted)} .chip.on::after{content:"✓";color:var(--accent);font-size:11px}
 @media(max-width:860px){aside{position:fixed;left:-260px;z-index:40;transition:left .15s} aside.open{left:0;box-shadow:0 0 30px rgba(10,20,36,.12)} .pmeta{gap:16px}
   .menu-btn{display:inline-flex} .search{min-width:0} .search .label,.search .kbd{display:none} main{padding:16px}
@@ -376,7 +377,7 @@ function renderSetup() {
     step("1", "Company", "who and why", h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Company / project"), f.company), h("div", {}, h("label", {class: "f"}, "Your name"), f.owner)),
       h("label", {class: "f"}, "Timezone"), f.timezone, h("label", {class: "f"}, "Goals"), f.goals),
     step("2", "AI model", "any provider, switch any time", h("label", {class: "f"}, "Provider"), f.provider, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Model"), f.model), h("div", {}, h("label", {class: "f"}, "API base URL"), f.base_url)), h("label", {class: "f"}, "API key"), f.api_key),
-    step("3", "Team repo", "tasks, personas, memory, reports", h("label", {class: "f"}, "Folder"), f.workspace, h("label", {class: "f"}, "Clone from git URL"), f.clone_url,
+    step("3", "Team repo", "tasks, personas, memory, reports", h("label", {class: "f"}, "Folder"), f.workspace, h("label", {class: "f"}, "Clone from git URL"), f.clone_url, h("div", {class: "xs muted", style: "margin-top:4px"}, "Use a ", h("b", {}, "private"), " repo — it holds personas, memory, tasks and your decisions. Nobody else needs access."),
       h("label", {class: "f row", style: "margin-top:10px"}, f.push, h("span", {}, "Push to the remote after every change"))),
     step("4", "Manager", "watches everyone and reports to you", h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Name"), f.manager_name), h("div", {}, h("label", {class: "f"}, "Role"), f.manager_role))),
     h("div", {class: "row"}, go_, err))));
@@ -679,37 +680,83 @@ function projectSheet(p = {}) {
 }
 
 // ------------------------------------------------------------------ team
+let DRAFTS = [];
 async function vTeam() {
   $("#main").style.padding = "";
-  const t = await api("/api/team");
-  const cards = t.members.map(m => {
-    const st = h("div", {class: "row"}, m.has_token ? badge("Checking Telegram…") : badge("Console only"));
-    if (m.has_token) api("/api/member_status", {id: m.id}).then(s => st.put(s.ok ? badge("@" + s.username, "accent") : badge("Bot token not working", "danger"),
-      s.ok ? badge(s.in_group ? "In the group" : "Not in the group", s.in_group ? "success" : "danger") : null,
-      s.ok && s.manager ? badge(s.reads_groups ? "Reads the group" : "Privacy ON → /setprivacy Disable", s.reads_groups ? "success" : "warning") : null)).catch(() => {});
-    return h("div", {class: "card"}, h("div", {class: "card-b"}, h("div", {class: "row", style: "flex-wrap:nowrap"}, avatar(m.name, "lg"), h("div", {class: "grow", style: "min-width:0"},
-        h("div", {class: "row"}, h("b", {style: "font-size:14px"}, m.name), m.manager ? badge("Manager", "info") : null), h("div", {class: "small muted"}, m.role))),
-      h("div", {class: "row", style: "margin:10px 0 8px"}, badge(m.persona_lines ? `Persona · ${m.persona_lines} lines` : "No persona"), m.skill_files ? badge(`${m.skill_files} skill files`) : null, m.projects.map(pid => h("span", {class: "badge outline click", onclick: () => openProject(pid)}, "# " + (projOf(pid)?.name || pid)))), st),
-      h("div", {class: "card-h", style: "border-top:1px solid var(--border);border-bottom:none"}, h("button", {class: "btn outline sm", onclick: () => { ROOM = m.id; go("chat"); }}, icon("chat"), "Chat"),
-        h("button", {class: "btn outline sm", onclick: () => memberSheet(m.id)}, "Profile"), h("button", {class: "btn ghost sm", onclick: () => newTaskSheet({owner: m.id})}, icon("plus"), "Task"), h("span", {class: "grow"}),
-        m.manager ? null : h("button", {class: "btn ghost sm", style: "color:var(--danger)", onclick: async () => { if (!confirm(`Remove ${m.name}? Their files stay in the team repo history.`)) return; await api("/api/remove", {id: m.id}); toast("Removed " + m.name, "warning"); await refresh(); }}, "Remove")));
-  });
-  const drafts = h("div", {class: "grid", style: "margin-top:12px"});
-  const pick = h("input", {type: "file", multiple: true, accept: ".skill,.zip,.md,.markdown,.txt", style: "display:none", onchange: e => handleFiles(e.target.files, drafts)});
-  const drop = h("div", {class: "drop"}, h("div", {class: "ico accent", style: "margin:0 auto 8px;width:36px;height:36px"}, icon("upload", "lg")), h("b", {}, "Drop persona files here"),
-    h("p", {class: "small muted", style: "margin:4px 0 12px"}, ".skill, .zip, SKILL.md or any .md · several at once · names and roles are read from each file · the whole package is kept in the team repo"),
-    h("div", {class: "row", style: "justify-content:center"}, pick, h("button", {class: "btn secondary", onclick: () => pick.click()}, "Choose files…"), h("button", {class: "btn ghost", onclick: () => addDraft({}, drafts)}, icon("plus"), "Add without a file")));
+  DRAFTS = [];
+  const grid = h("div", {class: "grid"}), head = h("div", {});
+  const loadCards = async () => { const t = await api("/api/team");
+    head.put(pageHeader("People", `${t.members.length} on the team · Telegram bots are optional — everyone can be reached in Chat.`));
+    grid.put(t.members.map(memberCard)); };
+  const drafts = h("div", {class: "grid", style: "margin-top:12px"}), bulk = h("div", {});
+  const ctx = {box: drafts, bulk, loadCards};
+  const pick = h("input", {type: "file", multiple: true, accept: ".skill,.zip,.md,.markdown,.txt", style: "display:none", onchange: e => { handleFiles([...e.target.files], ctx); e.target.value = ""; }});
+  const pickDir = h("input", {type: "file", webkitdirectory: true, multiple: true, style: "display:none", onchange: e => { handleFolder([...e.target.files].map(f => [f.webkitRelativePath || f.name, f]), ctx); e.target.value = ""; }});
+  const drop = h("div", {class: "drop"}, h("div", {class: "ico accent", style: "margin:0 auto 8px;width:36px;height:36px"}, icon("upload", "lg")), h("b", {}, "Drop your whole team here"),
+    h("p", {class: "small muted", style: "margin:4px 0 12px"}, "Many files at once, a folder with one sub-folder per person, or one .zip of everyone · .skill, .zip, SKILL.md or any .md · names and roles are read from each file"),
+    h("div", {class: "row", style: "justify-content:center"}, pick, pickDir, h("button", {class: "btn secondary", onclick: () => pick.click()}, "Choose files…"),
+      h("button", {class: "btn secondary", onclick: () => pickDir.click()}, icon("projects"), "Choose a folder…"), h("button", {class: "btn ghost", onclick: () => addDraft({}, ctx)}, icon("plus"), "Add without a file")));
   ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
-  drop.addEventListener("drop", e => handleFiles(e.dataTransfer.files, drafts));
-  $("#main").put(pageHeader("People", `${t.members.length} on the team · Telegram bots are optional — everyone can be reached in Chat.`), h("div", {class: "grid"}, cards),
-    h("h2", {class: "sec", style: "margin-top:24px"}, icon("plus"), "Add people"), drop, drafts);
+  drop.addEventListener("drop", async e => {
+    const entries = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+    if (entries.some(en => en.isDirectory)) { const files = []; for (const en of entries) await walkEntry(en, "", files); handleFolder(files, ctx); }
+    else handleFiles([...e.dataTransfer.files], ctx);
+  });
+  await loadCards();
+  $("#main").put(head, grid, h("h2", {class: "sec", style: "margin-top:24px"}, icon("plus"), "Add people"), drop, bulk, drafts);
 }
-async function handleFiles(files, box) {
-  for (const f of files) { const buf = new Uint8Array(await f.arrayBuffer()); let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-    try { addDraft(await api("/api/upload", {filename: f.name, data: btoa(bin)}), box); } catch (e) { toast(`${f.name}: ${e.message}`, "danger"); } }
+function memberCard(m) {
+  const st = h("div", {class: "row"}, m.has_token ? badge("Checking Telegram…") : badge("Console only"));
+  if (m.has_token) api("/api/member_status", {id: m.id}).then(s => st.put(s.ok ? badge("@" + s.username, "accent") : badge("Bot token not working", "danger"),
+    s.ok ? badge(s.in_group ? "In the group" : "Not in the group", s.in_group ? "success" : "danger") : null,
+    s.ok && s.manager ? badge(s.reads_groups ? "Reads the group" : "Privacy ON → /setprivacy Disable", s.reads_groups ? "success" : "warning") : null)).catch(() => {});
+  return h("div", {class: "card"}, h("div", {class: "card-b"}, h("div", {class: "row", style: "flex-wrap:nowrap"}, avatar(m.name, "lg"), h("div", {class: "grow", style: "min-width:0"},
+      h("div", {class: "row"}, h("b", {style: "font-size:14px"}, m.name), m.manager ? badge("Manager", "info") : null), h("div", {class: "small muted"}, m.role))),
+    h("div", {class: "row", style: "margin:10px 0 8px"}, badge(m.persona_lines ? `Persona · ${m.persona_lines} lines` : "No persona"), m.skill_files ? badge(`${m.skill_files} skill files`) : null, m.projects.map(pid => h("span", {class: "badge outline click", onclick: () => openProject(pid)}, "# " + (projOf(pid)?.name || pid)))), st),
+    h("div", {class: "card-h", style: "border-top:1px solid var(--border);border-bottom:none"}, h("button", {class: "btn outline sm", onclick: () => { ROOM = m.id; go("chat"); }}, icon("chat"), "Chat"),
+      h("button", {class: "btn outline sm", onclick: () => memberSheet(m.id)}, "Profile"), h("button", {class: "btn ghost sm", onclick: () => newTaskSheet({owner: m.id})}, icon("plus"), "Task"), h("span", {class: "grow"}),
+      m.manager ? null : h("button", {class: "btn ghost sm", style: "color:var(--danger)", onclick: async () => { if (!confirm(`Remove ${m.name}? Their files stay in the team repo history.`)) return; await api("/api/remove", {id: m.id}); toast("Removed " + m.name, "warning"); await refresh(); }}, "Remove")));
 }
-function addDraft(pre, box) {
+const b64 = async f => { const buf = new Uint8Array(await f.arrayBuffer()); let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000)); return btoa(bin); };
+const SKIP_DIR = /(^|\/)(\.git|node_modules|__pycache__|\.venv|__MACOSX)(\/|$)/;
+async function walkEntry(entry, prefix, out) {
+  if (entry.isFile) return new Promise(res => entry.file(f => { out.push([prefix + entry.name, f]); res(); }, () => res()));
+  if (!entry.isDirectory || SKIP_DIR.test(prefix + entry.name + "/")) return;
+  const reader = entry.createReader(); let batch;
+  do { batch = await new Promise(res => reader.readEntries(res, () => res([]))); for (const en of batch) await walkEntry(en, prefix + entry.name + "/", out); } while (batch.length);
+}
+async function handleFiles(files, ctx) {
+  let n = 0;
+  for (const f of files) { try { const r = await api("/api/upload", {filename: f.name, data: await b64(f)}); for (const it of r.items || [r]) { addDraft(it, ctx, true); n++; } } catch (e) { toast(`${f.name}: ${e.message}`, "danger"); } }
+  if (n) { toast(`${n} ${n === 1 ? "person" : "people"} read — check names and roles, then add`); drawBulk(ctx); }
+}
+async function handleFolder(pairs, ctx) {
+  pairs = pairs.filter(([p, f]) => !SKIP_DIR.test(p) && f.size < 5e6).slice(0, 1000);
+  if (!pairs.length) return toast("That folder has no usable files", "warning");
+  const name = pairs[0][0].split("/")[0];
+  toast(`Reading ${pairs.length} files from ${name}…`);
+  try { const files = await Promise.all(pairs.map(async ([path, f]) => ({path: path.split("/").slice(1).join("/") || path, data: await b64(f)})));
+    const r = await api("/api/upload_folder", {name, files}); r.items.forEach(it => addDraft(it, ctx, true));
+    toast(`${r.items.length} ${r.items.length === 1 ? "person" : "people"} found in ${name}`); drawBulk(ctx); }
+  catch (e) { toast(`${name}: ${e.message}`, "danger"); }
+}
+function drawBulk(ctx) {
+  const live = DRAFTS.filter(d => d.card.isConnected);
+  if (live.length < 2) return ctx.bulk.put();
+  const picked = new Set();
+  const chips = S.projects.length ? h("div", {class: "chipsel"}, S.projects.map(p => { const c = h("span", {class: "chip", onclick: () => { picked.has(p.id) ? picked.delete(p.id) : picked.add(p.id); c.classList.toggle("on"); }}, projMark(p, "xs"), p.name); return c; })) : null;
+  const go_ = h("button", {class: "btn primary"}, icon("check"), `Add all ${live.length}`), out = h("div", {class: "small muted"});
+  go_.onclick = async () => { go_.disabled = true; let ok = 0, bad = 0;
+    for (const d of DRAFTS.filter(x => x.card.isConnected)) { out.textContent = `Adding ${d.name()}…`; (await d.save({quiet: true, projects: [...picked]})) ? ok++ : bad++; }
+    out.textContent = ""; toast(`${ok} added${bad ? ` · ${bad} need a fix (see the red notes)` : ""}`, bad ? "warning" : "success");
+    S = await api("/api/state"); await ctx.loadCards(); drawBulk(ctx); if (!bad) { VIEW = "team"; boot(); } };
+  ctx.bulk.put(h("div", {class: "card bulkbar"}, h("div", {class: "card-b row"}, h("div", {class: "grow", style: "min-width:220px"}, h("b", {}, `${live.length} people ready`),
+      h("div", {class: "xs muted"}, "Check the names and roles below. Telegram tokens are optional — add them later from each profile.")),
+    chips ? h("div", {style: "min-width:220px"}, h("div", {class: "xs muted", style: "margin-bottom:6px"}, "Put everyone on"), chips) : null, go_, out)));
+}
+function addDraft(pre, ctx, batch = false) {
+  const box = ctx.box;
   const d = {token: "", username: "", inGroup: false, dm: false, timer: null};
   const name = h("input", {value: pre.name || "", placeholder: "Name"}), role = h("input", {value: pre.role || "", placeholder: "Role"}),
     picked = new Set(pre.project ? [pre.project] : []),
@@ -730,17 +777,20 @@ function addDraft(pre, box) {
     s1.put(h("span", {class: "dot at-risk"}), "Checking the token…"); const r = await api("/api/token", {token: t}).catch(e => ({ok: false, error: e.message})); if (my !== seq) return;
     if (!r.ok) { s1.put(h("span", {class: "dot blocked"}), "Token didn't work"); err.textContent = r.error; return; }
     d.username = r.username; mark(s1, true, "Connected: ", h("b", {}, "@" + r.username)); poll(); d.timer = setInterval(poll, 3000); timers.push(d.timer); });
-  const card = h("div", {class: "card"}, h("div", {class: "card-h"}, avatar(pre.name || "?", "sm"), h("div", {class: "grow", style: "min-width:0"}, h("h3", {}, pre.name || "New person"), pre.source ? h("div", {class: "small muted mono"}, pre.source) : null), pre.lines ? badge(`${pre.lines} lines · ${pre.files} file${pre.files === 1 ? "" : "s"}`, "success") : badge("Persona generated")),
+  const card = h("div", {class: "card"}, h("div", {class: "card-h"}, avatar(pre.name || "?", "sm"), h("div", {class: "grow", style: "min-width:0"}, h("h3", {}, pre.name || "New person"), pre.source ? h("div", {class: "small muted mono ellip"}, pre.source) : null), pre.lines ? badge(`${pre.lines} lines · ${pre.files} file${pre.files === 1 ? "" : "s"}`, "success") : badge("Persona generated")),
     h("div", {class: "card-b"}, h("div", {class: "two"}, h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Name"), name), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Role"), role)),
       h("label", {class: "f"}, "Projects"), projects, h("label", {class: "f"}, "Telegram bot"), token,
       h("div", {class: "xs muted", style: "margin-top:4px"}, "Create one: ", h("a", {href: "https://t.me/BotFather", target: "_blank", rel: "noopener"}, "@BotFather"), " → /newbot → copy the token. Skip it to chat only here."),
-      h("ul", {class: "steps"}, s1, s2, s3), err, h("div", {class: "row"}, save, h("span", {class: "grow"}), h("button", {class: "btn ghost sm", onclick: () => { stop(); card.remove(); }}, "Discard"))));
-  save.onclick = async () => { err.textContent = ""; if (d.token && !(d.inGroup && d.dm) && !confirm("Telegram group/DM isn't confirmed yet. Save anyway?")) return;
+      h("ul", {class: "steps"}, s1, s2, s3), err, h("div", {class: "row"}, save, h("span", {class: "grow"}), h("button", {class: "btn ghost sm", onclick: () => { stop(); card.remove(); drawBulk(ctx); }}, "Discard"))));
+  const doSave = async (opts = {}) => { err.textContent = "";
+    if (!opts.quiet && d.token && !(d.inGroup && d.dm) && !confirm("Telegram group/DM isn't confirmed yet. Save anyway?")) return false;
     save.disabled = true;
-    try { await api("/api/add", {name: name.value, role: role.value, token: d.token, upload_id: pre.upload_id || "", projects: [...picked]});
-      stop(); card.remove(); toast(`${name.value} joined the team`); S = await api("/api/state"); if (!box.children.length) { VIEW = "team"; boot(); } }
-    catch (e) { err.textContent = e.message; save.disabled = false; } };
-  box.append(card); (!pre.name ? name : !pre.role ? role : token).focus();
+    try { await api("/api/add", {name: name.value, role: role.value, token: d.token, upload_id: pre.upload_id || "", projects: [...new Set([...picked, ...(opts.projects || [])])]});
+      stop(); card.remove(); if (!opts.quiet) { toast(`${name.value} joined the team`); S = await api("/api/state"); await ctx.loadCards(); drawBulk(ctx); if (!box.children.length) { VIEW = "team"; boot(); } } return true; }
+    catch (e) { err.textContent = e.message; save.disabled = false; return false; } };
+  save.onclick = () => doSave();
+  DRAFTS.push({card, save: doSave, name: () => name.value || "someone"});
+  box.append(card); if (!batch) (!pre.name ? name : !pre.role ? role : token).focus();
 }
 async function memberSheet(id) {
   const m = await api("/api/member?id=" + encodeURIComponent(id));

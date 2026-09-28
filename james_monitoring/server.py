@@ -693,6 +693,8 @@ def make_handler(app: App, key: str):
                     "/api/settings": lambda: app.settings_save(b),
                     "/api/upload": lambda: a.upload(str(b.get("filename", "SKILL.md")),
                                                     base64.b64decode(b.get("data", ""))),
+                    "/api/upload_folder": lambda: a.upload_folder({str(f.get("path", "")): base64.b64decode(f.get("data", ""))
+                                                                   for f in b.get("files") or []}, str(b.get("name", "folder"))),
                     "/api/token": lambda: a.check_token(str(b.get("token", "")).strip()),
                     "/api/links": lambda: a.check_links(str(b.get("token", "")).strip(), b.get("name", ""),
                                                         b.get("role", "")),

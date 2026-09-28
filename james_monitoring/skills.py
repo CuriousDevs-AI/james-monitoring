@@ -118,6 +118,37 @@ def from_bytes(filename: str, data: bytes) -> ImportedSkill:
     return _from_files({name if name.lower().endswith(".md") else "SKILL.md": data}, filename)
 
 
+def split_packages(files: dict[str, bytes], source: str) -> list[ImportedSkill]:
+    """Several people in one upload: a zip or folder with one SKILL.md/persona.md per sub-folder,
+    or just a bunch of .md files (one persona each)."""
+    files = {k: v for k, v in files.items() if _safe(k)}
+    mains = sorted(k for k in files if k.rsplit("/", 1)[-1].lower() in ("skill.md", "persona.md"))
+    roots = {k.rsplit("/", 1)[0] + "/" if "/" in k else "" for k in mains}
+    if len(roots) > 1 and "" not in roots:
+        out = []
+        for root in sorted(roots):
+            pkg = {k: v for k, v in files.items() if k.startswith(root)}
+            out.append(_from_files(pkg, f"{source}:{root.rstrip('/').rsplit('/', 1)[-1]}"))
+        return out
+    mds = [k for k in files if k.lower().endswith(".md")]
+    if not mains and len(mds) > 1:
+        return [_from_files({k.rsplit("/", 1)[-1]: files[k]}, k.rsplit("/", 1)[-1]) for k in sorted(mds)]
+    return [_from_files(files, source)]
+
+
+def many_from_bytes(filename: str, data: bytes) -> list[ImportedSkill]:
+    """Like from_bytes, but a zip holding several people gives one ImportedSkill per person."""
+    if len(data) > MAX_BYTES * 4:
+        raise SkillError(f"{filename} is too large")
+    if zipfile.is_zipfile(io.BytesIO(data)):
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            infos = [i for i in z.infolist() if not i.is_dir()][:MAX_FILES * 5]
+            if sum(i.file_size for i in infos) > MAX_BYTES * 8:
+                raise SkillError(f"{filename} unpacks too large")
+            return split_packages({i.filename: z.read(i) for i in infos}, filename)
+    return [from_bytes(filename, data)]
+
+
 def from_path(path: str) -> ImportedSkill:
     p = Path(path.strip().strip("'\"")).expanduser()
     if p.is_dir():

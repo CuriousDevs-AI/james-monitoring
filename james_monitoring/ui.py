@@ -60,13 +60,23 @@ class TeamAdmin:
                 "members": members, "projects": sorted(cfg.projects)}
 
     # -- persona upload ------------------------------------------------------------------
-    def upload(self, filename: str, data: bytes) -> dict:
-        sk = skillmod.from_bytes(filename, data)
+    def _keep(self, sk) -> dict:
         uid = uuid.uuid4().hex
         self.uploads[uid] = sk
         return {"upload_id": uid, "name": sk.suggested_name(), "role": sk.suggested_role(),
-                "lines": len(sk.persona.splitlines()), "files": len(sk.files), "source": filename,
+                "lines": len(sk.persona.splitlines()), "files": len(sk.files), "source": sk.source,
                 "preview": sk.persona[:600]}
+
+    def upload(self, filename: str, data: bytes) -> dict:
+        """One file. A zip with several people returns the first as usual plus all of them in "items"."""
+        items = [self._keep(sk) for sk in skillmod.many_from_bytes(filename, data)]
+        return {**items[0], "items": items}
+
+    def upload_folder(self, files: dict[str, bytes], name: str = "folder") -> dict:
+        """A whole folder picked in the browser: one person per sub-folder with a SKILL.md (or per .md file)."""
+        if not files:
+            raise ValueError("The folder is empty.")
+        return {"items": [self._keep(sk) for sk in skillmod.split_packages(files, name)]}
 
     # -- telegram checks -----------------------------------------------------------------
     def check_token(self, token: str) -> dict:
