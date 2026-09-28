@@ -4,7 +4,10 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
     restart: unless-stopped            # the team never stops: restarts on crash and on reboot
+    ports:
+      - "127.0.0.1:8765:8765"          # the console, on this machine only (use an SSH tunnel to reach it remotely)
     volumes:
       - ./data:/data                   # config.yaml, .env, team-workspace/
     environment:
-      TZ: ${TZ:-UTC}                # the team's timezone lives in config.yaml
+      TZ: ${TZ:-UTC}                   # the team's timezone lives in config.yaml
+      JM_CONSOLE_KEY: ${JM_CONSOLE_KEY:?set JM_CONSOLE_KEY — the console key in the link}

@@ -24,6 +24,16 @@ REVIEW_WAIT_DAYS = 2
 INCIDENT_AFTER_FAILS = 3
 
 
+def on_owner(cfg: Config, text: str) -> bool:
+    """Is this "blocked on" about the founder? Their id, full name or first name, as whole words ("Al" never matches
+    "approval") — the same rule the console uses."""
+    import re
+    first = cfg.owner_name.split()[0].lower() if cfg.owner_name.split() else ""
+    names = {cfg.owner_key, cfg.owner_name.lower()} | ({first} if len(first) >= 3 else set())
+    pat = r"\b(" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True) if n) + r")\b"
+    return bool(re.search(pat, text or "", re.I)) and "approval ask-" not in (text or "").lower()
+
+
 def team_status_lines(cfg: Config, tasks: TaskStore) -> list[tuple[str, str, str]]:
     rows = []
     for m in cfg.workers:                              # the personal assistant's work is private
@@ -85,8 +95,7 @@ def build_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -
     blocked = [t for t in open_tasks if t.status == "blocked"]
     overdue = [t for t in open_tasks if t.overdue(tz) and t.status != "blocked"]
     pend = asks.pending()
-    owner_blocks = [t for t in blocked if cfg.owner_name.lower() in t.blocked_on.lower()
-                    or cfg.owner_key in t.blocked_on.lower()]
+    owner_blocks = [t for t in blocked if on_owner(cfg, t.blocked_on)]
     p0 = sorted([t for t in open_tasks if t.priority == "P0"], key=lambda t: (t.due(tz) or d + timedelta(days=999)))
 
     if pend or owner_blocks or open_decisions(ws):
@@ -206,9 +215,9 @@ def checks(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -> list
         since = t.date_field("status_since") or d
         if t.status == "blocked":
             if (d - since).days >= cfg.blocked_escalate_days:
-                on_owner = cfg.owner_key in t.blocked_on.lower() or cfg.owner_name.lower() in t.blocked_on.lower()
+                owners = on_owner(cfg, t.blocked_on)
                 alerts.append(Alert(f"blocked:{t.id}", f"🚧 {t.id} ({t.owner}) blocked {(d - since).days} days — "
-                                                        f"{t.blocked_on}", nudge="" if on_owner else t.owner, task=t.id))
+                                                        f"{t.blocked_on}", nudge="" if owners else t.owner, task=t.id))
         elif t.status == "review":
             if (d - since).days >= REVIEW_WAIT_DAYS:
                 alerts.append(Alert(f"review:{t.id}", f"👀 {t.id} ({t.owner}) has waited {(d - since).days} days "

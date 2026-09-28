@@ -140,7 +140,7 @@ class Hub:
             return await self.successor.ask_decided(ask, result, via)
         for t in list(self.transports):
             fn = getattr(t, "ask_decided", None)
-            if fn and t.name != via and self.delivers_to(ask.requester, t.name):
+            if fn and t.name != via:                      # each channel only updates cards it showed
                 try:
                     await fn(ask, result)
                 except Exception:  # noqa: BLE001

@@ -464,7 +464,7 @@ def test_pause_a_project_queues_its_work_and_resume_answers_it(app):
     rt.llm.push({"reply": "Hero is half done.", "actions": []})
     r = app.project_pause("site", False)
     assert "running again" in r["message"] and "1 waiting message" in r["message"]
-    settle(app, lambda: any(m["text"].startswith("(queued while I was Site is paused)") and m["who"] == "sam"
+    settle(app, lambda: any(m["text"].startswith("(answering what came in while Site was paused)") and m["who"] == "sam"
                             for m in app.chat.since("p-site", -1)))       # answered after the resume (a reload)
     assert not app.rt.queued()
 
@@ -581,3 +581,30 @@ def test_a_hung_turn_is_stopped_without_blocking_the_next(app, monkeypatch):
     app.chat_send("riya", "hello?")
     settle(app, lambda: any("I got stuck" in m["text"] for m in app.chat.since("riya", -1)))
     assert app.rt.ws.state().get("stuck") and "riya" not in app.rt.turns
+
+
+def test_a_guessed_task_id_in_a_reply_is_corrected(app):
+    app.rt.llm.push({"reply": "Created T-009 for the hero.", "actions": [{"type": "create_task", "title": "Hero",
+                                                                          "owner": "riya"}]})
+    app.chat_send("riya", "make a task for the hero")
+    msg = settle(app, lambda: [m for m in app.chat.since("riya", -1) if m["who"] == "riya"])[0]
+    assert "T-009" not in msg["text"] and msg["text"].startswith("Created T-001")
+
+
+def test_an_approval_asked_in_a_project_room_shows_there(app):
+    app.project_settings_save({"id": "site", "permissions": {"create_task": "red"}})
+    app.rt.llm.push({"reply": "Needs your OK.", "actions": [{"type": "create_task", "title": "FAQ copy", "owner": "riya"}]})
+    app.chat_send("p-site", "@riya add an FAQ task")
+    card = settle(app, lambda: [m for m in app.chat.since("p-site", -1) if m.get("kind") == "ask"])[0]
+    ask_id = card["ask_id"]
+    app.decide(ask_id, "approved")
+    assert any(t.title == "FAQ copy" for t in app.rt.tasks.all())
+
+
+def test_report_sees_a_block_on_the_founders_first_name(app):
+    t = app.task_create({"title": "Waitlist", "owner": "riya", "notify": False})
+    app.rt.tasks.set_status(t["id"], "blocked", by="riya", blocked_on="Maria — which email provider")
+    from james_monitoring.monitor import build_report, on_owner
+    rep = build_report(app.rt.cfg, app.rt.ws, app.rt.tasks, app.rt.asks)
+    assert "1 block(s) waiting on Maria Lopez" in rep and f"Unblock {t['id']}" in rep
+    assert not on_owner(app.rt.cfg, "Mariana from marketing — the copy")     # whole words only
