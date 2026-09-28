@@ -60,8 +60,10 @@ async def test_pause_and_budget(rt):
 
 async def test_bad_action_is_reported_not_crashing(rt):
     rt.llm.push({"reply": "Starting.", "actions": [{"type": "update_task", "id": "T-999", "status": "doing"}]})
+    rt.llm.push({"reply": "There is no T-999 — which task did you mean?", "actions": []})     # the repair round
     out = await rt.dispatch("sofia", Event("dm", "start", sender="pankaj"))
-    assert "Starting." in out and "⚠️ update_task: No task T-999" in out
+    assert "which task did you mean" in out and "⚠️ update_task: No task T-999" in out
+    assert "Some actions FAILED" in rt.llm.calls[-1][1][-1]["content"]        # it was told what failed
 
 
 async def test_review_notifies_owner(rt):

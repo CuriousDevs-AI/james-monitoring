@@ -54,7 +54,12 @@ class Scheduler:
         if self._first_start_catchup(state, at):
             return []
         done = []
-        for job in due_jobs(cfg, state, at):
+        try:
+            jobs = due_jobs(cfg, state, at)
+        except (ValueError, TypeError):
+            log.exception("schedule times are invalid — only the hourly checks run")
+            jobs = ["checks"]
+        for job in jobs:
             try:
                 if job == "report":
                     self._mark("report", at.date().isoformat())
@@ -62,9 +67,15 @@ class Scheduler:
                 elif job.startswith("work:"):
                     self._mark(job, at.date().isoformat())
                     if not self.rt.paused("all"):
-                        digest = await self.rt.run_work_session()
-                        if digest and self.on_digest:
-                            await self.on_digest(digest)
+                        # In the background: a long session never holds up checks, the report or the next tick.
+                        async def session():
+                            try:
+                                digest = await self.rt.run_work_session()
+                                if digest and self.on_digest:
+                                    await self.on_digest(digest)
+                            except Exception:  # noqa: BLE001
+                                log.exception("work session failed")
+                        self.rt._spawn(session())
                 elif job == "checks":
                     self._mark("checks", at.isoformat(timespec="seconds"))
                     await self.rt.run_checks()

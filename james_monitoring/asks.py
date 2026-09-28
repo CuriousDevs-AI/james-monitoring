@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from .fileio import atomic_write
 from .mdoc import MDoc
 from .util import now
 
@@ -15,6 +16,11 @@ DEFAULTS = ["wait", "approve", "reject"]
 
 class AskError(Exception):
     pass
+
+
+def _clean(text) -> str:
+    from .tasks import clean_text
+    return clean_text(text)
 
 
 @dataclass
@@ -54,8 +60,8 @@ class Ask:
             lines.append(details[:1500])
         if m.get("task"):
             lines.append(f"Task: {m['task']}")
-        if m.get("recommendation"):
-            lines.append(f"{manager} recommends: {m['recommendation']}")
+        if m.get("recommendation"):          # written by whoever asks — say so, don't dress it up as the manager's
+            lines.append(f"{str(m.get('from', '')).title()} suggests: {m['recommendation']}")
         lines.append(f"If no reply: {default}")
         return "\n".join(lines)
 
@@ -87,18 +93,33 @@ class AskStore:
                 return a
         raise AskError(f"No ask {ask_id}")
 
+    def find_pending(self, requester: str, summary: str, task: str = "") -> Ask | None:
+        """The same request, still waiting (so a work session doesn't file it again every time)."""
+        key = " ".join(summary.lower().split())
+        for a in self.pending():
+            if a.requester == requester and " ".join(a.summary.lower().split()) == key \
+                    and str(a.doc.meta.get("task") or "") == (task or ""):
+                return a
+        return None
+
     def create(self, *, requester: str, summary: str, details: str = "", level: str = "red",
-               task: str = "", default: str = "wait", hours: int | None = None, kind: str = "general",
+               task: str = "", default: str = "wait", hours: float | None = None, kind: str = "general",
                payload: dict | None = None, recommendation: str = "") -> Ask:
         with self._lock:
             level = level if level in LEVELS else "red"
             default = default if default in DEFAULTS else "wait"
             if level == "red":
                 default = "wait"       # 🔴 never auto-decides: money, public, prod, deletes, legal
-            nums = [int(a.id.split("-")[1]) for a in self.all()]
+            try:
+                hours = float(hours) if hours not in (None, "") else float(self.default_hours)
+            except (TypeError, ValueError):
+                hours = float(self.default_hours)
+            hours = min(max(hours, 1.0), 24 * 14)          # at least an hour to answer, at most two weeks
+            import re
+            nums = [int(m.group(1)) for p in self.dir.glob("ASK-*.md") if (m := re.match(r"ASK-(\d+)", p.name))]
             aid = f"ASK-{(max(nums) + 1) if nums else 1:03d}"
             created = now(self.tz)
-            deadline = created + timedelta(hours=hours or self.default_hours)
+            deadline = created + timedelta(hours=hours)
             doc = MDoc(meta={
                 "id": aid, "from": requester, "summary": summary.strip(), "level": level, "kind": kind,
                 "status": "pending", "task": task or "", "default": default,
@@ -106,9 +127,9 @@ class AskStore:
                 "created": created.isoformat(timespec="minutes"),
                 "deadline": deadline.isoformat(timespec="minutes"),
                 "payload": payload or {},
-            }, sections={"Details": details.strip(), "Outcome": ""})
+            }, sections={"Details": _clean(details), "Outcome": ""})
             a = Ask(self.dir / f"{aid}.md", doc)
-            a.path.write_text(doc.render())
+            atomic_write(a.path, doc.render())
             return a
 
     def decide(self, ask_id: str, decision: str, by: str, note: str = "") -> Ask:
@@ -121,8 +142,8 @@ class AskStore:
             a.doc.meta["status"] = decision
             a.doc.meta["decided_by"] = by
             a.doc.meta["decided_at"] = now(self.tz).isoformat(timespec="minutes")
-            a.doc.add_line("Outcome", f"- {decision} by {by}" + (f": {note}" if note else ""))
-            a.path.write_text(a.doc.render())
+            a.doc.add_line("Outcome", f"- {decision} by {by}" + (f": {' '.join(str(note).split())}" if note else ""))
+            atomic_write(a.path, a.doc.render())
             return a
 
     def due_for_default(self) -> list[Ask]:

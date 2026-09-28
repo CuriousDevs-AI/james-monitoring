@@ -2,6 +2,7 @@
 
     anthropic  -> Claude via the Anthropic API (API key)
     claude-code -> Claude via the Claude Code CLI — works with a Claude Pro/Max subscription, no API key
+    codex-cli  -> Codex via the Codex CLI — works with a ChatGPT subscription, no API key
     openai     -> any OpenAI-compatible endpoint: OpenAI / Codex models, Ollama, OpenRouter, vLLM, LM Studio
     fake       -> deterministic replies for tests and dry runs
 """
@@ -18,10 +19,17 @@ class LLMResult:
     text: str
     input_tokens: int = 0
     output_tokens: int = 0
+    truncated: bool = False          # the model hit its output limit: the reply is cut off
+    cached_tokens: int = 0           # input tokens served from the provider's prompt cache (cheaper)
 
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
+
+    @property
+    def billable_tokens(self) -> int:
+        """What counts against the daily budget: cached input costs about a tenth of fresh input."""
+        return self.input_tokens - self.cached_tokens + self.cached_tokens // 10 + self.output_tokens
 
 
 class LLM(Protocol):
@@ -47,7 +55,10 @@ def make_llm(cfg: LLMConfig) -> LLM:
     if p in ("claude-code", "claude_code", "claude-cli", "subscription"):
         from .claude_code_llm import ClaudeCodeLLM
         return ClaudeCodeLLM(cfg)
+    if p in ("codex-cli", "codex_cli", "chatgpt"):
+        from .codex_cli_llm import CodexCLILLM
+        return CodexCLILLM(cfg)
     if p == "fake":
         from .fake import FakeLLM
         return FakeLLM()
-    raise LLMError(f"Unknown llm.provider `{cfg.provider}` (use anthropic | claude-code | openai | fake)")
+    raise LLMError(f"Unknown llm.provider `{cfg.provider}` (use claude-code | codex-cli | anthropic | openai | fake)")

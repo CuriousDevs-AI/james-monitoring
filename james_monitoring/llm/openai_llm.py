@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import re
+
 from ..config import LLMConfig
 from . import LLMError, LLMResult
+
+# Reasoning models (o1, o3, o4-mini, gpt-5…) take max_completion_tokens and only their default temperature.
+_REASONING = re.compile(r"^(o\d|gpt-5)", re.I)
 
 
 class OpenAILLM:
@@ -17,16 +22,46 @@ class OpenAILLM:
             raise LLMError("llm.model is empty — set a model id in config.yaml")
         self.client = openai.OpenAI(api_key=cfg.api_key or "not-needed", base_url=cfg.base_url or None)
         self.cfg = cfg
+        self.reasoning = bool(_REASONING.match(cfg.model.split("/")[-1]))
+        self.json_mode = True                    # switched off if the endpoint doesn't support it
+
+    def _kwargs(self) -> dict:
+        kw: dict = {"model": self.cfg.model}
+        if self.reasoning:
+            kw["max_completion_tokens"] = self.cfg.max_tokens
+        else:
+            kw["max_tokens"] = self.cfg.max_tokens
+            kw["temperature"] = self.cfg.temperature
+        if self.json_mode:
+            kw["response_format"] = {"type": "json_object"}
+        return kw
 
     def complete(self, system: str, messages: list[dict]) -> LLMResult:
-        try:
-            r = self.client.chat.completions.create(
-                model=self.cfg.model, max_tokens=self.cfg.max_tokens, temperature=self.cfg.temperature,
-                messages=[{"role": "system", "content": system}, *messages],
-            )
-        except Exception as e:
-            raise LLMError(f"OpenAI-compatible call failed: {e}") from e
-        text = r.choices[0].message.content or ""
+        msgs = [{"role": "system", "content": system},
+                *({"role": m["role"], "content": str(m.get("content") or "") or "(empty)"} for m in messages)]
+        for _attempt in range(3):
+            try:
+                r = self.client.chat.completions.create(messages=msgs, **self._kwargs())
+                break
+            except Exception as e:
+                err = str(e)
+                # Adapt once to what this endpoint/model accepts, then retry.
+                if "max_completion_tokens" in err and not self.reasoning:
+                    self.reasoning = True
+                    continue
+                if "response_format" in err and self.json_mode:
+                    self.json_mode = False
+                    continue
+                if "temperature" in err and not self.reasoning:
+                    self.reasoning = True
+                    continue
+                raise LLMError(f"OpenAI-compatible call failed: {e}") from e
+        else:  # pragma: no cover
+            raise LLMError("OpenAI-compatible call failed after adapting parameters")
+        choice = r.choices[0]
         u = getattr(r, "usage", None)
-        return LLMResult(text=text, input_tokens=getattr(u, "prompt_tokens", 0) or 0,
-                         output_tokens=getattr(u, "completion_tokens", 0) or 0)
+        details = getattr(u, "prompt_tokens_details", None)
+        return LLMResult(text=choice.message.content or "", input_tokens=getattr(u, "prompt_tokens", 0) or 0,
+                         output_tokens=getattr(u, "completion_tokens", 0) or 0,
+                         truncated=getattr(choice, "finish_reason", "") == "length",
+                         cached_tokens=int(getattr(details, "cached_tokens", 0) or 0) if details else 0)

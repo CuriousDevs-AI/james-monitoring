@@ -52,4 +52,5 @@ async def test_work_session_moves_open_tasks_only(rt):
     digest = await rt.run_work_session()
     assert "Sofia (T-001): Drafted the pricing page copy" in digest
     assert "Marcus" not in digest                                        # paused
-    assert len(rt.llm.calls) == 1                                        # James and idle people cost nothing
+    assert len(rt.llm.calls) == 2                                        # Sofia + James's round; idle people cost nothing
+    assert "James (round)" in digest and "Manager's round" in rt.llm.calls[-1][1][-1]["content"]

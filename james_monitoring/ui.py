@@ -11,6 +11,7 @@ import yaml
 
 from . import skills as skillmod
 from .config import load_config
+from .fileio import path_lock
 from .setup import remove_member, scaffold, slug
 
 
@@ -132,7 +133,7 @@ class TeamAdmin:
         name, role = name.strip(), role.strip()
         if not name or not role:
             raise ValueError("Name and role are required.")
-        with self.lock:
+        with self.lock, path_lock(self.cfg_path):
             raw = self.raw()
             mid = slug(name)
             taken = {str(m.get("id")).lower() for m in raw.get("team", [])}

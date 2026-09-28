@@ -13,9 +13,11 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from .asks import Ask, AskError, AskStore
+from .chat import BACKCHANNEL, PROJECT_ROOM, TEAM_ROOM, ChatStore
 from .config import Config, Member
 from .executor import Executor, ExecutorError
-from .llm import LLM, LLMError
+from .fileio import atomic_write
+from .llm import LLM, LLMError, make_llm
 from .monitor import build_report, checks, team_status_lines, write_report
 from .prompts import build_system
 from .tasks import TASK_ID, TaskError, TaskStore
@@ -27,6 +29,11 @@ log = logging.getLogger("jm.runtime")
 MAX_READ_ROUNDS = 2
 MAX_FILE_CHARS = 60_000
 READABLE_DIRS = ("docs", "tasks", "reports", "team", "asks", "decisions")
+HISTORY_TURNS = 8                 # own recent exchanges per channel (the room transcript adds everyone else)
+ROOM_CONTEXT = 16                 # recent messages of the current room shown to the agent
+ELSEWHERE = 4                     # recent messages from each other room the agent is part of
+ELSEWHERE_HOURS = 72
+NO_GATE = {"ask_permission", "remember", "notify_owner", "read_file"}   # never need approval
 
 
 # -- transport interface --------------------------------------------------------
@@ -62,32 +69,136 @@ class Event:
     task: str = ""
     meta: dict = field(default_factory=dict)
     project: str = ""            # set when the message comes from a project room
+    room: str = ""               # chat room it came from (see chat.py); derived when empty
+
+
+_FILE_BLOCK = re.compile(r"<<<FILE[ \t]+(\S+)[ \t]*>>>[ \t]*\n(.*?)\n?<<<END(?:[ \t]+FILE)?>>>", re.S)
+_STR_FIELDS = ("title", "owner", "text", "summary", "details", "note", "path", "id", "task", "project", "to",
+               "description", "log", "output", "blocked_on", "instructions", "recommendation", "goal", "due",
+               "priority", "status", "level", "default", "why")
+
+
+@dataclass
+class Parsed:
+    reply: str
+    actions: list[dict]
+    ok: bool                     # a JSON object was found (False: plain text or a cut-off reply)
+
+
+def parse_reply(text: str) -> Parsed:
+    """Tolerant extraction of {"reply", "actions"}.
+
+    - JSON inside prose or code fences, or followed by more text, is found.
+    - Long documents can come *after* the JSON as <<<FILE docs/x.md>>> … <<<END>>> blocks, so a big file never
+      breaks the JSON. A write_file without content takes its block; a block without an action is saved anyway.
+    - A reply cut off mid-JSON still yields its "reply" text (ok=False, so the caller can ask again)."""
+    files: dict[str, str] = {}
+
+    def keep(m):
+        files[m.group(1).strip().lstrip("/")] = m.group(2)
+        return ""
+    t = _FILE_BLOCK.sub(keep, text or "").strip()
+    t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t, flags=re.S).strip()
+    obj = None
+    dec = json.JSONDecoder()
+    for i in [0] + [k for k, c in enumerate(t) if c == "{"][:20]:
+        try:
+            cand, _ = dec.raw_decode(t[i:].lstrip())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(cand, dict) and ("reply" in cand or "actions" in cand):
+            obj = cand
+            break
+    if obj is None:
+        m = re.search(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)', t)
+        if m and t.lstrip().startswith("{"):
+            try:
+                salvaged = json.loads('"' + m.group(1) + '"')
+            except json.JSONDecodeError:
+                salvaged = m.group(1)
+            return Parsed(salvaged.strip(), _file_actions(files, []), False)
+        return Parsed(t, _file_actions(files, []), False)
+    actions = obj.get("actions") or []
+    if not isinstance(actions, list):
+        actions = []
+    actions = [a for a in actions if isinstance(a, dict) and a.get("type")]
+    return Parsed(str(obj.get("reply") or "").strip(), _file_actions(files, actions), True)
+
+
+def _norm_doc(path: str) -> str:
+    path = (path or "").strip().lstrip("/")
+    return path if path.startswith("docs/") else "docs/" + path
+
+
+def _file_actions(files: dict[str, str], actions: list[dict]) -> list[dict]:
+    if not files:
+        return actions
+    by_path = {_norm_doc(k): v for k, v in files.items()}
+    used = set()
+    for a in actions:
+        if a.get("type") == "write_file" and not a.get("content"):
+            key = _norm_doc(str(a.get("path") or ""))
+            if key in by_path:
+                a["content"] = by_path[key]
+                used.add(key)
+        elif a.get("type") == "write_file":
+            used.add(_norm_doc(str(a.get("path") or "")))
+    return actions + [{"type": "write_file", "path": k, "content": v} for k, v in by_path.items() if k not in used]
 
 
 def parse_model_output(text: str) -> tuple[str, list[dict]]:
-    """Tolerant JSON extraction: models sometimes wrap JSON in prose or code fences."""
-    t = text.strip()
-    t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t, flags=re.S).strip()
-    candidates = [t]
-    start, end = t.find("{"), t.rfind("}")
-    if start != -1 and end > start:
-        candidates.append(t[start:end + 1])
-    for c in candidates:
-        try:
-            obj = json.loads(c)
-        except json.JSONDecodeError:
+    p = parse_reply(text)
+    return p.reply, p.actions
+
+
+def normalize_action(a: dict) -> dict:
+    """Models get types wrong ("hours": "24", "title": null, done_means as one string). Fix what can be fixed;
+    anything else is reported for that one action — never for the whole turn."""
+    out: dict = {"type": str(a.get("type", "")).strip().lower()}
+    for k, v in a.items():
+        if k == "type" or v is None:
             continue
-        if isinstance(obj, dict):
-            reply = str(obj.get("reply") or "").strip()
-            actions = obj.get("actions") or []
-            if not isinstance(actions, list):
-                actions = []
-            return reply, [a for a in actions if isinstance(a, dict) and a.get("type")]
-    return text.strip(), []
+        if k in _STR_FIELDS:
+            v = v if isinstance(v, str) else (json.dumps(v) if isinstance(v, (dict, list)) else str(v))
+            v = v.strip()
+            if k in ("priority",):
+                v = v.upper()
+            if k in ("status", "level", "default", "owner", "to"):
+                v = v.lower().lstrip("@")
+            if v:
+                out[k] = v
+        elif k == "content":
+            out[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, indent=2)
+        elif k == "done_means":
+            items = v if isinstance(v, list) else re.split(r"\n|;|\u2022", str(v))
+            items = [re.sub(r"^\s*(?:[-*]|\[[ x]\])\s*", "", str(x)).strip() for x in items]
+            out[k] = [x for x in items if x]
+        elif k == "hours":
+            try:
+                out[k] = float(v)
+            except (TypeError, ValueError):
+                pass
+        else:
+            out[k] = v
+    return out
+
+
+def _compact(actions: list[dict]) -> list[dict]:
+    """Actions as kept in history: file bodies shortened so history stays small."""
+    out = []
+    for a in actions:
+        a = dict(a)
+        if isinstance(a.get("content"), str) and len(a["content"]) > 300:
+            a["content"] = a["content"][:300] + f"… ({len(a['content'])} chars, saved)"
+        out.append(a)
+    return out
 
 
 class Runtime:
-    def __init__(self, cfg: Config, llm: LLM, bus: Bus | None = None, ws: Workspace | None = None):
+    def __init__(self, cfg: Config, llm: LLM, bus: Bus | None = None, ws: Workspace | None = None,
+                 shared: "Runtime | None" = None):
+        """`shared`: the runtime this one replaces (a reload). Per-person locks and background work carry over,
+        so nobody handles two messages at once while the old runtime finishes what it started."""
         self.cfg = cfg
         self.llm = llm
         self.bus: Bus = bus or ConsoleBus()
@@ -97,9 +208,25 @@ class Runtime:
         self.tasks = TaskStore(self.ws.root, cfg.timezone, owner_id=self.owner_id)
         self.asks = AskStore(self.ws.root, cfg.timezone, cfg.ask_default_hours)
         self.executor = Executor(cfg)
+        self.chat = ChatStore(self.ws.root)
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-        self._history: dict[str, deque] = defaultdict(lambda: deque(maxlen=12))
+        self._history: dict[str, deque] = defaultdict(lambda: deque(maxlen=HISTORY_TURNS * 2))
         self._bg: set[asyncio.Task] = set()
+        self._llms: dict[str, LLM] = {}
+        if shared is not None:
+            self._locks, self._bg = shared._locks, shared._bg
+
+    def llm_for(self, m: Member) -> LLM:
+        """Each person can run on their own model (Claude, Codex, a local model…); default: the company's."""
+        if not m.llm:
+            return self.llm
+        if m.id not in self._llms:
+            self._llms[m.id] = make_llm(m.llm)
+        return self._llms[m.id]
+
+    def model_name(self, m: Member) -> str:
+        c = self.cfg.llm_for(m)
+        return c.provider + (f"/{c.model}" if c.model else "")
 
     # -- state helpers ---------------------------------------------------------
     def paused(self, member_id: str) -> bool:
@@ -123,22 +250,71 @@ class Runtime:
     def _usage_today(self, member_id: str) -> int:
         return int(self.ws.state().get("usage", {}).get(today(self.cfg.timezone).isoformat(), {}).get(member_id, 0))
 
-    def _add_usage(self, member_id: str, tokens: int) -> int:
+    def _add_usage(self, member_id: str, tokens: int, model: str = "") -> int:
+        """Tokens per person per day (31 days kept) and per model, for the budget and the cost view."""
         day = today(self.cfg.timezone).isoformat()
 
         def fn(s):
             u = s.setdefault("usage", {})
-            for k in [k for k in u if k != day]:   # keep only today
+            for k in sorted(u)[:-31]:
                 del u[k]
             u.setdefault(day, {})
             u[day][member_id] = int(u[day].get(member_id, 0)) + tokens
+            if model:
+                bm = s.setdefault("usage_models", {})
+                for k in sorted(bm)[:-31]:
+                    del bm[k]
+                bm.setdefault(day, {})
+                bm[day][model] = int(bm[day].get(model, 0)) + tokens
         return int(self.ws.update_state(fn)["usage"][day][member_id])
 
     def _heartbeat(self, member_id: str, error: str = "") -> None:
+        """Last contact per person; `fails` counts consecutive model failures (one timeout isn't an incident)."""
         def fn(s):
             hb = s.setdefault("heartbeat", {})
-            hb[member_id] = {"last": now(self.cfg.timezone).isoformat(timespec="minutes"), "error": error}
+            prev = hb.get(member_id) or {}
+            hb[member_id] = {"last": now(self.cfg.timezone).isoformat(timespec="minutes"), "error": error,
+                             "fails": (int(prev.get("fails", 0)) + 1) if error else 0}
         self.ws.update_state(fn)
+
+    # -- messages that arrive while someone can't work (paused, over budget) -----------
+    def _enqueue(self, m: Member, ev: Event, why: str) -> None:
+        item = {"member": m.id, "why": why, "event": {k: getattr(ev, k) for k in
+                                                      ("source", "text", "sender", "hop", "task", "project", "room")}}
+        self.ws.update_state(lambda s: s.setdefault("queue", []).append(item))
+
+    def queued(self) -> list[dict]:
+        return list(self.ws.state().get("queue") or [])
+
+    async def drain_queue(self) -> int:
+        """Deliver queued messages to everyone who can work again. Replies go to the room they came from."""
+        ready: list[dict] = []
+
+        def take(s):
+            keep = []
+            for it in s.get("queue") or []:
+                mid = it.get("member", "")
+                cap = self.cfg.daily_tokens_per_agent
+                ok = self.cfg.member(mid) and not self.paused(mid) and not (cap and self._usage_today(mid) >= cap)
+                (ready if ok else keep).append(it)
+            s["queue"] = keep
+        self.ws.update_state(take)
+        for it in ready:
+            self._spawn(self._answer_queued(it))
+        return len(ready)
+
+    async def _answer_queued(self, it: dict) -> None:
+        ev = Event(**it["event"])
+        m = self.cfg.member(it["member"])
+        reply = await self.dispatch(m.id, ev)
+        room = self.room_of(m, ev)
+        post = getattr(self.bus, "post_room", None)
+        if ev.source == "inbox":
+            return
+        if post:
+            await post(room, m.id, f"(queued while I was {it.get('why', 'away')}) {reply}")
+        else:
+            await self.bus.send_owner(m.id, reply)
 
     def _spawn(self, coro) -> None:
         t = asyncio.create_task(coro)
@@ -151,22 +327,28 @@ class Runtime:
             await asyncio.gather(*list(self._bg), return_exceptions=True)
 
     # -- conversation history (survives restarts; .jm/ is not committed) ---------
-    def _load_history(self, key: str) -> deque:
+    def _hist_path(self, key: str):
+        return self.ws.root / ".jm" / "history" / f"{key.replace(':', '__')}.json"
+
+    def _load_history(self, key: str, legacy: tuple[str, ...] = ()) -> deque:
+        """History is kept per person *per room*: what Sofia said to you in your 1:1 — including approval
+        follow-ups and work-session notes — is one thread, whatever triggered it. `legacy`: older keys to read
+        once (history used to be kept per message source)."""
         if key not in self._history:
-            d: deque = deque(maxlen=12)
-            p = self.ws.root / ".jm" / "history" / f"{key.replace(':', '__')}.json"
-            if p.exists():
-                try:
-                    d.extend(json.loads(p.read_text()))
-                except json.JSONDecodeError:
-                    pass
+            d: deque = deque(maxlen=HISTORY_TURNS * 2)
+            for k in (key, *legacy):
+                p = self._hist_path(k)
+                if p.exists():
+                    try:
+                        d.extend(x for x in json.loads(p.read_text()) if isinstance(x, dict) and x.get("content"))
+                        break
+                    except (json.JSONDecodeError, OSError):
+                        continue
             self._history[key] = d
         return self._history[key]
 
     def _save_history(self, key: str, hist: deque) -> None:
-        p = self.ws.root / ".jm" / "history" / f"{key.replace(':', '__')}.json"
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(list(hist)))
+        atomic_write(self._hist_path(key), json.dumps(list(hist)))
 
     # -- documents agents write and read (docs/ in the workspace) -----------------
     def _doc_path(self, rel: str):
@@ -179,15 +361,34 @@ class Runtime:
             raise ValueError("files must stay inside docs/")
         return p, str(p.relative_to(self.ws.root))
 
-    def _read_files(self, reads: list[dict]) -> str:
+    def _resolve_readable(self, rel: str):
+        """The file an agent may read, or None. Checked on the *resolved* path: `docs/../.git/config` is refused,
+        and nothing under .git, .jm or any .env is ever readable."""
         root = self.ws.root.resolve()
+        rel = (rel or "").strip().lstrip("/")
+        m = re.fullmatch(r"(?:tasks/)?(T-\d{3,})(?:[-\w]*)?(?:\.md)?", rel)
+        if m:                                              # "T-001", "tasks/T-001.md" → the real task file
+            try:
+                return self.tasks.get(m.group(1)).path.resolve()
+            except TaskError:
+                return None
+        p = (root / rel).resolve()
+        try:
+            parts = p.relative_to(root).parts
+        except ValueError:
+            return None
+        if not parts or parts[0] not in READABLE_DIRS or not p.is_file():
+            return None
+        if any(x in (".git", ".jm") or x.startswith(".env") for x in parts):
+            return None
+        return p
+
+    def _read_files(self, reads: list[dict]) -> str:
         out = []
         for a in reads[:5]:
             rel = str(a.get("path", "")).strip().lstrip("/")
-            p = (root / rel).resolve()
-            ok = (root in p.parents and rel.split("/")[0] in READABLE_DIRS and ".jm" not in p.parts
-                  and p.is_file())
-            if ok:
+            p = self._resolve_readable(rel)
+            if p:
                 out.append(f"=== {rel} ===\n{p.read_text(errors='replace')[:MAX_FILE_CHARS]}")
             else:
                 out.append(f"=== {rel} === (cannot read: only existing files under {', '.join(READABLE_DIRS)})")
@@ -197,8 +398,9 @@ class Runtime:
         docs = self.ws.root / "docs"
         if not docs.exists():
             return ""
-        files = sorted(p for p in docs.rglob("*") if p.is_file())
-        return "\n".join(f"- {p.relative_to(self.ws.root)}" for p in files[-limit:])
+        files = sorted((p for p in docs.rglob("*") if p.is_file() and ".git" not in p.parts),
+                       key=lambda p: p.stat().st_mtime)
+        return "\n".join(f"- {p.relative_to(self.ws.root)}" for p in files[-limit:])        # the newest
 
     # -- context -----------------------------------------------------------------
     def roster(self) -> str:
@@ -280,111 +482,317 @@ class Runtime:
             parts.append("## Your recent activity log\n" + recent)
         return "\n\n".join(parts)
 
+    # -- what was said (shared across console, Telegram and Slack) ---------------------
+    def room_of(self, m: Member, ev: Event) -> str:
+        if ev.room:
+            return ev.room
+        if ev.project:
+            return PROJECT_ROOM + ev.project
+        return {"dm": m.id, "group": TEAM_ROOM}.get(ev.source, m.id)
+
+    def _who(self, who: str) -> str:
+        if who == self.owner_id:
+            return f"{self.cfg.owner_name} (founder)"
+        mm = self.cfg.member(who)
+        return mm.name if mm else who
+
+    def _line(self, msg: dict) -> str:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        t = datetime.fromtimestamp(msg.get("ts", 0), ZoneInfo(self.cfg.timezone)).strftime("%d %b %H:%M")
+        text = " ".join(str(msg.get("text", "")).split())
+        if len(text) > 400:
+            text = text[:400] + "…"
+        tag = {"ask": " [approval card]", "system": " [system]", "internal": " [teammates]"}.get(msg.get("kind"), "")
+        return f"- {t} {self._who(msg.get('who', ''))}{tag}: {text}"
+
+    def room_title(self, room: str) -> str:
+        if room == TEAM_ROOM:
+            return "All hands"
+        if room == BACKCHANNEL:
+            return "Team backchannel"
+        if room.startswith(PROJECT_ROOM):
+            p = self.cfg.projects.get(room[len(PROJECT_ROOM):])
+            return f"#{p.name if p else room[len(PROJECT_ROOM):]} room"
+        mm = self.cfg.member(room)
+        return f"1:1 {self.cfg.owner_name} ↔ {mm.name if mm else room}"
+
+    def conversation_context(self, m: Member, ev: Event) -> str:
+        """The current room's recent messages (everyone's, from every channel) + a glance at the member's other rooms,
+        so a project's people all know what was said there — like a real team channel."""
+        room = self.room_of(m, ev)
+        parts = []
+        here = self.chat.recent(room, ROOM_CONTEXT + 1)
+        if here and here[-1].get("who") == ev.sender and here[-1].get("text", "").strip() == ev.text.strip():
+            here = here[:-1]                  # that's the message being answered right now
+        if here:
+            parts.append(f"## Recent messages in {self.room_title(room)} (oldest first)\n"
+                         + "\n".join(self._line(x) for x in here[-ROOM_CONTEXT:]))
+        if m.monitor:
+            others = [TEAM_ROOM, BACKCHANNEL] + [PROJECT_ROOM + p for p in self.cfg.projects] + \
+                     [x.id for x in self.cfg.team if x.id != m.id]
+        else:
+            others = [m.id, TEAM_ROOM] + [PROJECT_ROOM + p for p in m.projects if p in self.cfg.projects]
+        glance, budget = [], 5000
+        for r in others:
+            if r == room:
+                continue
+            msgs = self.chat.recent(r, ELSEWHERE, max_age_hours=ELSEWHERE_HOURS)
+            if not msgs:
+                continue
+            block = f"### {self.room_title(r)}\n" + "\n".join(self._line(x) for x in msgs)
+            if len(block) > budget:
+                break
+            budget -= len(block)
+            glance.append(block)
+        if glance:
+            parts.append("## Elsewhere lately (other rooms you are in)\n" + "\n".join(glance))
+        return "\n\n".join(parts)
+
     # -- main entry --------------------------------------------------------------
     async def dispatch(self, member_id: str, ev: Event) -> str:
         m = self.cfg.member(member_id)
         if not m:
             return f"Unknown team member `{member_id}`."
-        if self.paused(m.id) and ev.source != "system":
-            return f"⏸ {m.name} is paused. Send /resume to continue."
         cap = self.cfg.daily_tokens_per_agent
-        if cap and self._usage_today(m.id) >= cap:
-            return f"💸 {m.name} hit today's budget ({cap:,} tokens). Raise budget.daily_tokens_per_agent or wait."
+        if ev.source != "system" and not ev.meta.get("queued"):
+            why = "paused" if self.paused(m.id) else "over today's budget" if cap and self._usage_today(m.id) >= cap else ""
+            if why:
+                self._enqueue(m, ev, why)                 # never lost: answered when they can work again
+                return (f"⏸ {m.name} is paused — your message is queued and will be answered on /resume."
+                        if why == "paused" else
+                        f"💸 {m.name} hit today's budget ({cap:,} tokens) — your message is queued for when "
+                        f"the budget resets or is raised.")
+        elif cap and self._usage_today(m.id) >= cap:
+            return f"💸 {m.name} hit today's budget ({cap:,} tokens)."
 
         async with self._locks[m.id]:
-            # Owner messages that mention a task are feedback on that task — captured in git, not lost in chat.
-            is_question = ev.text.rstrip().endswith("?")
-            if ev.sender == self.owner_id and ev.source in ("dm", "group") and not is_question:
-                for tid in set(TASK_ID.findall(ev.text)):
-                    try:
-                        self.tasks.add_feedback(tid, self.cfg.owner_name, ev.text)
-                    except TaskError:
-                        pass
-                self.ws.log(m.id, f"{self.cfg.owner_name} ({ev.source}): {ev.text[:300]}")
-            elif ev.source == "inbox":
-                self.ws.log(m.id, f"from {ev.sender}: {ev.text[:300]}")
+            return await self._turn(m, ev)
 
-            channel = {"dm": f"private chat with {self.cfg.owner_name}",
-                       "group": "the team HQ group (keep it short; the whole team reads it)",
-                       "inbox": f"internal message from teammate `{ev.sender}` (not visible to the owner)",
-                       "system": "a system event"}.get(ev.source, ev.source)
-            if ev.project:
-                channel = self.project_channel(ev.project)
-            system = build_system(
-                company=self.cfg.company, today=today(self.cfg.timezone).isoformat(),
-                charter=self.ws.charter(), persona=self.ws.persona(m.id), memory=self.ws.memory(m.id),
-                member_name=m.name, member_role=m.role, roster=self.roster(), context=self.context_for(m),
-                owner_name=self.cfg.owner_name, can_run_code=self.executor.enabled and not m.monitor,
-                channel=channel)
-            hkey = f"{m.id}:project:{ev.project}" if ev.project else f"{m.id}:{ev.source}"
-            hist = self._load_history(hkey)
-            who = self.cfg.owner_name if ev.sender == self.owner_id else ev.sender
-            where = f"project {ev.project}" if ev.project else ev.source
-            user_msg = f"[{where} from {who}] {ev.text}"
-            messages = [*hist, {"role": "user", "content": user_msg}]
-            reply, actions, raw = "", [], ""
-            for _round in range(MAX_READ_ROUNDS + 1):
+    async def _turn(self, m: Member, ev: Event) -> str:
+        cap = self.cfg.daily_tokens_per_agent
+        # Owner messages that mention a task are feedback on that task — captured in git, not lost in chat.
+        is_question = ev.text.rstrip().endswith("?")
+        if ev.sender == self.owner_id and ev.source in ("dm", "group") and not is_question:
+            for tid in set(TASK_ID.findall(ev.text)):
                 try:
-                    res = await asyncio.to_thread(self.llm.complete, system, messages)
-                except LLMError as e:
-                    log.exception("llm failed for %s", m.id)
-                    self._heartbeat(m.id, error=str(e)[:200])
-                    return f"⚠️ {m.name} couldn't think right now (model error). {self.cfg.monitor.name} has flagged it."
-                self._heartbeat(m.id)
-                used = self._add_usage(m.id, res.total_tokens)
-                if cap and used >= 0.8 * cap and used - res.total_tokens < 0.8 * cap:
-                    await self.bus.send_owner(self.cfg.monitor.id, f"💸 {m.name} used 80% of today's token budget.")
-                raw = res.text
-                reply, actions = parse_model_output(raw)
-                reads = [a for a in actions if a.get("type") == "read_file"]
-                if not reads or _round == MAX_READ_ROUNDS:
-                    actions = [a for a in actions if a.get("type") != "read_file"]
-                    break
-                # Give the model the files it asked for, then let it answer for real.
-                messages = [*messages, {"role": "assistant", "content": raw},
-                            {"role": "user", "content": self._read_files(reads)}]
-            hist.append({"role": "user", "content": user_msg})
-            hist.append({"role": "assistant", "content": raw})
-            self._save_history(hkey, hist)
-            notes = []
-            for a in actions:
-                try:
-                    note = await self._apply(m, a, ev)
-                    if note:
-                        notes.append(note)
-                except (TaskError, AskError, ExecutorError, ValueError, KeyError) as e:
-                    notes.append(f"⚠️ {a.get('type')}: {e}")
-            if ev.source == "inbox":
-                self.ws.log(m.id, f"replied to {ev.sender}: {reply[:300]}")
-            what = {"dm": f"replied to {who}", "group": f"replied to {who} in the group", "inbox": f"answered {who}",
-                    "system": "picked up an update"}.get(ev.source, f"{ev.source} from {who}")
-            n = len(actions)
-            self.ws.commit(what + (f" · {n} change{'s' if n != 1 else ''}" if n else ""),
-                           author=m.name)
+                    self.tasks.add_feedback(tid, self.cfg.owner_name, ev.text)
+                except TaskError:
+                    pass
+            self.ws.log(m.id, f"{self.cfg.owner_name} ({ev.source}): {ev.text[:300]}")
+        elif ev.source == "inbox":
+            self.ws.log(m.id, f"from {ev.sender}: {ev.text[:300]}")
+
+        channel = {"dm": f"private chat with {self.cfg.owner_name}",
+                   "group": "the team HQ group (keep it short; the whole team reads it)",
+                   "inbox": f"internal message from teammate `{ev.sender}` (not visible to the owner)",
+                   "system": "a system event"}.get(ev.source, ev.source)
+        if ev.project:
+            channel = self.project_channel(ev.project)
+        context = self.context_for(m)
+        convo = self.conversation_context(m, ev)
+        if convo:
+            context += "\n\n" + convo
+        gated = {a: self.cfg.permission(m, a) for a in ("create_task", "update_task", "write_file", "message_agent",
+                                                        "post_group", "post_room", "run_code")}
+        system = build_system(
+            company=self.cfg.company, today=today(self.cfg.timezone).isoformat(),
+            charter=self.ws.charter(), persona=self.ws.persona(m.id), memory=self.ws.memory(m.id),
+            member_name=m.name, member_role=m.role, roster=self.roster(), context=context,
+            owner_name=self.cfg.owner_name, can_run_code=self.executor.enabled and not m.monitor,
+            channel=channel, needs_approval=[a for a, lv in gated.items() if lv == "red"
+                                             and (a != "run_code" or (self.executor.enabled and not m.monitor))])
+        try:
+            llm = self.llm_for(m)
+        except LLMError as e:
+            self._heartbeat(m.id, error=str(e)[:200])
+            return f"⚠️ {m.name}'s model isn't available: {e}"
+        room = self.room_of(m, ev)
+        hkey = f"{m.id}:{room}"
+        legacy = ((f"{m.id}:dm",) if room == m.id else (f"{m.id}:group",) if room == TEAM_ROOM else
+                  (f"{m.id}:project:{room[len(PROJECT_ROOM):]}",) if room.startswith(PROJECT_ROOM) else ())
+        hist = self._load_history(hkey, legacy)
+        who = self.cfg.owner_name if ev.sender == self.owner_id else self._who(ev.sender)
+        where = f"project {ev.project}" if ev.project else ev.source
+        user_msg = f"[{where} from {who}] {ev.text}"
+        messages = [*hist, {"role": "user", "content": user_msg}]
+
+        async def call(msgs):
+            try:
+                res = await asyncio.to_thread(llm.complete, system, msgs)
+            except LLMError as e:
+                log.error("llm failed for %s: %s", m.id, e)
+                self._heartbeat(m.id, error=str(e)[:200])
+                return None
+            self._heartbeat(m.id)
+            billable = getattr(res, "billable_tokens", res.total_tokens)
+            used = self._add_usage(m.id, billable, self.model_name(m))
+            if cap and used >= 0.8 * cap and used - billable < 0.8 * cap:
+                await self.bus.send_owner(self.cfg.monitor.id, f"💸 {m.name} used 80% of today's token budget.")
+            return res
+
+        parsed, retried = None, False
+        for _round in range(MAX_READ_ROUNDS + 2):
+            res = await call(messages)
+            if res is None:
+                return f"⚠️ {m.name} couldn't think right now (model error). {self.cfg.monitor.name} has flagged it."
+            parsed = parse_reply(res.text)
+            if (not parsed.ok or res.truncated) and not retried:
+                retried = True                              # one retry: say exactly what went wrong
+                why = ("Your reply was cut off at the length limit. Keep the JSON short and put long documents "
+                       "AFTER it as <<<FILE docs/…md>>> … <<<END>>> blocks (split very long ones)."
+                       if res.truncated else "That wasn't the JSON object.")
+                messages = [*messages, {"role": "assistant", "content": res.text[:2000]},
+                            {"role": "user", "content": f"{why} Reply again with ONLY the JSON object "
+                                                        f'{{"reply": ..., "actions": [...]}}.'}]
+                continue
+            reads = [a for a in parsed.actions if a.get("type") == "read_file"]
+            if not reads or _round >= MAX_READ_ROUNDS:
+                parsed.actions = [a for a in parsed.actions if a.get("type") != "read_file"]
+                break
+            # Give the model the files it asked for, then let it answer for real.
+            messages = [*messages, {"role": "assistant", "content": res.text},
+                        {"role": "user", "content": self._read_files(reads)}]
+        reply, actions = parsed.reply, parsed.actions
+
+        notes, failed = await self._apply_all(m, actions, ev)
+        if failed and not ev.meta.get("no_repair"):
+            # One repair round: the agent sees exactly what failed and can fix it (or explain) — no false "done".
+            fix_msgs = [*messages, {"role": "assistant", "content": json.dumps({"reply": reply,
+                                                                                "actions": _compact(actions)})},
+                        {"role": "user", "content": "Results of your actions:\n" + "\n".join(notes) +
+                         "\n\nSome actions FAILED. Return corrected actions for the failed ones only (or none), and a "
+                         "reply that tells the truth about what happened."}]
+            res = await call(fix_msgs)
+            if res is not None:
+                fixed = parse_reply(res.text)
+                if fixed.ok:
+                    fixed_actions = [a for a in fixed.actions if a.get("type") != "read_file"]
+                    more, _ = await self._apply_all(m, fixed_actions, ev)
+                    notes += more
+                    actions += fixed_actions
+                    reply = fixed.reply or reply
+        reply = reply or ("(no reply)" if not actions else "")
+        hist.append({"role": "user", "content": user_msg})
+        hist.append({"role": "assistant", "content": json.dumps({"reply": reply, "actions": _compact(actions)},
+                                                                ensure_ascii=False)
+                     + (("\n[results] " + " | ".join(notes)) if notes else "")})
+        self._save_history(hkey, hist)
+        if ev.source == "inbox":
+            self.ws.log(m.id, f"replied to {ev.sender}: {reply[:300]}")
+        what = {"dm": f"replied to {who}", "group": f"replied to {who} in the group", "inbox": f"answered {who}",
+                "system": "picked up an update"}.get(ev.source, f"{ev.source} from {who}")
+        n = len(actions)
+        await asyncio.to_thread(self.ws.commit, what + (f" · {n} change{'s' if n != 1 else ''}" if n else ""),
+                                m.name)
         out = reply
         if notes:
             out = (out + "\n\n" if out else "") + "\n".join(notes)
         return out or "(no reply)"
 
+    async def _apply_all(self, m: Member, actions: list[dict], ev: Event) -> tuple[list[str], bool]:
+        """Apply each action on its own: one bad action is reported and the rest still run."""
+        notes, failed = [], False
+        for raw in actions:
+            try:
+                a = normalize_action(raw)
+                note = await self._apply(m, a, ev)
+                if note:
+                    notes.append(note)
+            except (TaskError, AskError, ExecutorError, ValueError, KeyError, TypeError, AttributeError) as e:
+                failed = True
+                notes.append(f"⚠️ {raw.get('type')}: {e}")
+            except Exception as e:  # noqa: BLE001 - never let one action take the turn down
+                failed = True
+                log.exception("action %s failed", raw.get("type"))
+                notes.append(f"⚠️ {raw.get('type')}: unexpected error ({type(e).__name__})")
+        return notes, failed
+
     # -- actions -----------------------------------------------------------------
+    def describe(self, m: Member, a: dict) -> str:
+        """One line the owner can approve or reject."""
+        t = a.get("type", "")
+        if t == "create_task":
+            return f"create task “{a.get('title', '')}” for {a.get('owner') or m.id} ({a.get('priority', 'P1')})"
+        if t == "update_task":
+            what = ", ".join(f"{k}={a[k]}" for k in ("status", "priority", "due", "blocked_on") if a.get(k))
+            return f"update {a.get('id')}" + (f": {what}" if what else "")
+        if t == "write_file":
+            return f"write {a.get('path')} ({len(str(a.get('content', '')))} chars)"
+        if t == "message_agent":
+            return f"message {a.get('to')}: {str(a.get('text', ''))[:200]}"
+        if t == "post_group":
+            return f"post in All hands: {str(a.get('text', ''))[:300]}"
+        if t == "post_room":
+            return f"post in #{a.get('project')}: {str(a.get('text', ''))[:300]}"
+        if t == "run_code":
+            return f"run the coding agent on {a.get('task')} in {a.get('project')}: {str(a.get('instructions', ''))[:200]}"
+        return t
+
     async def _apply(self, m: Member, a: dict, ev: Event) -> str:
+        t = a["type"]
+        level = "green" if t in NO_GATE or ev.meta.get("approved") else self.cfg.permission(m, t)
+        if level == "red":
+            ask = self.asks.create(requester=m.id, summary=f"{m.name} wants to {self.describe(m, a)}",
+                                   details=str(a.get("why") or a.get("description") or ""), level="red",
+                                   task=str(a.get("task") or a.get("id") or ""), kind="action",
+                                   payload={"action": a, "project": ev.project, "room": ev.room})
+            await self.bus.send_owner(m.id, ask.summary, ask=ask, urgent=True)
+            return f"🙋 {ask.id}: waiting for {self.cfg.owner_name} to approve — {self.describe(m, a)}"
+        note = await self._do(m, a, ev)
+        if level == "yellow":
+            await self.bus.send_owner(m.id, f"🟡 FYI — {m.name} did: {self.describe(m, a)}")
+        return note
+
+    async def _internal(self, room: str, who: str, text: str) -> None:
+        """Teammates talking to each other: visible to the owner (and to the project's people) in the room."""
+        post = getattr(self.bus, "post_room", None)
+        if post:
+            try:
+                await post(room, who, text, kind="internal")
+            except Exception:  # noqa: BLE001
+                log.exception("could not record internal message")
+
+    def _handoff_room(self, ev: Event, task_id: str = "") -> str:
+        pid = ev.project
+        if not pid and task_id:
+            try:
+                pid = self.tasks.get(task_id).project
+            except TaskError:
+                pid = ""
+        return PROJECT_ROOM + pid if pid and pid in self.cfg.projects else BACKCHANNEL
+
+    async def _do(self, m: Member, a: dict, ev: Event) -> str:
         t = a["type"]
         if t == "create_task":
             owner = (a.get("owner") or m.id).lower()
             if owner != self.owner_id and not self.cfg.member(owner):
                 raise ValueError(f"unknown owner `{owner}`")
+            if a.get("project") and a["project"] not in self.cfg.projects:
+                raise ValueError(f"unknown project `{a['project']}` (projects: {', '.join(self.cfg.projects) or 'none'})")
             created_by = self.owner_id if (ev.sender == self.owner_id and ev.source in ("dm", "group")) else m.id
             task = self.tasks.create(title=a.get("title", "untitled"), owner=owner, created_by=created_by,
                                      priority=a.get("priority", "P1"), due=a.get("due"),
                                      project=a.get("project", "") or ev.project, goal=a.get("goal", ""),
                                      done_means=a.get("done_means") or [], description=a.get("description", ""))
             if owner not in (m.id, self.owner_id):
+                await self._internal(self._handoff_room(ev, task.id), m.id,
+                                     f"📝 assigned {task.id} to {self.cfg.member(owner).name}: {task.title}")
                 self._spawn(self._deliver(owner, Event("inbox", f"New task assigned to you: {task.line(self.cfg.timezone)}",
-                                                       sender=m.id, hop=ev.hop + 1, task=task.id)))
+                                                       sender=m.id, hop=ev.hop + 1, task=task.id,
+                                                       project=task.project)))
             return f"📝 {task.id} created → {owner}"
         if t == "update_task":
             tid = a["id"]
             msgs = []
+            task0 = self.tasks.get(tid)
+            changes = [k for k in ("status", "priority", "due", "done_means", "output") if a.get(k)]
+            if task0.owner != m.id and not m.monitor and changes:
+                # Someone else's task: add a note or message them — only they (or the founder) change it.
+                if a.get("log"):
+                    self.tasks.add_log(tid, m.id, a["log"])
+                raise TaskError(f"{task0.id} belongs to {self._who(task0.owner)} — you can add a log note or "
+                                f"message them; you can't change its {', '.join(changes)}.")
             fields = {k: a.get(k) for k in ("priority", "due") if a.get(k)}
             if fields:
                 self.tasks.update_fields(tid, m.id, **fields)
@@ -404,18 +812,35 @@ class Runtime:
                     await self.bus.send_owner(m.id, f"👀 {task.id} is ready for your review: {task.title}\n"
                                                     f"Output: {a.get('output') or 'see task file'}\n"
                                                     f"Accept with /accept {task.id} or reply with feedback.")
-                if task.status == "blocked" and self.owner_id in task.blocked_on.lower():
-                    await self.bus.send_owner(m.id, f"🚧 {task.id} is blocked on you: {task.blocked_on}")
+                if task.status == "blocked":
+                    await self.on_blocked(task, m.id)
+                if task.status == "done":
+                    await self.on_done(task)
             return " · ".join(msgs)
         if t == "ask_permission":
-            ask = self.asks.create(requester=m.id, summary=a.get("summary", ""), details=a.get("details", ""),
-                                   level=a.get("level", "red"), task=a.get("task", ""),
-                                   default=a.get("default", "wait"), hours=a.get("hours"),
-                                   recommendation=a.get("recommendation", ""))
+            summary = a.get("summary", "").strip()
+            if not summary:
+                raise ValueError("ask_permission needs a one-line summary")
+            same = self.asks.find_pending(m.id, summary, a.get("task", ""))
+            if same:
+                return f"🙋 already waiting for {self.cfg.owner_name}: {same.id}"
+            # An agent's request never approves itself: no auto-approve, and at least an hour to answer.
+            default = "reject" if a.get("default") == "reject" else "wait"
+            ask = self.asks.create(requester=m.id, summary=summary, details=a.get("details", ""),
+                                   level=a.get("level", "red"), task=a.get("task", ""), default=default,
+                                   hours=a.get("hours"), recommendation=a.get("recommendation", ""))
+            await self._hold_task_for(ask)
             await self.bus.send_owner(m.id, ask.summary, ask=ask, urgent=ask.level == "red")
             return f"🙋 {ask.id} sent to {self.cfg.owner_name}"
         if t == "remember":
-            self.ws.remember(m.id, a.get("note", ""))
+            note = a.get("note", "")
+            if not note.strip():
+                raise ValueError("remember needs a note")
+            pinned = str(a.get("correction", "")).lower() in ("true", "1", "yes") or \
+                (ev.sender == self.owner_id and ev.source in ("dm", "group") and bool(a.get("correction", True))
+                 and bool(re.search(r"\b(don'?t|do not|never|always|instead|wrong|not like|stop|use)\b",
+                                    ev.text, re.I)))
+            self.ws.remember(m.id, note, pinned=pinned)
             return ""
         if t == "message_agent":
             to = (a.get("to") or "").lower()
@@ -426,14 +851,27 @@ class Runtime:
             if not target or target.id == m.id:
                 raise ValueError(f"unknown teammate `{to}`")
             self.ws.log(m.id, f"to {target.id}: {a.get('text', '')[:300]}")
+            room = self._handoff_room(ev, a.get("task", ""))
+            await self._internal(room, m.id, f"→ {target.name}: {a.get('text', '')}")
+            origin = ev.meta.get("origin_room") or self.room_of(m, ev)
             self._spawn(self._deliver(target.id, Event("inbox", a.get("text", ""), sender=m.id, hop=ev.hop + 1,
-                                                       task=a.get("task", ""))))
+                                                       task=a.get("task", ""),
+                                                       project=room[len(PROJECT_ROOM):] if room != BACKCHANNEL else "",
+                                                       room=room, meta={"reply_to": m.id, "origin_room": origin})))
             return f"✉️ sent to {target.name}"
         if t == "notify_owner":
             await self.bus.send_owner(m.id, a.get("text", ""))
             return ""
         if t == "post_group":
             await self.bus.post_group(m.id, a.get("text", ""))
+            return ""
+        if t == "post_room":
+            pid = str(a.get("project") or ev.project or "")
+            if pid not in self.cfg.projects:
+                raise ValueError(f"no project `{pid}`")
+            post = getattr(self.bus, "post_room", None)
+            if post:
+                await post(PROJECT_ROOM + pid, m.id, str(a.get("text", "")))
             return ""
         if t == "write_file":
             content = str(a.get("content", ""))
@@ -456,6 +894,91 @@ class Runtime:
             return f"🛠 coding started on branch {self.executor.branch_for(tid)} ({pid})"
         raise ValueError(f"unknown action `{t}`")
 
+    # -- the loops that make it a company --------------------------------------------
+    def people_in(self, text: str) -> list[Member]:
+        """Team members named in free text ("waiting on Marcus for the API URL")."""
+        low = (text or "").lower()
+        return [x for x in self.cfg.team
+                if re.search(rf"\b({re.escape(x.id)}|{re.escape(x.name.lower())})\b", low)]
+
+    async def on_blocked(self, task, by: str) -> None:
+        """Whoever a task is blocked on hears about it at once — and their answer comes back (see _deliver)."""
+        if self.owner_id in task.blocked_on.lower() or self.cfg.owner_name.lower() in task.blocked_on.lower():
+            await self.bus.send_owner(task.owner if self.cfg.member(task.owner) else self.cfg.monitor.id,
+                                      f"🚧 {task.id} is blocked on you: {task.blocked_on}")
+        for x in self.people_in(task.blocked_on):
+            if x.id == task.owner:
+                continue
+            owner = self._who(task.owner)
+            self._spawn(self._deliver(x.id, Event(
+                "inbox", f"{owner} is blocked on you for {task.id} ({task.title}): {task.blocked_on}. "
+                         f"Unblock them now — give them what they need (your reply goes straight to them), or "
+                         f"say when you will.", sender=task.owner if self.cfg.member(task.owner) else by,
+                task=task.id, project=task.project,
+                room=PROJECT_ROOM + task.project if task.project in self.cfg.projects else BACKCHANNEL,
+                meta={"reply_to": task.owner if self.cfg.member(task.owner) else ""})))
+
+    async def on_done(self, task) -> None:
+        """A task is done: tasks that waited on it go back to todo and their owners are told."""
+        for t in self.tasks.unblock_dependents(task.id, by=self.owner_id):
+            if self.cfg.member(t.owner):
+                self._spawn(self._deliver(t.owner, Event(
+                    "inbox", f"{task.id} ({task.title}) is done, so {t.id} is unblocked and back in todo. "
+                             f"Pick it up.", sender=self.cfg.monitor.id, task=t.id, project=t.project)))
+
+    async def _hold_task_for(self, ask: Ask) -> None:
+        """While a request waits, its task shows as blocked on the owner (and goes back when decided)."""
+        tid = str(ask.doc.meta.get("task") or "")
+        if not tid:
+            return
+        try:
+            t = self.tasks.get(tid)
+        except TaskError:
+            return
+        if not t.is_open or t.status == "blocked":
+            return
+        ask.doc.meta.setdefault("payload", {})["prev_status"] = t.status
+        from .fileio import atomic_write as _aw
+        _aw(ask.path, ask.doc.render())
+        self.tasks.set_status(tid, "blocked", by=self.owner_id,
+                              blocked_on=f"{self.cfg.owner_name} — approval {ask.id}", note=f"waiting on {ask.id}")
+
+    def _release_task_for(self, ask: Ask) -> None:
+        tid = str(ask.doc.meta.get("task") or "")
+        if not tid:
+            return
+        try:
+            t = self.tasks.get(tid)
+        except TaskError:
+            return
+        if t.status == "blocked" and ask.id in t.blocked_on:
+            prev = (ask.doc.meta.get("payload") or {}).get("prev_status") or "todo"
+            self.tasks.set_status(tid, prev if prev in ("todo", "doing", "review") else "todo", by=self.owner_id,
+                                  note=f"{ask.id} {ask.status}")
+
+    async def request_changes(self, task_id: str, text: str, by: str | None = None) -> str:
+        """The owner sends reviewed work back: feedback saved (task + binding memory), task back to doing,
+        the owner of the task is told now and reworks it first in the next work session."""
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("Say what needs to change.")
+        t = self.tasks.add_feedback(task_id, self.cfg.owner_name, text)
+        self.ws.remember(t.owner, f"Feedback on {t.id}: {text}", pinned=True)
+        if t.status in ("review", "done", "todo", "blocked"):
+            t, _ = self.tasks.set_status(t.id, "doing", by=self.owner_id, note="changes requested")
+        self.tasks.mark_rework(t.id)
+        await asyncio.to_thread(self.ws.commit, f"{t.id}: changes requested", self.cfg.owner_name)
+        if self.cfg.member(t.owner):
+            async def tell():
+                reply = await self.dispatch(t.owner, Event(
+                    "system", f"{self.cfg.owner_name} reviewed {t.id} ({t.title}) and wants changes: {text}\n"
+                              f"Rework it now (write the corrected output, move it back to review when it meets "
+                              f"the feedback). Reply in one line: what you'll change.", sender="system", task=t.id,
+                    project=t.project))
+                await self.bus.send_owner(t.owner, reply)
+            self._spawn(tell())
+        return f"↩️ {t.id} back to {self._who(t.owner)} with your changes"
+
     async def _deliver(self, to: str, ev: Event) -> None:
         """Agent-to-agent message with a hop limit so agents can't loop forever."""
         if ev.hop > self.cfg.max_agent_hops:
@@ -464,7 +987,23 @@ class Runtime:
                                       f"exchanges{f' on {ev.task}' if ev.task else ''}. Last message: {ev.text[:300]}")
             return
         try:
-            await self.dispatch(to, ev)
+            reply = await self.dispatch(to, ev)
+            real = bool(reply) and not reply.startswith(("⏸", "💸", "⚠️")) and reply != "(no reply)"
+            if real and ev.room:
+                await self._internal(ev.room, to, f"↩ {self._who(ev.sender)}: {reply}")
+            back = ev.meta.get("reply_to")
+            if real and back and self.cfg.member(back):
+                # Close the loop: the answer goes back to whoever asked (they may be mid-task waiting for it).
+                self._spawn(self._deliver(back, Event(
+                    "inbox", f"{self._who(to)} replied: {reply}", sender=to, hop=ev.hop + 1, task=ev.task,
+                    project=ev.project, room=ev.room,
+                    meta={"is_reply": True, "origin_room": ev.meta.get("origin_room", "")})))
+            origin = ev.meta.get("origin_room")
+            if real and ev.meta.get("is_reply") and origin and origin != ev.room and origin != BACKCHANNEL:
+                # …and what they do with it is said where the conversation started (e.g. your 1:1).
+                post = getattr(self.bus, "post_room", None)
+                if post:
+                    await post(origin, to, reply)
         except Exception as e:  # never let background work crash the runtime
             log.exception("deliver failed")
             self._heartbeat(to, error=str(e)[:200])
@@ -497,20 +1036,49 @@ class Runtime:
         await self.bus.send_owner(m.id, ask.summary, ask=ask, urgent=True)
 
     # -- decisions ----------------------------------------------------------------
-    async def decide_ask(self, ask_id: str, decision: str, by: str, note: str = "") -> str:
-        ask = self.asks.decide(ask_id, decision, by=by, note=note)
-        result = f"{ask.id} {decision}"
-        if ask.kind == "merge" and decision == "approved":
-            p = ask.doc.meta.get("payload") or {}
+    async def decide_ask(self, ask_id: str, decision: str, by: str, note: str = "", via: str = "") -> str:
+        pre = self.asks.get(ask_id)
+        merged = ""
+        if pre.kind == "merge" and decision == "approved" and pre.status == "pending":
+            # Merge first; only a merge that worked makes the request "approved". A failed merge is rolled back
+            # and the request stays open.
+            p = pre.doc.meta.get("payload") or {}
             try:
-                sha = self.executor.merge(p["project"], p["branch"])
-                result += f" — merged {p['branch']} into {p['project']} ({sha})"
-                if ask.doc.meta.get("task"):
-                    self.tasks.set_status(ask.doc.meta["task"], "done", by=self.owner_id,
+                sha = await asyncio.to_thread(self.executor.merge, p["project"], p["branch"])
+            except (ExecutorError, KeyError) as e:
+                raise AskError(f"{pre.id} is still open — the merge didn't happen: {e}. Fix it and approve again, "
+                               f"or reject.") from None
+            merged = f" — merged {p['branch']} into {p['project']} ({sha})"
+            if pre.doc.meta.get("task"):
+                try:
+                    self.tasks.set_status(pre.doc.meta["task"], "done", by=self.owner_id,
                                           note=f"merged {p['branch']} @ {sha}")
-            except ExecutorError as e:
-                result += f" — but merge failed: {e}"
+                except TaskError:
+                    pass
+        ask = self.asks.decide(ask_id, decision, by=by, note=note)
+        result = f"{ask.id} {decision}{merged}"
+        if not merged:
+            self._release_task_for(ask)
+        if ask.kind == "action" and decision == "approved":
+            p = ask.doc.meta.get("payload") or {}
+            m = self.cfg.member(ask.requester)
+            if m and isinstance(p.get("action"), dict):
+                try:
+                    done = await self._do(m, p["action"], Event("system", f"approved {ask.id}", sender="system",
+                                                                  project=p.get("project", ""), room=p.get("room", ""),
+                                                                  meta={"approved": ask.id}))
+                    result += f" — done{': ' + done if done else ''}"
+                except (TaskError, AskError, ExecutorError, ValueError, KeyError) as e:
+                    result += f" — but it failed: {e}"
         self.ws.commit(f"{ask.id}: {decision} by {by}", author=self.cfg.owner_name)
+        decided = getattr(self.bus, "ask_decided", None)
+        if decided:
+            await decided(ask, f"{result} by {by}", via)
+        post = getattr(self.bus, "post_room", None)
+        if post and self.cfg.member(ask.requester):      # every channel shows the card is settled
+            icon = "✅" if decision == "approved" else "❌"
+            await post(ask.requester, ask.requester, f"{icon} {result} by {by}" + (f" — {note}" if note else ""),
+                       kind="system", via=via)
         if ask.requester and self.cfg.member(ask.requester):
             self._spawn(self._notify_requester(ask, decision, note))
         return result
@@ -561,22 +1129,51 @@ class Runtime:
         self.ws.commit(f"assign {task.id} to {member.id}", author=self.cfg.owner_name)
         return f"📝 {task.line(self.cfg.timezone)}", member.id
 
-    def cmd_accept(self, args: str) -> str:
+    async def accept(self, task_id: str, note: str = "accepted") -> str:
+        task, _ = self.tasks.set_status(task_id, "done", by=self.owner_id, note=note or "accepted")
+        await asyncio.to_thread(self.ws.commit, f"{task.id} accepted", self.cfg.owner_name)
+        await self.on_done(task)
+        return f"✅ {task.id} done — {task.title}"
+
+    async def cmd_accept(self, args: str) -> str:
         parts = args.strip().split(maxsplit=1)
         if not parts:
             raise ValueError("usage: /accept T-001 [note]")
-        task, _ = self.tasks.set_status(parts[0], "done", by=self.owner_id, note=parts[1] if len(parts) > 1 else "accepted")
-        self.ws.commit(f"{task.id} accepted", author=self.cfg.owner_name)
-        return f"✅ {task.id} done — {task.title}"
+        return await self.accept(parts[0], parts[1] if len(parts) > 1 else "accepted")
 
-    def cmd_feedback(self, args: str) -> str:
+    async def feedback(self, task_id: str, text: str) -> str:
+        """Feedback never goes nowhere: on work in review it sends the task back (request changes); otherwise it
+        is saved (task + binding memory) and the owner of the task hears it now."""
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("Write the feedback first.")
+        t = self.tasks.get(task_id)
+        if t.status == "review":
+            return await self.request_changes(task_id, text)
+        t = self.tasks.add_feedback(task_id, self.cfg.owner_name, text)
+        self.ws.remember(t.owner, f"Feedback on {t.id}: {text}", pinned=True)
+        await asyncio.to_thread(self.ws.commit, f"feedback on {t.id}", self.cfg.owner_name)
+        if self.cfg.member(t.owner) and t.is_open:
+            async def tell():
+                reply = await self.dispatch(t.owner, Event(
+                    "system", f"{self.cfg.owner_name}'s feedback on {t.id} ({t.title}): {text}\nTake it into "
+                              f"account now. Reply in one line: what you'll do differently.", sender="system",
+                    task=t.id, project=t.project))
+                await self.bus.send_owner(t.owner, reply)
+            self._spawn(tell())
+        return f"🗒 feedback saved on {t.id}, in {self._who(t.owner)}'s memory, and sent to them"
+
+    async def cmd_feedback(self, args: str) -> str:
         parts = args.strip().split(maxsplit=1)
         if len(parts) < 2:
             raise ValueError("usage: /feedback T-001 <text>")
-        task = self.tasks.add_feedback(parts[0], self.cfg.owner_name, parts[1])
-        self.ws.remember(task.owner, f"Feedback on {task.id}: {parts[1]}")
-        self.ws.commit(f"feedback on {task.id}", author=self.cfg.owner_name)
-        return f"🗒 feedback saved on {task.id} and in {task.owner}'s memory"
+        return await self.feedback(parts[0], parts[1])
+
+    async def cmd_changes(self, args: str) -> str:
+        parts = args.strip().split(maxsplit=1)
+        if len(parts) < 2:
+            raise ValueError("usage: /changes T-001 <what to change>")
+        return await self.request_changes(parts[0], parts[1])
 
     def cmd_cut(self, args: str) -> str:
         parts = args.strip().split(maxsplit=1)
@@ -601,39 +1198,103 @@ class Runtime:
     def cmd_report(self) -> str:
         return build_report(self.cfg, self.ws, self.tasks, self.asks)
 
+    def backup_runtime(self, keep: int = 14) -> str:
+        """.jm/ (chats, conversation memory, state) isn't in git: snapshot it daily (last `keep` days)."""
+        import zipfile
+        root = self.ws.root / ".jm"
+        dest = root / "backups"
+        dest.mkdir(parents=True, exist_ok=True)
+        path = dest / f"{today(self.cfg.timezone).isoformat()}.zip"
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in root.rglob("*"):
+                if f.is_file() and "backups" not in f.relative_to(root).parts and not f.name.endswith(".lock"):
+                    z.write(f, f.relative_to(root))
+        for old in sorted(dest.glob("*.zip"))[:-keep]:
+            old.unlink()
+        return str(path)
+
     async def run_daily_report(self) -> str:
+        try:
+            await asyncio.to_thread(self.backup_runtime)
+        except Exception:  # noqa: BLE001 - a failed backup must not stop the report
+            log.exception("runtime backup failed")
         rel, text = write_report(self.cfg, self.ws, self.tasks, self.asks)
         await self.bus.post_group(self.cfg.monitor.id, text)
+        head = text.split("## Headline", 1)[-1].strip().split("\n", 1)[0] if "## Headline" in text else ""
+        await self.bus.send_owner(self.cfg.monitor.id, f"📊 Today's report is in All hands ({rel}).\n{head}")
         return rel
 
     async def run_checks(self) -> None:
         for line in await self.apply_ask_defaults():
             await self.bus.send_owner(self.cfg.monitor.id, f"⏱ {line}")
+        await self.drain_queue()                      # e.g. yesterday's over-budget messages
+        mgr = self.cfg.monitor
         for alert in checks(self.cfg, self.ws, self.tasks, self.asks):
-            await self.bus.send_owner(self.cfg.monitor.id, alert.text, urgent=alert.incident)
+            if alert.owner:
+                await self.bus.send_owner(mgr.id, alert.text, urgent=alert.incident)
             if alert.incident:
-                await self.bus.post_group(self.cfg.monitor.id, f"🚨 INCIDENT — {alert.text}")
+                await self.bus.post_group(mgr.id, f"🚨 INCIDENT — {alert.text}")
+            if alert.nudge and self.cfg.member(alert.nudge) and not self.paused(alert.nudge):
+                # The manager chases it himself — the owner isn't the only one who hears about late work.
+                self._spawn(self._deliver(alert.nudge, Event(
+                    "inbox", f"{mgr.name} here: {alert.text}. What's the plan? Update the task (status, log, date) "
+                             f"or tell me exactly what you need.", sender=mgr.id, task=alert.task,
+                    meta={"reply_to": mgr.id})))
+
+    def blocked_on_member(self, m: Member) -> list:
+        return [t for t in self.tasks.all() if t.is_open and t.status == "blocked" and t.owner != m.id
+                and any(x.id == m.id for x in self.people_in(t.blocked_on))]
+
+    def next_work(self, m: Member) -> tuple[str, object] | None:
+        """What a person does first: unblock others → rework asked for by the owner → their top task."""
+        waiting = self.blocked_on_member(m)
+        if waiting:
+            return "unblock", waiting[0]
+        mine = [t for t in self.tasks.for_owner(m.id) if t.status in ("todo", "doing")]
+        rework = [t for t in mine if t.doc.meta.get("rework")]
+        if rework:
+            return "rework", rework[0]
+        if mine:
+            return "work", sorted(mine, key=lambda t: (t.priority, t.status != "doing", t.id))[0]
+        return None
 
     async def run_work_session(self) -> str:
-        """Each member with open work gets a work session — the team moves without being asked.
-        Returns a one-line-per-person digest (for the owner, sent silently)."""
+        """Each member with open work gets a work session — the team moves without being asked; then the manager
+        does a round of the board. Returns a one-line-per-person digest (for the owner, sent silently).
+        Coding runs started here keep going in the background: the session doesn't wait for them."""
         lines = []
 
         async def one(m: Member) -> None:
             if m.monitor or self.paused(m.id):
                 return
-            ready = [t for t in self.tasks.for_owner(m.id) if t.status in ("todo", "doing")]
-            if not ready:
+            nxt = self.next_work(m)
+            if not nxt:
                 return
-            top = sorted(ready, key=lambda t: (t.priority, t.status != "doing", t.id))[0]
-            reply = await self.dispatch(m.id, Event(
-                "system", f"Work session. Make real progress on {top.id} ({top.title}) now: write the actual "
-                          f"output with write_file (or run_code), update the task (status/log/output). If you "
-                          f"can't proceed, set it to blocked and name who you need. Reply in one line: what you "
-                          f"did and what's next.", sender="system", task=top.id))
-            lines.append(f"• {m.name} ({top.id}): {reply.splitlines()[0][:200] if reply else '-'}")
+            kind, top = nxt
+            if kind == "unblock":
+                text = (f"Work session. {self._who(top.owner)} is blocked on you for {top.id} ({top.title}): "
+                        f"{top.blocked_on}. Unblock them first: give them what they need with message_agent (or do "
+                        f"your part and log it). Reply in one line: what you did.")
+            else:
+                fb = "\n".join(top.doc.sections.get("Feedback", "").strip().splitlines()[-3:])
+                text = (f"Work session. {'Rework' if kind == 'rework' else 'Make real progress on'} {top.id} "
+                        f"({top.title}) now" + (f" — the founder's latest feedback:\n{fb}\n" if kind == "rework"
+                                               else ": ")
+                        + "write the actual output with write_file (or run_code), update the task "
+                          "(status/log/output). If you can't proceed, set it to blocked and name who you need and "
+                          "what exactly. Reply in one line: what you did and what's next.")
+            reply = await self.dispatch(m.id, Event("system", text, sender="system", task=top.id, project=top.project))
+            lines.append(f"• {m.name} ({top.id}{', unblocking' if kind == 'unblock' else ''}"
+                         f"{', rework' if kind == 'rework' else ''}): {reply.splitlines()[0][:200] if reply else '-'}")
         await asyncio.gather(*(one(m) for m in self.cfg.team))
-        await self.drain()
+        mgr = self.cfg.monitor
+        if not self.paused(mgr.id) and any(t.is_open for t in self.tasks.all()):
+            reply = await self.dispatch(mgr.id, Event(
+                "system", "Manager's round after the work session. Look at the board and what people just did. "
+                          "Chase what's stuck: message_agent the person (not the founder) with a specific ask; "
+                          "fix obviously wrong priorities or dates on tasks you manage. Only notify_owner for "
+                          "decisions only the founder can make. Reply in one line.", sender="system"))
+            lines.append(f"• {mgr.name} (round): {reply.splitlines()[0][:200] if reply else '-'}")
         return "\n".join(sorted(lines))
 
     def onboarding_messages(self) -> list[tuple[str, str]]:

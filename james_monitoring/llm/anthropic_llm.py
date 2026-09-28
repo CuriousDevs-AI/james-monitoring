@@ -4,6 +4,21 @@ from ..config import LLMConfig
 from . import LLMError, LLMResult
 
 
+def clean_messages(messages: list[dict]) -> list[dict]:
+    """The API refuses empty turns and two turns in a row from the same side: fix both so one bad reply
+    can't break a conversation forever."""
+    out: list[dict] = []
+    for m in messages:
+        content = str(m.get("content") or "").strip() or "(empty)"
+        if out and out[-1]["role"] == m["role"]:
+            out[-1] = {"role": m["role"], "content": out[-1]["content"] + "\n\n" + content}
+        else:
+            out.append({"role": m["role"], "content": content})
+    if out and out[0]["role"] != "user":
+        out.insert(0, {"role": "user", "content": "(conversation start)"})
+    return out
+
+
 class AnthropicLLM:
     name = "anthropic"
 
@@ -24,11 +39,16 @@ class AnthropicLLM:
         try:
             r = self.client.messages.create(
                 model=self.cfg.model, max_tokens=self.cfg.max_tokens, temperature=self.cfg.temperature,
-                system=system, messages=messages,
+                # The system prompt (charter, persona, memory, board) is the same across a conversation: cache it.
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                messages=clean_messages(messages),
             )
         except Exception as e:
             raise LLMError(f"Anthropic call failed: {e}") from e
         text = "".join(getattr(b, "text", "") for b in r.content)
         u = getattr(r, "usage", None)
-        return LLMResult(text=text, input_tokens=getattr(u, "input_tokens", 0) or 0,
-                         output_tokens=getattr(u, "output_tokens", 0) or 0)
+        cached = int(getattr(u, "cache_read_input_tokens", 0) or 0)
+        return LLMResult(text=text, input_tokens=(getattr(u, "input_tokens", 0) or 0)
+                         + int(getattr(u, "cache_creation_input_tokens", 0) or 0) + cached,
+                         output_tokens=getattr(u, "output_tokens", 0) or 0,
+                         truncated=getattr(r, "stop_reason", "") == "max_tokens", cached_tokens=cached)

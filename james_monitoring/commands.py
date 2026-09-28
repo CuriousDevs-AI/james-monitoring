@@ -9,6 +9,7 @@ HELP = [
     ("assign", 'Assign: /assign <who> "title" P1 due:10-03 project:<id>'),
     ("accept", "Accept a task in review: /accept T-001 [note]"),
     ("feedback", "Feedback on a task: /feedback T-001 text"),
+    ("changes", "Send work back: /changes T-001 what to change"),
     ("cut", "Cut a task: /cut T-001 [reason]"),
     ("asks", "Pending permission requests"),
     ("approve", "Approve: /approve ASK-001 [note]"),
@@ -54,9 +55,11 @@ async def run_command(rt: Runtime, cmd: str, args: str, member_id: str, private:
             await coro
         return text
     if cmd == "accept":
-        return rt.cmd_accept(args)
+        return await rt.cmd_accept(args)
     if cmd == "feedback":
-        return rt.cmd_feedback(args)
+        return await rt.cmd_feedback(args)
+    if cmd in ("changes", "rework"):
+        return await rt.cmd_changes(args)
     if cmd == "cut":
         return rt.cmd_cut(args)
     if cmd == "asks":
@@ -76,6 +79,10 @@ async def run_command(rt: Runtime, cmd: str, args: str, member_id: str, private:
                 raise ValueError(f"unknown member `{who}`")
             who = m.id
         res = rt.set_paused(who, pause)
+        if not pause:
+            n = await rt.drain_queue()                 # messages that waited while they were paused
+            if n:
+                res += f" · {n} queued message{'s' if n != 1 else ''} being answered"
         if who == "all":
             await rt.bus.post_group(cfg.monitor.id, f"⏸ {cfg.owner_name}: all work is paused until further notice."
                                     if pause else f"▶️ {cfg.owner_name}: work is ON. Go.")

@@ -69,48 +69,73 @@ def cmd_run(args) -> None:
     cfg_path = Path(args.config).expanduser().resolve()
     if args.no_web:
         from .gateway import TelegramGateway
+        from .hub import Hub
         from .scheduler import Scheduler
         cfg = _cfg(args)
         gw = TelegramGateway(cfg)
         gw.build()
-        rt = _runtime(cfg, bus=gw)
-        asyncio.run(gw.run(rt, scheduler=Scheduler(rt)))
+        hub = Hub()
+        rt = _runtime(cfg, bus=hub)
+        hub.attach(rt)
+
+        async def main():
+            if cfg.slack.configured:
+                from .slack import SlackTransport
+                try:
+                    await SlackTransport(cfg).start(rt, hub)
+                except Exception as e:  # noqa: BLE001
+                    logging.getLogger("jm").error("Slack failed to start: %s", e)
+            await gw.run(rt, scheduler=Scheduler(rt), hub=hub)
+        asyncio.run(main())
         return
     from .server import serve
     serve(cfg_path.parent, host=args.host, port=args.port, open_browser=not args.no_browser,
           telegram=not args.no_telegram)
 
 
+class _Print:
+    """`jm chat` as a channel: prints what happens in the rooms (the chat is also saved for the console)."""
+    name = "cli"
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    async def deliver(self, room, msg, ask=None):
+        m = self.cfg.member(msg.get("who", ""))
+        where = "" if self.cfg.member(room) else f"[{room}] "
+        print(f"\n{where}{m.name if m else msg.get('who')}: {msg.get('text')}" + ("  [/approve|/reject " + ask.id + "]"
+                                                                               if ask else ""))
+
+
 def cmd_chat(args) -> None:
-    """Talk to a team member locally, without Telegram. /commands work too."""
-    from .commands import run_command
-    from .runtime import ConsoleBus, Event
+    """Talk to a team member locally, without Telegram. /commands work too. Saved like any other chat."""
+    from .hub import Hub
     cfg = _cfg(args)
     who = cfg.member(args.member)
-    if not who:
+    if not who and args.member not in ("team", "all") and not args.member.startswith("p-"):
         sys.exit(f"unknown member `{args.member}`")
-    rt = _runtime(cfg, bus=ConsoleBus())
+    room = who.id if who else ("team" if args.member in ("team", "all") else args.member)
+    hub = Hub()
+    rt = _runtime(cfg, bus=hub)
+    hub.attach(rt)
+    hub.add(_Print(cfg))
 
     async def one(text: str) -> None:
         text = text.strip()
         if not text:
             return
-        if text.startswith("/"):
-            cmd, _, rest = text[1:].partition(" ")
-            try:
-                out = await run_command(rt, cmd.lower(), rest.strip(), who.id, private=True, background=False)
-            except Exception as e:  # noqa: BLE001 - show any user error
-                out = f"⚠️ {e}"
-        else:
-            out = await rt.dispatch(who.id, Event("dm", text, sender=rt.owner_id))
-        print(f"\n{who.name}: {out}")
+        try:
+            await hub.inbound(room, text, via="cli")
+        except ValueError as e:
+            print(f"⚠️ {e}")
         await rt.drain()
 
     async def main() -> None:
         if args.message:
             await one(" ".join(args.message))
             return
-        print(f"Chatting with {who.name} ({who.role}). Ctrl-D to exit. /help for commands.")
+        print(f"Chatting with {who.name} ({who.role})." if who else f"Chatting in {room}.",
+              "Ctrl-D to exit. /help for commands.")
         while True:
             try:
                 line = await asyncio.to_thread(input, "\nyou> ")
@@ -146,7 +171,11 @@ def cmd_report(args) -> None:
 def cmd_work(args) -> None:
     from .runtime import ConsoleBus
     rt = _runtime(_cfg(args), bus=ConsoleBus())
-    print(asyncio.run(rt.run_work_session()) or "Nobody has open todo/doing tasks.")
+    async def main():
+        digest = await rt.run_work_session()
+        await rt.drain()                               # the CLI waits for coding runs / hand-offs to finish
+        return digest
+    print(asyncio.run(main()) or "Nobody has open todo/doing tasks.")
 
 
 def cmd_ui(args) -> None:
@@ -260,7 +289,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--no-web", action="store_true", help="Telegram + schedule only, no console")
     s.set_defaults(fn=cmd_run)
 
-    s = sub.add_parser("chat", help="talk to a member locally, no Telegram")
+    s = sub.add_parser("chat", help="talk to a member (or `team`, or a project room p-<id>) from the terminal")
     s.add_argument("member")
     s.add_argument("message", nargs="*")
     s.set_defaults(fn=cmd_chat)
