@@ -79,9 +79,14 @@ def check(conf: LLMConfig) -> dict:
             return {**out, "can_login": False, "detail": "no model chosen",
                     "fix": "Pick a model like opencode/big-pickle (free) or zhipuai/glm-4.6 — see the list."}
         if prov == "opencode":
-            return {**out, "ok": True, "logged_in": True, "can_login": False, "detail": "free OpenCode model — no login"}
+            if not conf.allow_free:
+                return {**out, "can_login": False, "detail": "free model — not allowed yet",
+                        "fix": "Free models run OpenCode's own agent (isolated). Allow them in the person's profile "
+                               "or AI model settings, or choose a paid model."}
+            return {**out, "ok": True, "logged_in": True, "can_login": False,
+                    "detail": "free OpenCode model — no login (runs isolated)"}
         creds = opencode_credentials()
-        logged = any(prov.lower() in c or c in prov.lower() for c in creds)
+        logged = prov.lower() in creds
         return {**out, "ok": logged, "logged_in": logged, "can_login": False,
                 "detail": f"{prov} credential found in OpenCode" if logged else f"no {prov} login in OpenCode",
                 "fix": "" if logged else "In a terminal on this machine: jm connection login opencode"}
@@ -107,8 +112,12 @@ def check(conf: LLMConfig) -> dict:
     # API providers
     if not conf.model:
         return {**out, "detail": "no model id set", "fix": "Set a model id (e.g. from your provider's model list)."}
-    if kind == "openai" and conf.base_url and not conf.api_key_env:
+    local = bool(re.match(r"https?://(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:|/|$)", conf.base_url or ""))
+    if kind == "openai" and local and not conf.api_key:
         return {**out, "ok": True, "logged_in": True, "detail": f"local endpoint {conf.base_url}"}
+    if not conf.api_key_env:
+        return {**out, "logged_in": False, "detail": "no API key variable set",
+                "fix": "Set the API key in AI model settings (e.g. OPENROUTER_API_KEY for OpenRouter)."}
     if not conf.api_key:
         return {**out, "logged_in": False, "detail": f"{conf.api_key_env or 'API key'} is not set",
                 "fix": "Paste the API key in AI model settings and save."}
@@ -132,18 +141,13 @@ def test(conf: LLMConfig) -> dict:
 
 
 def opencode_credentials() -> list[str]:
-    """Providers OpenCode holds credentials for (lowercase names, e.g. ['anthropic', 'zhipuai'])."""
-    b = _bin("opencode")
-    if not b:
+    """Provider ids OpenCode holds a login for — exact ids from its auth.json (e.g. ['anthropic', 'zai'])."""
+    data_home = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    path = Path(os.environ.get("JM_OPENCODE_AUTH") or os.path.join(data_home, "opencode", "auth.json"))
+    try:
+        return sorted(k.lower() for k in json.loads(path.read_text()))
+    except (OSError, ValueError, AttributeError):
         return []
-    rc, text = _run([b, "providers", "list"])
-    text = re.sub(r"\x1b\[[0-9;]*m", "", text)
-    out = []
-    for m in re.finditer(r"[●•]\s+(.+)", text):       # "●  Anthropic oauth" → name, then the login method
-        words = m.group(1).split()
-        name = words[:-1] if len(words) > 1 else words
-        out.append("".join(name).lower())
-    return out
 
 
 def opencode_models() -> list[str]:
@@ -156,6 +160,7 @@ def opencode_models() -> list[str]:
 
 # -- login -------------------------------------------------------------------------------------
 _logins: dict[str, dict] = {}
+_login_lock = threading.Lock()
 
 
 def login(provider: str, log_dir: Path) -> dict:
@@ -167,9 +172,14 @@ def login(provider: str, log_dir: Path) -> dict:
     b = _bin(kind)
     if not b:
         return {"started": False, "error": f"Install the CLI first: {INSTALL[kind]}"}
-    cur = _logins.get(kind)
-    if cur and cur["proc"].poll() is None:
-        return {"started": True, "running": True, "url": cur.get("url", "")}
+    with _login_lock:                                     # two clicks never start two logins
+        cur = _logins.get(kind)
+        if cur and cur["proc"].poll() is None:
+            return {"started": True, "running": True, "url": cur.get("url", "")}
+        return _start_login(kind, b, log_dir)
+
+
+def _start_login(kind: str, b: str, log_dir: Path) -> dict:
     log_dir.mkdir(parents=True, exist_ok=True)
     logf = log_dir / f"login-{kind}.log"
     fh = open(logf, "w")
@@ -185,8 +195,13 @@ def login(provider: str, log_dir: Path) -> dict:
             if m and not entry["url"]:
                 entry["url"] = m.group(0).rstrip(").,")
             time.sleep(0.5)
-        if proc.poll() is None:
-            proc.kill()
+        if proc.poll() is None:                           # abandoned: the whole process group, no orphans
+            import signal
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
+            proc.wait()
         fh.close()
     threading.Thread(target=watch, daemon=True).start()
     time.sleep(1.5)                                       # usually enough for the link to be printed

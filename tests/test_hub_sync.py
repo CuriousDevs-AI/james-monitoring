@@ -214,7 +214,7 @@ def test_codex_usage_parser():
     from james_monitoring.llm.codex_cli_llm import _usage
     out = "\n".join(['{"type":"thread.started"}', 'not json',
                      '{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens":800,"output_tokens":90}}'])
-    assert _usage(out) == (1200, 90)
+    assert _usage(out) == (1200, 90, 800)
 
 
 async def test_hub_command_and_status_fast_path(tmp_path):

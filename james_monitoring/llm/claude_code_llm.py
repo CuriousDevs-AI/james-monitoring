@@ -14,6 +14,7 @@ import tempfile
 
 from ..config import LLMConfig
 from . import LLMError, LLMResult
+from ._proc import run, safe_env
 
 
 def _transcript(messages: list[dict]) -> str:
@@ -55,15 +56,15 @@ class ClaudeCodeLLM:
         fd, sys_file = tempfile.mkstemp(prefix="system-", suffix=".md", dir=self.cwd)
         with os.fdopen(fd, "w") as f:
             f.write(system)
+        # No tools, no MCP servers, no user/project settings (so no hooks) — the team prompt is the only context.
         cmd = [self.bin, "-p", "--output-format", "json", "--system-prompt-file", sys_file,
-               "--tools", "", "--no-session-persistence"]
+               "--tools", "", "--no-session-persistence", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+               "--setting-sources", "local", "--disable-slash-commands"]
         if self.cfg.model:
             cmd += ["--model", self.cfg.model]
         try:
-            r = subprocess.run(cmd, input=_transcript(messages), capture_output=True, text=True, cwd=self.cwd,
-                               stdin=None, timeout=int(os.environ.get("JM_CLAUDE_TIMEOUT", "180")))
-        except subprocess.TimeoutExpired as e:
-            raise LLMError("claude CLI timed out") from e
+            r = run(cmd, input=_transcript(messages), cwd=self.cwd, env=safe_env(),
+                    timeout=int(os.environ.get("JM_CLAUDE_TIMEOUT", "180")), what="claude CLI")
         finally:
             with contextlib.suppress(OSError):
                 os.unlink(sys_file)

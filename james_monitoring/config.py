@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,7 @@ class LLMConfig:
     api_key_env: str = "ANTHROPIC_API_KEY"
     max_tokens: int = 8000
     temperature: float = 0.3
+    allow_free: bool = False       # OpenCode free models (opencode/…): opt-in, they run OpenCode's own agent
 
     @property
     def api_key(self) -> str:
@@ -60,11 +62,13 @@ class LLMConfig:
 
 CLI_PROVIDERS = ("claude-code", "claude_code", "claude-cli", "subscription", "codex-cli", "codex_cli", "opencode",
                  "open-code", "fake")
-KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
+           "codex": "OPENAI_API_KEY", "openrouter": "OPENROUTER_API_KEY"}
 
 # What an agent may do on its own. green = just do it · yellow = do it and tell the owner · red = ask first
 # (the action waits as an Approve/Reject card and runs only after the owner approves).
 CHANNELS = ("telegram", "slack", "console")
+RESERVED_IDS = ("all", "everyone", "team", "here", "channel", "backchannel", "system", "owner")   # room/mention names
 ACTION_TYPES = ["create_task", "update_task", "write_file", "message_agent", "post_group", "post_room", "run_code"]
 LEVELS = ("green", "yellow", "red")
 DEFAULT_PERMISSIONS = {**{a: "green" for a in ACTION_TYPES},
@@ -218,7 +222,8 @@ def _get(d: dict, path: str, default: Any = None) -> Any:
 def load_config(path: str | Path = "config.yaml") -> Config:
     path = Path(path).expanduser().resolve()
     if not path.exists():
-        raise ConfigError(f"Config not found: {path}. Run `jm init` first.")
+        raise ConfigError(f"No team here yet ({path} not found). Run `jm run` in this folder to set one up in the "
+                          f"browser (or `jm init` for the terminal wizard), or pass -c path/to/config.yaml.")
     load_dotenv(path.parent / ".env")
     raw = yaml.safe_load(path.read_text()) or {}
     return parse_config(raw, base_dir=path.parent, path=path)
@@ -241,15 +246,20 @@ def parse_llm(llm: dict, base: dict | None = None) -> LLMConfig:
         merged = {k: v for k, v in merged.items() if k in ("max_tokens", "temperature")}
     merged.update({k: v for k, v in llm.items() if v not in (None, "")})
     provider = str(merged.get("provider") or "anthropic")
-    default_key_env = "" if provider in CLI_PROVIDERS else KEY_ENV.get(provider, "")
+    if provider in CLI_PROVIDERS:
+        key_env = ""                                       # the CLI holds the login
+    elif "api_key_env" in merged:
+        key_env = str(merged.get("api_key_env") or "")     # whatever the user chose (OPENROUTER_API_KEY, …)
+    else:
+        key_env = KEY_ENV.get(provider, "")
     return LLMConfig(
         provider=provider,
         model=str(merged.get("model") or ""),
         base_url=str(merged.get("base_url") or ""),
-        api_key_env=(str(merged.get("api_key_env") or "") if ("api_key_env" in merged and default_key_env)
-                     else default_key_env),
+        api_key_env=key_env,
         max_tokens=max(int(merged.get("max_tokens") or 8000), 4000),   # below ~4k, documents get cut off
         temperature=float(merged.get("temperature", 0.3)),
+        allow_free=bool(merged.get("allow_free", False)),
     )
 
 
@@ -265,8 +275,8 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         mid = str(t.get("id") or t.get("name", "")).strip().lower()
         if not mid:
             raise ConfigError("config: every team member needs an `id`")
-        if mid in seen or mid == "all":
-            raise ConfigError(f"config: duplicate or reserved member id `{mid}`")
+        if mid in seen or mid in RESERVED_IDS or mid.startswith("p-"):
+            raise ConfigError(f"config: duplicate or reserved member id `{mid}` (reserved: {', '.join(RESERVED_IDS)})")
         seen.add(mid)
         team.append(Member(
             id=mid,
@@ -300,8 +310,7 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
                         channels={str(k): str(v) for k, v in (sl.get("channels") or {}).items() if v})
     qh = _get(raw, "telegram.quiet_hours")
     ws = Path(str(_get(raw, "workspace.path", "./team-workspace"))).expanduser()
-    if not ws.is_absolute():
-        ws = (base_dir / ws).resolve()
+    ws = (ws if ws.is_absolute() else base_dir / ws).resolve()        # always resolved (/tmp → /private/tmp)
 
     cmd = _get(raw, "executor.command", [])
     if isinstance(cmd, str):
@@ -325,6 +334,12 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
     work_sessions = sorted({hhmm(x, "monitor.work_sessions") for x in (_get(raw, "monitor.work_sessions", []) or [])})
     if qh and len(qh) == 2:
         qh = [hhmm(qh[0], "telegram.quiet_hours"), hhmm(qh[1], "telegram.quiet_hours")]
+    owner_name = str(_get(raw, "owner.name", "Owner"))
+    owner_key = re.sub(r"[^a-z0-9]+", "_", owner_name.lower()).strip("_") or "owner"
+    clash = next((m for m in team if m.id == owner_key), None)
+    if clash:
+        raise ConfigError(f"config: team member id `{clash.id}` is the same as the owner's ({owner_name}) — give "
+                          f"{clash.name} a different id (e.g. `{clash.id}_ai`)")
     return Config(
         company=str(raw.get("company") or "My Company"),
         timezone=tz,

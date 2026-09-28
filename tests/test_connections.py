@@ -76,31 +76,41 @@ def test_console_groups_models_by_who_uses_them(tmp_path):
 
 
 FAKE_OPENCODE = r'''
-if [ "$1 $2" = "providers list" ]; then printf '\033[0m\n●  Anthropic \033[90moauth\n●  Zhipu AI \033[90mapi\n'; exit 0; fi
 if [ "$1" = "models" ]; then printf 'opencode/big-pickle\nzhipuai/glm-4.6\n'; exit 0; fi
-cat > "$(dirname "$0")/stdin.txt"; env > "$(dirname "$0")/env.txt"
+cat > "$(dirname "$0")/stdin.txt"; env > "$(dirname "$0")/env.txt"; echo "$@" > "$(dirname "$0")/args.txt"
 echo '{"type":"step_start","part":{}}'
 echo '{"type":"text","part":{"type":"text","text":"{\"reply\":\"pong\",\"actions\":[]}"}}'
-echo '{"type":"step_finish","part":{"tokens":{"input":120,"output":9,"reasoning":1,"cache":{"read":1000,"write":0}}}}'
+echo '{"type":"step_finish","part":{"tokens":{"input":120,"output":9,"reasoning":1,"cache":{"read":1000,"write":50}}}}'
 '''
 
 
-def test_opencode_runs_any_model_and_locks_paid_ones_down(tmp_path, monkeypatch):
+def test_opencode_runs_locked_down_and_free_models_are_opt_in(tmp_path, monkeypatch):
     from james_monitoring.llm import LLMError, make_llm
     import pytest
     monkeypatch.setenv("JM_OPENCODE_BIN", cli(tmp_path, "opencode", FAKE_OPENCODE))
+    monkeypatch.setenv("TG_TOKEN_JAMES", "secret-bot-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
     r = make_llm(LLMConfig(provider="opencode", model="zhipuai/glm-4.6")).complete("SYSTEM", [{"role": "user", "content": "ping"}])
-    assert r.text == '{"reply":"pong","actions":[]}' and (r.input_tokens, r.output_tokens, r.cached_tokens) == (1120, 10, 1000)
-    assert "SYSTEM" in (tmp_path / "stdin.txt").read_text()
-    assert '"bash": "deny"' in (tmp_path / "env.txt").read_text()                 # paid: tools denied
-    make_llm(LLMConfig(provider="opencode", model="opencode/big-pickle")).complete("S", [{"role": "user", "content": "x"}])
-    assert "OPENCODE_CONFIG_CONTENT" not in (tmp_path / "env.txt").read_text()     # free tier: stock OpenCode
+    assert r.text == '{"reply":"pong","actions":[]}' and (r.input_tokens, r.output_tokens, r.cached_tokens) == (1170, 10, 1000)
+    env = (tmp_path / "env.txt").read_text()
+    assert '"*": "deny"' in env and '"*": false' in env and "XDG_CONFIG_HOME=" in env        # tools off, empty config
+    assert "secret-bot-token" not in env and "sk-secret" not in env                           # no secrets inside
+    assert (tmp_path / "args.txt").read_text().startswith("--pure run")
+    with pytest.raises(LLMError, match="Allow free models"):
+        make_llm(LLMConfig(provider="opencode", model="opencode/big-pickle"))
+    make_llm(LLMConfig(provider="opencode", model="opencode/big-pickle", allow_free=True)).complete(
+        "S", [{"role": "user", "content": "x"}])
+    env = (tmp_path / "env.txt").read_text()
+    assert "OPENCODE_CONFIG_CONTENT" not in env and "free-home" in env and "sk-secret" not in env
     with pytest.raises(LLMError, match="provider/model"):
         make_llm(LLMConfig(provider="opencode", model="glm"))
-    assert cx.opencode_credentials() == ["anthropic", "zhipuai"]
-    assert cx.check(LLMConfig(provider="opencode", model="zhipuai/glm-4.6"))["ok"]
-    bad = cx.check(LLMConfig(provider="opencode", model="openai/gpt-5"))
-    assert not bad["ok"] and "jm connection login opencode" in bad["fix"]
+    auth = tmp_path / "auth.json"
+    auth.write_text('{"anthropic": {}, "zai": {}}')
+    monkeypatch.setenv("JM_OPENCODE_AUTH", str(auth))
+    assert cx.opencode_credentials() == ["anthropic", "zai"]
+    assert cx.check(LLMConfig(provider="opencode", model="zai/glm-4.6"))["ok"]
+    assert not cx.check(LLMConfig(provider="opencode", model="zhipuai/glm-4.6"))["ok"]       # different credential
+    assert not cx.check(LLMConfig(provider="opencode", model="opencode/big-pickle"))["ok"]   # free: not allowed yet
     assert cx.opencode_models() == ["opencode/big-pickle", "zhipuai/glm-4.6"]
 
 
@@ -109,8 +119,30 @@ def test_opencode_error_is_explained(tmp_path, monkeypatch):
     import pytest
     monkeypatch.setenv("JM_OPENCODE_BIN", cli(tmp_path, "opencode",
                                               """echo '{"type":"error","error":{"name":"APIError","data":{"message":"401 invalid x-api-key"}}}'"""))
-    with pytest.raises(LLMError, match="401 invalid x-api-key.*opencode providers login"):
+    with pytest.raises(LLMError, match="401 invalid x-api-key.*jm connection login opencode"):
         make_llm(LLMConfig(provider="opencode", model="anthropic/claude-sonnet-4-5")).complete("s", [{"role": "user", "content": "x"}])
+
+
+def test_cli_models_never_see_secrets_and_timeouts_kill_the_tree(tmp_path, monkeypatch):
+    from james_monitoring.llm import LLMError
+    from james_monitoring.llm._proc import run, safe_env
+    import pytest
+    import subprocess
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-secret")
+    assert "SLACK_BOT_TOKEN" not in safe_env() and "PATH" in safe_env()
+    marker = tmp_path / "child-alive"
+    script = cli(tmp_path, "slow", f"(sleep 3; touch {marker}) & sleep 30")
+    with pytest.raises(LLMError, match="timed out"):
+        run([script], input="", cwd=str(tmp_path), env=safe_env(), timeout=0.5, what="slow")
+    time.sleep(3.5)
+    assert not marker.exists()                                   # the grandchild died with the group
+
+
+def test_codex_counts_cached_tokens_once():
+    from james_monitoring.llm.codex_cli_llm import _usage
+    out = "\n".join(['{"type":"token_count","msg":{"info":{"total_token_usage":{"input_tokens":999}}}}',
+                     '{"type":"turn.completed","usage":{"input_tokens":12783,"cached_input_tokens":9984,"output_tokens":90}}'])
+    assert _usage(out) == (12783, 90, 9984)
 
 
 def test_jm_connection_command(tmp_path, monkeypatch, capsys):
