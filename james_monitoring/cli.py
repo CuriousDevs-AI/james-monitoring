@@ -183,6 +183,54 @@ def cmd_ui(args) -> None:
     cmd_run(args)
 
 
+def cmd_connection(args) -> None:
+    """Every AI model the team uses: installed? logged in? answering? — and log in right here in the terminal."""
+    import subprocess
+    from . import connections as cx
+    cfg = _cfg(args)
+    if args.action == "login":
+        kind = cx._kind({"claude": "claude-code", "codex": "codex-cli"}.get(args.target or "", args.target or "")
+                        or cfg.llm.provider)
+        cmd = cx.LOGIN.get(kind) or cx.TERMINAL_LOGIN.get(kind)
+        b = cx._bin(kind)
+        if not cmd:
+            sys.exit(f"{args.target or cfg.llm.provider}: no login — it uses an API key (set it in Settings or .env).")
+        if not b:
+            sys.exit(f"Install it first: {cx.INSTALL.get(kind, kind)}")
+        print(f"→ {' '.join([Path(b).name, *cmd])}   (follow the prompts; your browser may open)\n")
+        rc = subprocess.call([b, *cmd])
+        print("\n✅ Done — check with: jm connection" if rc == 0 else f"\n❌ Login exited with {rc}")
+        sys.exit(rc)
+    groups = cx.providers_in_use(cfg)
+    bad = 0
+    print(f"AI models — {cfg.company}")
+    for g in groups:
+        c = cfg_c = g["config"]
+        r = cx.check(cfg_c)
+        who = ", ".join((cfg.member(x).name if cfg.member(x) else x) for x in g["people"]) or "nobody"
+        line = f"  {'✅' if r['ok'] else '❌'} {r['label']} · {c.model or 'default'} — {r['detail']}   (used by {who})"
+        if args.action == "test" and r["ok"]:
+            t = cx.test(c)
+            line += f"\n     test: {'answers in ' + str(t['seconds']) + 's' if t['ok'] else '❌ ' + t['error']}"
+            r["ok"] = t["ok"]
+        print(line)
+        if not r["ok"]:
+            bad += 1
+            kind = r["provider"]
+            fix = (f"jm connection login {kind}" if (kind in cx.LOGIN or kind in cx.TERMINAL_LOGIN) and r["installed"]
+                   else r["fix"])
+            print(f"     fix: {fix}")
+    name, email = cfg.git_author
+    print(f"Git identity\n  {'✅' if email != 'jm@localhost' else '⚠️ '} {name} <{email}>")
+    print("Channels")
+    print(f"  {'✅' if cfg.monitor.bot_token else '·'} Telegram {'connected' if cfg.monitor.bot_token else '(optional)'}")
+    print(f"  {'✅' if cfg.slack.configured else '·'} Slack {'connected' if cfg.slack.configured else '(optional)'}")
+    print(f"  {'✅' if cfg.github.enabled else '·'} GitHub {'board mirror on' if cfg.github.enabled else '(optional)'}")
+    if args.action != "test":
+        print("\nRun `jm connection test` to make one tiny call to each model.")
+    sys.exit(1 if bad else 0)
+
+
 def cmd_doctor(args) -> None:
     cfg = _cfg(args)
     ok = True
@@ -310,6 +358,12 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--no-browser", action="store_true")
     s.add_argument("--no-telegram", action="store_true")
     s.set_defaults(fn=cmd_ui)
+
+    s = sub.add_parser("connection", aliases=["connect", "connections"],
+                       help="check every AI model (installed, logged in, answering) · login · test")
+    s.add_argument("action", nargs="?", choices=["check", "test", "login"], default="check")
+    s.add_argument("target", nargs="?", help="for login: claude-code | codex-cli | opencode")
+    s.set_defaults(fn=cmd_connection)
 
     s = sub.add_parser("doctor", help="check the setup")
     s.add_argument("--ping", action="store_true", help="also call the model and Telegram")

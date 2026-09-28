@@ -3,6 +3,7 @@
     anthropic  -> Claude via the Anthropic API (API key)
     claude-code -> Claude via the Claude Code CLI — works with a Claude Pro/Max subscription, no API key
     codex-cli  -> Codex via the Codex CLI — works with a ChatGPT subscription, no API key
+    opencode   -> any model through OpenCode (Claude, GPT, GLM, Gemini, free models) with OpenCode's logins
     openai     -> any OpenAI-compatible endpoint: OpenAI / Codex models, Ollama, OpenRouter, vLLM, LM Studio
     fake       -> deterministic replies for tests and dry runs
 """
@@ -58,7 +59,10 @@ def make_llm(cfg: LLMConfig) -> LLM:
     if p in ("codex-cli", "codex_cli", "chatgpt"):
         from .codex_cli_llm import CodexCLILLM
         return CodexCLILLM(cfg)
+    if p in ("opencode", "open-code"):
+        from .opencode_llm import OpenCodeLLM
+        return OpenCodeLLM(cfg)
     if p == "fake":
         from .fake import FakeLLM
         return FakeLLM()
-    raise LLMError(f"Unknown llm.provider `{cfg.provider}` (use claude-code | codex-cli | anthropic | openai | fake)")
+    raise LLMError(f"Unknown llm.provider `{cfg.provider}` (use claude-code | codex-cli | opencode | anthropic | openai | fake)")
