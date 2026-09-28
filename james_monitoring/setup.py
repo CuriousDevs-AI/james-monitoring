@@ -18,6 +18,7 @@ from typing import Protocol
 import yaml
 
 from .config import Config, load_config, parse_config
+from .fileio import path_lock, set_env, update_config, write_config
 from .workspace import Workspace
 
 
@@ -62,6 +63,17 @@ def template(name: str) -> str:
 
 def slug(name: str) -> str:
     return re.sub(r"[^a-z0-9_]", "", name.lower().replace(" ", "_").replace("-", "_")) or "member"
+
+
+def detect_git_identity() -> tuple[str, str]:
+    """The founder's own git name/email (global git config) — team commits and PRs are made as them."""
+    def get(key):
+        try:
+            r = subprocess.run(["git", "config", "--global", key], capture_output=True, text=True, timeout=5)
+            return r.stdout.strip()
+        except Exception:  # noqa: BLE001
+            return ""
+    return get("user.name"), get("user.email")
 
 
 def detect_timezone() -> str:
@@ -119,15 +131,8 @@ def default_persona(member: dict, owner: str) -> str:
 
 
 def _append_env(env_path: Path, pairs: dict[str, str]) -> None:
-    existing = env_path.read_text() if env_path.exists() else ""
-    lines = [f"{k}={v}" for k, v in pairs.items() if v and f"\n{k}=" not in "\n" + existing]
-    if lines:
-        with env_path.open("a") as f:
-            f.write(("\n" if existing and not existing.endswith("\n") else "") + "\n".join(lines) + "\n")
-        os.chmod(env_path, 0o600)
-    for k, v in pairs.items():
-        if v:
-            os.environ[k] = v
+    """Add or replace keys in .env (a new token must win over the old one)."""
+    set_env(env_path, pairs)
 
 
 def scaffold(raw: dict, *, personas: dict[str, str] | None = None, goals: list[str] | None = None,
@@ -138,7 +143,9 @@ def scaffold(raw: dict, *, personas: dict[str, str] | None = None, goals: list[s
     base_dir = Path(base_dir).resolve()
     base_dir.mkdir(parents=True, exist_ok=True)
     cfg_path = base_dir / "config.yaml"
-    cfg_path.write_text(yaml.safe_dump(raw, sort_keys=False, allow_unicode=True))
+    if clone_url.startswith("-"):
+        raise ValueError("That clone URL isn't a git URL.")
+    write_config(cfg_path, raw)                 # validated, backed up, atomic
     cfg = parse_config(raw, base_dir=base_dir, path=cfg_path)
     env = {}
     if api_key and cfg.llm.api_key_env:
@@ -365,11 +372,11 @@ async def wizard(base_dir: Path, io: IO | None = None, *, api_base: str = "", ti
         "company": company, "timezone": tz,
         "owner": {"name": owner, "telegram_user_id": owner_id},
         "llm": {"provider": provider, "model": model, "base_url": base_url, "api_key_env": key_env,
-                "max_tokens": 2000},
+                "max_tokens": 8000},
         "workspace": {"path": ws, "push": push},
         "telegram": {"group_chat_id": group_id, "quiet_hours": ["22:00", "08:00"],
                      **({"api_base_url": api_base} if api_base else {})},
-        "monitor": {"daily_report": "18:30", "check_every_minutes": 60, "work_sessions": [],
+        "monitor": {"daily_report": "18:30", "check_every_minutes": 60, "work_sessions": ["10:00", "15:00"],
                     "stale_days": 7, "blocked_escalate_days": 2, "ask_default_hours": 24},
         "budget": {"daily_tokens_per_agent": 300000},
         "executor": {"command": [], "timeout_minutes": 30},
@@ -425,6 +432,13 @@ async def add_member_interactive(cfg_path: Path, io: IO | None = None, *, timeou
 def add_member(cfg_path: Path, *, name: str, role: str, projects: list[str], persona_file: str = "",
                token: str = "") -> str:
     """Non-interactive add (no Telegram checks) — for scripts."""
+    with path_lock(cfg_path):
+        return _add_member_locked(cfg_path, name=name, role=role, projects=projects, persona_file=persona_file,
+                                  token=token)
+
+
+def _add_member_locked(cfg_path: Path, *, name: str, role: str, projects: list[str], persona_file: str,
+                       token: str) -> str:
     raw = yaml.safe_load(Path(cfg_path).read_text())
     mid = slug(name)
     if any(str(m.get("id")).lower() == mid for m in raw.get("team", [])) or mid == "all":
@@ -442,13 +456,33 @@ def add_member(cfg_path: Path, *, name: str, role: str, projects: list[str], per
 
 def remove_member(cfg_path: Path, member_id: str) -> str:
     """Take someone off the team. Their files stay in git history (team/<id>/ is kept)."""
-    raw = yaml.safe_load(Path(cfg_path).read_text())
-    team = raw.get("team", [])
-    target = [m for m in team if str(m.get("id")).lower() == member_id.lower()]
-    if not target:
-        raise ValueError(f"no member `{member_id}`")
-    if target[0].get("monitor"):
-        raise ValueError("can't remove the manager — make someone else the manager first")
-    raw["team"] = [m for m in team if m is not target[0]]
-    Path(cfg_path).write_text(yaml.safe_dump(raw, sort_keys=False, allow_unicode=True))
-    return target[0].get("name", member_id)
+    removed: list[str] = []
+
+    def fn(raw):
+        team = raw.get("team", [])
+        target = [m for m in team if str(m.get("id")).lower() == member_id.lower()]
+        if not target:
+            raise ValueError(f"no member `{member_id}`")
+        if target[0].get("monitor"):
+            raise ValueError("can't remove the manager — make someone else the manager first")
+        raw["team"] = [m for m in team if m is not target[0]]
+        mid = str(target[0].get("id")).lower()
+        for pr in (raw.get("projects") or {}).values():      # a removed person can't stay a project lead…
+            if not isinstance(pr, dict):
+                continue
+            if str(pr.get("lead", "")).lower() == mid:
+                pr["lead"] = ""
+            agents = pr.get("agents") or {}
+            if mid in agents:                                  # …or keep settings on a project
+                agents.pop(mid)
+                if not agents:
+                    pr.pop("agents", None)
+        for d in (raw.get("departments") or {}).values():    # …or head a department
+            if isinstance(d, dict) and str(d.get("head", "")).lower() == mid:
+                d["head"] = ""
+        sl = raw.get("slack") or {}
+        if isinstance(sl.get("channels"), dict):
+            sl["channels"].pop(mid, None)
+        removed.append(target[0].get("name", member_id))
+    update_config(cfg_path, fn)
+    return removed[0]

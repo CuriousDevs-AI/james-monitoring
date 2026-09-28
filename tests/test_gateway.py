@@ -2,6 +2,7 @@
 from types import SimpleNamespace
 
 from james_monitoring.gateway import TelegramGateway
+from james_monitoring.hub import Hub
 from james_monitoring.llm.fake import FakeLLM
 from james_monitoring.runtime import Runtime
 
@@ -22,8 +23,10 @@ def setup(cfg):
     gw = TelegramGateway(cfg)
     gw.apps = {m.id: SimpleNamespace(bot=FakeBot(m.id, sent)) for m in cfg.team}
     gw.usernames = {m.id: f"{m.id}_cd_bot" for m in cfg.team}
-    rt = Runtime(cfg, FakeLLM(), bus=gw)
-    gw.rt = rt
+    hub = Hub()
+    rt = Runtime(cfg, FakeLLM(), bus=hub)
+    hub.attach(rt)
+    gw.bind(rt, hub)
     return gw, rt, sent
 
 
@@ -80,7 +83,7 @@ async def test_commands_and_ask_buttons(cfg):
 
     ask = rt.asks.create(requester="marcus", summary="Pay ₹900/mo VPS", level="red")
     sent.clear()
-    await gw.send_owner("marcus", ask.summary, ask=ask)
+    await rt.bus.send_owner("marcus", ask.summary, ask=ask)
     name, chat, text, markup = sent[0]
     assert name == "marcus" and "ASK-001" in text
     assert markup.inline_keyboard[0][0].callback_data == "ask|ASK-001|approved"
@@ -100,3 +103,25 @@ async def test_commands_and_ask_buttons(cfg):
     await rt.drain()
     assert rt.asks.get("ASK-001").status == "approved"
     assert any(s[0] == "marcus" and s[2] == "Paying now." for s in sent)
+
+
+async def test_console_messages_reach_telegram_and_botless_people_go_through_the_manager(cfg):
+    gw, rt, sent = setup(cfg)
+    del gw.apps["marcus"]                                          # Marcus has no bot of his own
+    rt.llm.push({"reply": "Navbar done.", "actions": []})
+    await rt.bus.inbound("sofia", "is the navbar done?", via="console")
+    assert sent == [("sofia", 111, "🗨 Pankaj (via console): is the navbar done?", None),
+                    ("sofia", 111, "Navbar done.", None)]
+    sent.clear()
+    await rt.bus.send_owner("marcus", "Schema ready.")
+    assert sent == [("james", 111, "[Marcus] Schema ready.", None)]
+    # "@marcus …" in the manager's DM reaches Marcus's room
+    sent.clear()
+    rt.llm.push({"reply": "Reviewing it now.", "actions": []})
+    await gw._make_text_handler("james")(update("@marcus review the schema"), None)
+    assert [m["who"] for m in rt.chat.since("marcus")][-2:] == ["pankaj", "marcus"]
+    assert sent == [("james", 111, "[Marcus] Reviewing it now.", None)]
+    # teammates' internal hand-offs stay off Telegram
+    sent.clear()
+    await rt.bus.post_room("backchannel", "sofia", "→ Marcus: ping", kind="internal")
+    assert sent == []

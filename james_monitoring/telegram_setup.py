@@ -65,13 +65,15 @@ class TelegramProbe:
     def _take(self, u) -> None:
         self._buffer = [x for x in self._buffer if x.update_id > u.update_id]
 
-    async def wait_for_owner(self, timeout: float = 300) -> Person | None:
-        """The first private message the bot receives identifies the owner."""
+    async def wait_for_owner(self, timeout: float = 300, code: str = "") -> Person | None:
+        """The owner is whoever sends the bot a private message — with `code`, only a message containing that
+        one-time code counts (so a stranger who finds the bot during setup can't become the owner)."""
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             for u in await self._updates():
                 m = u.message
-                if m and m.chat.type == "private" and m.from_user and not m.from_user.is_bot:
+                if m and m.chat.type == "private" and m.from_user and not m.from_user.is_bot \
+                        and (not code or code in (m.text or "")):
                     self._take(u)
                     fu = m.from_user
                     return Person(fu.id, fu.full_name, fu.username or "")
@@ -86,9 +88,16 @@ class TelegramProbe:
                 if u.message and u.message.chat.type in ("group", "supergroup"):
                     m = u.message
                     self._take(u)
-                    if m.migrate_to_chat_id:             # group upgraded to supergroup → new id
-                        chat = await self.bot.get_chat(m.migrate_to_chat_id)
-                        return Group(chat.id, chat.title or "")
+                    if m.migrate_to_chat_id:             # group upgraded to supergroup → new id (only yours)
+                        try:
+                            me = await self.bot.get_chat_member(m.migrate_to_chat_id, owner_id)
+                            mine = me.status in ("member", "administrator", "creator")
+                        except Exception:  # noqa: BLE001
+                            mine = False
+                        if mine:
+                            chat = await self.bot.get_chat(m.migrate_to_chat_id)
+                            return Group(chat.id, chat.title or "")
+                        continue
                     if m.from_user and m.from_user.id == owner_id:
                         return Group(m.chat.id, m.chat.title or "")
                 cm = u.my_chat_member

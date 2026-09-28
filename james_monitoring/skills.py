@@ -39,7 +39,7 @@ class ImportedSkill:
         return raw.replace("_", "-").split("-")[0].strip().title() or "Member"
 
     def suggested_role(self) -> str:
-        m = re.search(r"^#\s+[^\n—–]+?\s*[—–]\s*(.+)$", self.persona, re.M)
+        m = re.search(r"^#\s+[^\n—–-]+?\s+[—–-]\s+(.+)$", self.persona, re.M)      # "# Bob — Dev" or "# Bob - Dev"
         if m:
             return m.group(1).strip()
         if self.meta.get("role"):
@@ -58,8 +58,8 @@ def _text(data: bytes, where: str) -> str:
         text = data.decode(enc)
     except UnicodeDecodeError:
         raise SkillError(f"{where} is not a text file (use SKILL.md, a folder, or a .skill/.zip)") from None
-    if "\x00" in text:
-        raise SkillError(f"{where} is not a text file")
+    if "\x00" in text or text.lstrip().startswith(("%PDF", "\x89PNG", "GIF8", "{\\rtf")):
+        raise SkillError(f"{where} is not a text file (use SKILL.md, a folder, or a .skill/.zip)")
     return text
 
 
@@ -114,6 +114,9 @@ def from_bytes(filename: str, data: bytes) -> ImportedSkill:
                 raise SkillError(f"{filename} unpacks too large")
             return _from_files({i.filename: z.read(i) for i in infos}, filename)
     name = filename.rsplit("/", 1)[-1] or "SKILL.md"
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext and ext not in ("md", "markdown", "txt", "skill"):
+        raise SkillError(f"{filename} is not a text file — persona files are .md, .txt, .skill or .zip")
     _text(data, filename)                                   # validate it's text
     return _from_files({name if name.lower().endswith(".md") else "SKILL.md": data}, filename)
 

@@ -9,6 +9,7 @@ from james_monitoring.llm import LLMError, make_llm
 FAKE_OK = """#!/bin/sh
 cat > "$(dirname "$0")/last_stdin.txt"
 echo "$@" > "$(dirname "$0")/last_args.txt"
+while [ $# -gt 0 ]; do [ "$1" = "--system-prompt-file" ] && cp "$2" "$(dirname "$0")/last_system.txt"; shift; done
 echo '{"type":"result","subtype":"success","is_error":false,"result":"{\\"reply\\":\\"hi\\",\\"actions\\":[]}","usage":{"input_tokens":3,"cache_creation_input_tokens":100,"cache_read_input_tokens":0,"output_tokens":7}}'
 """
 FAKE_ERR = """#!/bin/sh
@@ -32,7 +33,8 @@ def test_calls_cli_with_system_prompt_and_transcript(tmp_path, monkeypatch):
                                       {"role": "user", "content": "second"}])
     assert r.text == '{"reply":"hi","actions":[]}' and r.input_tokens == 103 and r.output_tokens == 7
     args = (tmp_path / "last_args.txt").read_text()
-    assert "-p" in args and "--output-format json" in args and "--system-prompt SYSTEM RULES" in args
+    assert "-p" in args and "--output-format json" in args and "--system-prompt-file" in args
+    assert (tmp_path / "last_system.txt").read_text() == "SYSTEM RULES"          # passed as a file, then removed
     assert "--model sonnet" in args and "--no-session-persistence" in args
     stdin = (tmp_path / "last_stdin.txt").read_text()
     assert "first" in stdin and "second" in stdin and "answer this one" in stdin

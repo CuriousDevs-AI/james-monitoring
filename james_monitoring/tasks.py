@@ -1,12 +1,14 @@
 """Git-backed task board. One markdown file per task under tasks/."""
 from __future__ import annotations
 
+import copy
 import re
 import threading
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from .fileio import atomic_write
 from .mdoc import MDoc
 from .util import parse_date, slugify, today
 
@@ -20,6 +22,14 @@ SECTIONS = ["Goal", "Done means", "Log", "Feedback", "Output"]
 
 class TaskError(Exception):
     pass
+
+
+def clean_text(text) -> str:
+    """Text from agents/people that goes inside a task file: it must not be able to start a new `## Section`
+    (e.g. a fake "## Feedback" or a replaced "## Done means") or break the front matter."""
+    t = str(text or "").replace("\r", "")
+    t = re.sub(r"(?m)^(\s*)(#{1,2})(\s)", r"\1###\3", t)
+    return re.sub(r"(?m)^---\s*$", "—", t).strip()
 
 
 @dataclass
@@ -66,16 +76,19 @@ class Task:
         m = self.doc.meta
         dm = self.doc.sections.get("Done means", "").strip()
         log = "\n".join(self.doc.sections.get("Log", "").strip().splitlines()[:3])
-        fb = "\n".join(self.doc.sections.get("Feedback", "").strip().splitlines()[:3])
+        fb = "\n".join(self.doc.sections.get("Feedback", "").strip().splitlines()[-3:])      # the newest
         parts = [f"{self.id} | {self.title} | owner={m.get('owner')} | {m.get('priority')} | status={m.get('status')}"
                  f" | due={m.get('due') or '-'} | project={m.get('project') or '-'}"
-                 + (f" | blocked_on={self.blocked_on}" if self.blocked_on else "")]
+                 + (f" | blocked_on={self.blocked_on}" if self.blocked_on else "")
+                 + (f" | depends_on={','.join(map(str, m['depends_on']))}" if m.get("depends_on") else "")]
         if dm:
             parts.append(f"  done means: {dm.replace(chr(10), ' ')}")
         if log:
             parts.append(f"  recent log: {log.replace(chr(10), ' / ')}")
         if fb:
             parts.append(f"  feedback: {fb.replace(chr(10), ' / ')}")
+        if m.get("rework"):
+            parts.append("  ↩ the founder asked for changes — rework this first")
         return "\n".join(parts)
 
 
@@ -86,13 +99,22 @@ class TaskStore:
         self.tz = tz
         self.owner_id = owner_id
         self._lock = threading.RLock()
+        self._cache: dict[Path, tuple] = {}
 
     # -- read ----------------------------------------------------------------
     def all(self) -> list[Task]:
+        """Every task. Parsed files are cached by (mtime, size): a board of 1000 tasks costs a stat per file."""
         tasks = []
         for p in sorted(self.dir.glob("T-*.md")):
             try:
-                tasks.append(Task(p, MDoc.parse(p.read_text())))
+                st = p.stat()
+                key = (st.st_mtime_ns, st.st_size)
+                hit = self._cache.get(p)
+                if not hit or hit[0] != key:
+                    hit = (key, MDoc.parse(p.read_text()))
+                    self._cache[p] = hit
+                d = hit[1]                    # a copy: callers change task docs before saving them
+                tasks.append(Task(p, MDoc(meta=copy.deepcopy(d.meta), sections=dict(d.sections), preamble=d.preamble)))
             except Exception:  # a broken file must not break the board
                 continue
         return tasks
@@ -108,18 +130,21 @@ class TaskStore:
         return [t for t in self.all() if t.owner == owner and (t.is_open or not open_only)]
 
     def _next_id(self) -> str:
-        nums = [int(t.id.split("-")[1]) for t in self.all() if t.id.startswith("T-")]
+        """From the file names, so a broken task file never lets its id be reused."""
+        nums = [int(m.group(1)) for p in self.dir.glob("T-*.md") if (m := re.match(r"T-(\d+)", p.name))]
         return f"T-{(max(nums) + 1) if nums else 1:03d}"
 
     # -- write ---------------------------------------------------------------
     def save(self, task: Task) -> None:
         task.doc.meta["updated"] = today(self.tz).isoformat()
-        task.path.write_text(task.doc.render())
+        atomic_write(task.path, task.doc.render())
+        self._cache.pop(task.path, None)
 
     def create(self, *, title: str, owner: str, created_by: str, priority: str = "P1",
                due: str | None = None, project: str = "", goal: str = "", done_means: list[str] | None = None,
                description: str = "", depends_on: list[str] | None = None, reviewer: str | None = None) -> Task:
-        with self._lock:
+        from .fileio import path_lock
+        with self._lock, path_lock(self.dir / ".ids"):     # ids stay unique across processes (jm chat + jm run)
             priority = (priority or "P1").upper()
             if priority not in PRIORITIES:
                 raise TaskError(f"priority must be one of {PRIORITIES}")
@@ -133,15 +158,15 @@ class TaskStore:
             tid = self._next_id()
             t0 = today(self.tz).isoformat()
             doc = MDoc(meta={
-                "id": tid, "title": title.strip(), "owner": owner, "project": project or "",
+                "id": tid, "title": " ".join(clean_text(title).split()) or "untitled", "owner": owner, "project": project or "",
                 "priority": priority, "status": "todo", "assigned": t0,
                 "due": d.isoformat() if d else "", "depends_on": depends_on or [],
                 "reviewer": reviewer or self.owner_id, "goal": goal or "",
                 "created_by": created_by, "blocked_on": "", "status_since": t0, "updated": t0,
             })
             doc.sections = {s: "" for s in SECTIONS}
-            doc.sections["Goal"] = description.strip() or title.strip()
-            doc.sections["Done means"] = "\n".join(f"- [ ] {x}" for x in (done_means or []))
+            doc.sections["Goal"] = clean_text(description) or clean_text(title)
+            doc.sections["Done means"] = "\n".join(f"- [ ] {clean_text(x)}" for x in (done_means or []) if clean_text(x))
             doc.add_line("Log", f"- {t0} — created by {created_by}, assigned to {owner}")
             path = self.dir / f"{tid}-{slugify(title)}.md"
             t = Task(path, doc)
@@ -159,6 +184,10 @@ class TaskStore:
             is_owner = by == self.owner_id
             reviewer = str(t.doc.meta.get("reviewer") or self.owner_id)
             msg = ""
+            if status == "cut" and not is_owner:
+                raise TaskError(f"Only {self.owner_id} can cut a task — say why in a log note or ask them.")
+            if t.status in ("done", "cut") and status in ("done", "cut"):
+                raise TaskError(f"{t.id} is already {t.status}.")
             if status == "done" and by not in (reviewer, self.owner_id):
                 status = "review"
                 msg = f"Only {reviewer} can mark done — moved to review instead."
@@ -179,27 +208,49 @@ class TaskStore:
             t.doc.add_line("Log", line, newest_first=True)
             if status == "done":
                 t.doc.meta["done_on"] = today(self.tz).isoformat()
+            if status in ("review", "done", "cut"):
+                t.doc.meta.pop("rework", None)
             self.save(t)
             return t, msg
+
+    def unblock_dependents(self, done_id: str, by: str) -> list[Task]:
+        """Tasks blocked on `done_id` go back to todo when it is done."""
+        out = []
+        with self._lock:
+            for t in self.all():
+                if t.status == "blocked" and re.search(rf"\b{re.escape(done_id)}\b", t.blocked_on):
+                    t2, _ = self.set_status(t.id, "todo", by=self.owner_id, note=f"unblocked: {done_id} is done")
+                    out.append(t2)
+        return out
+
+    def mark_rework(self, task_id: str) -> Task:
+        with self._lock:
+            t = self.get(task_id)
+            t.doc.meta["rework"] = True
+            self.save(t)
+            return t
 
     def add_log(self, task_id: str, by: str, text: str) -> Task:
         with self._lock:
             t = self.get(task_id)
-            t.doc.add_line("Log", f"- {today(self.tz).isoformat()} — {by}: {text.strip()}", newest_first=True)
+            body = re.sub(r"^\d{4}-\d{2}-\d{2}\s*[—-]\s*", "", " ".join(clean_text(text).split()))   # no double dates
+            t.doc.add_line("Log", f"- {today(self.tz).isoformat()} — {by}: {body}", newest_first=True)
             self.save(t)
             return t
 
     def add_feedback(self, task_id: str, by: str, text: str) -> Task:
         with self._lock:
             t = self.get(task_id)
-            t.doc.add_line("Feedback", f"- {today(self.tz).isoformat()} — {by}: {text.strip()}")
+            t.doc.add_line("Feedback", f"- {today(self.tz).isoformat()} — {by}: {' '.join(clean_text(text).split())}")
             self.save(t)
             return t
 
     def set_done_means(self, task_id: str, by: str, checks: list[str]) -> Task:
         with self._lock:
             t = self.get(task_id)
-            t.doc.sections["Done means"] = "\n".join(f"- [ ] {c.strip()}" for c in checks if str(c).strip())
+            if isinstance(checks, str):
+                checks = checks.splitlines()
+            t.doc.sections["Done means"] = "\n".join(f"- [ ] {clean_text(c)}" for c in checks if clean_text(c))
             t.doc.add_line("Log", f"- {today(self.tz).isoformat()} — {by}: set done means", newest_first=True)
             self.save(t)
             return t
@@ -207,17 +258,41 @@ class TaskStore:
     def set_output(self, task_id: str, by: str, text: str) -> Task:
         with self._lock:
             t = self.get(task_id)
-            t.doc.add_line("Output", f"- {today(self.tz).isoformat()} — {by}: {text.strip()}")
+            body = " ".join(clean_text(text).split())
+            if any(line.endswith(f"{by}: {body}") for line in t.doc.sections.get("Output", "").splitlines()):
+                return t                                  # the same output twice is one line
+            t.doc.add_line("Output", f"- {today(self.tz).isoformat()} — {by}: {body}")
             self.save(t)
             return t
 
+    def clear_due(self, task_id: str, by: str) -> Task:
+        with self._lock:
+            t = self.get(task_id)
+            if t.doc.meta.get("due"):
+                t.doc.meta["due"] = ""
+                t.doc.add_line("Log", f"- {today(self.tz).isoformat()} — {by}: due date removed", newest_first=True)
+                self.save(t)
+            return t
+
     def update_fields(self, task_id: str, by: str, **fields) -> Task:
-        allowed = {"priority", "due", "title", "project", "owner", "goal"}
+        allowed = {"priority", "due", "title", "project", "owner", "goal", "reviewer", "depends_on"}
         with self._lock:
             t = self.get(task_id)
             changes = []
             for k, v in fields.items():
-                if k not in allowed or v in (None, ""):
+                if k not in allowed or v is None or (v == "" and k != "depends_on"):
+                    continue
+                if k == "depends_on":
+                    ids = v if isinstance(v, list) else re.split(r"[\s,]+", str(v))
+                    ids = sorted({str(x).strip().upper() for x in ids if str(x).strip()})
+                    known = {x.id for x in self.all()}
+                    bad = [x for x in ids if x not in known or x == t.id]
+                    if bad:
+                        raise TaskError(f"{t.id} can't depend on {', '.join(bad)} (no such task, or itself).")
+                    if ids == sorted(str(x) for x in (t.doc.meta.get("depends_on") or [])):
+                        continue
+                    t.doc.meta[k] = ids
+                    changes.append(f"depends_on={','.join(ids) or '-'}")
                     continue
                 if k == "priority":
                     v = str(v).upper()
@@ -228,6 +303,14 @@ class TaskStore:
                     if not d:
                         raise TaskError(f"bad date: {v}")
                     v = d.isoformat()
+                if k == "priority" and v == "P0" and by != self.owner_id and t.priority != "P0":
+                    owner = str(fields.get("owner") or t.owner)
+                    other = [x for x in self.for_owner(owner) if x.priority == "P0" and x.id != t.id]
+                    if other:
+                        raise TaskError(f"{owner} already has a P0 ({other[0].id}). One P0 per person — "
+                                        f"ask {self.owner_id} to re-prioritise.")
+                if k in ("title", "goal"):
+                    v = " ".join(clean_text(v).split())
                 t.doc.meta[k] = v
                 changes.append(f"{k}={v}")
             if changes:
@@ -237,8 +320,8 @@ class TaskStore:
             return t
 
     # -- views ---------------------------------------------------------------
-    def board(self) -> str:
-        tasks = self.all()
+    def board(self, skip_owners: set | None = None) -> str:
+        tasks = [t for t in self.all() if t.owner not in (skip_owners or set())]
         order = ["blocked", "doing", "review", "todo"]
         out = []
         for st in order:

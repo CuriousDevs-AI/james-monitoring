@@ -69,48 +69,73 @@ def cmd_run(args) -> None:
     cfg_path = Path(args.config).expanduser().resolve()
     if args.no_web:
         from .gateway import TelegramGateway
+        from .hub import Hub
         from .scheduler import Scheduler
         cfg = _cfg(args)
         gw = TelegramGateway(cfg)
         gw.build()
-        rt = _runtime(cfg, bus=gw)
-        asyncio.run(gw.run(rt, scheduler=Scheduler(rt)))
+        hub = Hub()
+        rt = _runtime(cfg, bus=hub)
+        hub.attach(rt)
+
+        async def main():
+            if cfg.slack.configured:
+                from .slack import SlackTransport
+                try:
+                    await SlackTransport(cfg).start(rt, hub)
+                except Exception as e:  # noqa: BLE001
+                    logging.getLogger("jm").error("Slack failed to start: %s", e)
+            await gw.run(rt, scheduler=Scheduler(rt), hub=hub)
+        asyncio.run(main())
         return
     from .server import serve
     serve(cfg_path.parent, host=args.host, port=args.port, open_browser=not args.no_browser,
           telegram=not args.no_telegram)
 
 
+class _Print:
+    """`jm chat` as a channel: prints what happens in the rooms (the chat is also saved for the console)."""
+    name = "cli"
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    async def deliver(self, room, msg, ask=None):
+        m = self.cfg.member(msg.get("who", ""))
+        where = "" if self.cfg.member(room) else f"[{room}] "
+        print(f"\n{where}{m.name if m else msg.get('who')}: {msg.get('text')}" + ("  [/approve|/reject " + ask.id + "]"
+                                                                               if ask else ""))
+
+
 def cmd_chat(args) -> None:
-    """Talk to a team member locally, without Telegram. /commands work too."""
-    from .commands import run_command
-    from .runtime import ConsoleBus, Event
+    """Talk to a team member locally, without Telegram. /commands work too. Saved like any other chat."""
+    from .hub import Hub
     cfg = _cfg(args)
     who = cfg.member(args.member)
-    if not who:
+    if not who and args.member not in ("team", "all") and not args.member.startswith("p-"):
         sys.exit(f"unknown member `{args.member}`")
-    rt = _runtime(cfg, bus=ConsoleBus())
+    room = who.id if who else ("team" if args.member in ("team", "all") else args.member)
+    hub = Hub()
+    rt = _runtime(cfg, bus=hub)
+    hub.attach(rt)
+    hub.add(_Print(cfg))
 
     async def one(text: str) -> None:
         text = text.strip()
         if not text:
             return
-        if text.startswith("/"):
-            cmd, _, rest = text[1:].partition(" ")
-            try:
-                out = await run_command(rt, cmd.lower(), rest.strip(), who.id, private=True, background=False)
-            except Exception as e:  # noqa: BLE001 - show any user error
-                out = f"⚠️ {e}"
-        else:
-            out = await rt.dispatch(who.id, Event("dm", text, sender=rt.owner_id))
-        print(f"\n{who.name}: {out}")
+        try:
+            await hub.inbound(room, text, via="cli")
+        except ValueError as e:
+            print(f"⚠️ {e}")
         await rt.drain()
 
     async def main() -> None:
         if args.message:
             await one(" ".join(args.message))
             return
-        print(f"Chatting with {who.name} ({who.role}). Ctrl-D to exit. /help for commands.")
+        print(f"Chatting with {who.name} ({who.role})." if who else f"Chatting in {room}.",
+              "Ctrl-D to exit. /help for commands.")
         while True:
             try:
                 line = await asyncio.to_thread(input, "\nyou> ")
@@ -146,12 +171,64 @@ def cmd_report(args) -> None:
 def cmd_work(args) -> None:
     from .runtime import ConsoleBus
     rt = _runtime(_cfg(args), bus=ConsoleBus())
-    print(asyncio.run(rt.run_work_session()) or "Nobody has open todo/doing tasks.")
+    async def main():
+        digest = await rt.run_work_session()
+        await rt.drain()                               # the CLI waits for coding runs / hand-offs to finish
+        return digest
+    print(asyncio.run(main()) or "Nobody has open todo/doing tasks.")
 
 
 def cmd_ui(args) -> None:
     args.no_web = False
     cmd_run(args)
+
+
+def cmd_connection(args) -> None:
+    """Every AI model the team uses: installed? logged in? answering? — and log in right here in the terminal."""
+    import subprocess
+    from . import connections as cx
+    cfg = _cfg(args)
+    if args.action == "login":
+        kind = cx._kind({"claude": "claude-code", "codex": "codex-cli"}.get(args.target or "", args.target or "")
+                        or cfg.llm.provider)
+        cmd = cx.login_command(kind, args.extra or "")
+        b = cx._bin(kind)
+        if not cmd:
+            sys.exit(f"{args.target or cfg.llm.provider}: no login — it uses an API key (set it in Settings or .env).")
+        if not b:
+            sys.exit(f"Install it first: {cx.INSTALL.get(kind, kind)}")
+        print(f"→ {' '.join([Path(b).name, *cmd])}   (follow the prompts; your browser may open)\n")
+        rc = subprocess.call([b, *cmd])
+        print("\n✅ Done — check with: jm connection" if rc == 0 else f"\n❌ Login exited with {rc}")
+        sys.exit(rc)
+    groups = cx.providers_in_use(cfg)
+    bad = 0
+    print(f"AI models — {cfg.company}")
+    for g in groups:
+        c = cfg_c = g["config"]
+        r = cx.check(cfg_c)
+        who = ", ".join((cfg.member(x).name if cfg.member(x) else x) for x in g["people"]) or "nobody"
+        line = f"  {'✅' if r['ok'] else '❌'} {r['label']} · {c.model or 'default'} — {r['detail']}   (used by {who})"
+        if args.action == "test" and r["ok"]:
+            t = cx.test(c)
+            line += f"\n     test: {'answers in ' + str(t['seconds']) + 's' if t['ok'] else '❌ ' + t['error']}"
+            r["ok"] = t["ok"]
+        print(line)
+        if not r["ok"]:
+            bad += 1
+            kind = r["provider"]
+            fix = (f"jm connection login {kind}" + (f" {r['login_target']}" if r.get("login_target") else "")
+                   if r.get("can_login") and r["installed"] else r["fix"])
+            print(f"     fix: {fix}")
+    name, email = cfg.git_author
+    print(f"Git identity\n  {'✅' if email != 'jm@localhost' else '⚠️ '} {name} <{email}>")
+    print("Channels")
+    print(f"  {'✅' if cfg.monitor.bot_token else '·'} Telegram {'connected' if cfg.monitor.bot_token else '(optional)'}")
+    print(f"  {'✅' if cfg.slack.configured else '·'} Slack {'connected' if cfg.slack.configured else '(optional)'}")
+    print(f"  {'✅' if cfg.github.enabled else '·'} GitHub {'board mirror on' if cfg.github.enabled else '(optional)'}")
+    if args.action != "test":
+        print("\nRun `jm connection test` to make one tiny call to each model.")
+    sys.exit(1 if bad else 0)
 
 
 def cmd_doctor(args) -> None:
@@ -164,22 +241,16 @@ def cmd_doctor(args) -> None:
         ok = ok and cond
 
     print(f"james-monitoring {__version__} — {cfg.path}")
-    print("AI")
-    if cfg.llm.provider in ("claude-code", "claude_code", "claude-cli", "subscription"):
-        check(shutil.which("claude") is not None, "claude CLI installed (uses your subscription login)",
-              "`claude` CLI not found — npm install -g @anthropic-ai/claude-code, then run `claude` and /login")
-        print(f"  ·  model: {cfg.llm.model or 'CLI default'}")
-    else:
-        check(bool(cfg.llm.model), f"model: {cfg.llm.provider}/{cfg.llm.model}", "llm.model is empty")
-        check(bool(cfg.llm.api_key) or cfg.llm.provider in ("fake",) or bool(cfg.llm.base_url),
-              f"API key present ({cfg.llm.api_key_env})", f"{cfg.llm.api_key_env} not set in .env")
-    if args.ping:
-        from .llm import LLMError, make_llm
-        try:
-            r = make_llm(cfg.llm).complete("Reply with the single word: pong", [{"role": "user", "content": "ping"}])
-            check("pong" in r.text.lower(), f"model replied ({r.total_tokens} tokens)", f"odd reply: {r.text[:80]}")
-        except LLMError as e:
-            check(False, "", str(e))
+    print("AI (every model the team uses)")
+    from . import connections as cx
+    for g in cx.providers_in_use(cfg):
+        r = cx.check(g["config"])
+        who = ", ".join((cfg.member(x).name if cfg.member(x) else x) for x in g["people"])
+        check(r["ok"], f"{r['label']} · {g['config'].model or 'default'} — {r['detail']} ({who})",
+              f"{r['label']} — {r['detail']}: {r['fix'] or 'see `jm connection`'} ({who})")
+        if args.ping and r["ok"]:
+            t = cx.test(g["config"])
+            check(t["ok"], f"  answers ({t.get('seconds', 0)}s)", f"  test call failed: {t.get('error', '')}")
     print("Workspace")
     check(shutil.which("git") is not None, "git installed", "git not found")
     check((cfg.workspace_path / ".git").exists(), f"git repo at {cfg.workspace_path}", "workspace is not a git repo (run jm init)")
@@ -187,10 +258,16 @@ def cmd_doctor(args) -> None:
     for m in cfg.team:
         check((cfg.workspace_path / f"team/{m.id}/persona.md").exists(), f"persona: {m.name}", f"persona missing for {m.id}")
     print("Telegram")
-    check(cfg.owner_user_id != 0, f"owner user id {cfg.owner_user_id}", "owner.telegram_user_id not set (use /whoami)")
-    check(cfg.group_chat_id != 0, f"group id {cfg.group_chat_id}", "telegram.group_chat_id not set (use /groupid)")
-    for m in cfg.team:
-        check(bool(m.bot_token), f"bot token: {m.name}", f"{m.bot_token_env} not set — {m.name} will be offline")
+    if not any(m.bot_token for m in cfg.team):
+        print("  ·  not connected (optional — everything works in the console; see Settings → Telegram)")
+    else:
+        check(cfg.owner_user_id != 0, f"owner user id {cfg.owner_user_id}", "owner.telegram_user_id not set (use /whoami)")
+        check(cfg.group_chat_id != 0, f"group id {cfg.group_chat_id}", "telegram.group_chat_id not set (use /groupid)")
+        for m in cfg.team:
+            if m.bot_token or m.monitor:
+                check(bool(m.bot_token), f"bot token: {m.name}", f"{m.bot_token_env} not set — {m.name}'s bot is offline")
+            else:
+                print(f"  ·  {m.name}: no own bot (reachable through {cfg.monitor.name}'s bot with “@{m.id} …”)")
     if args.ping:
         async def tg():
             from telegram import Bot
@@ -260,7 +337,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--no-web", action="store_true", help="Telegram + schedule only, no console")
     s.set_defaults(fn=cmd_run)
 
-    s = sub.add_parser("chat", help="talk to a member locally, no Telegram")
+    s = sub.add_parser("chat", help="talk to a member (or `team`, or a project room p-<id>) from the terminal")
     s.add_argument("member")
     s.add_argument("message", nargs="*")
     s.set_defaults(fn=cmd_chat)
@@ -281,6 +358,12 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--no-browser", action="store_true")
     s.add_argument("--no-telegram", action="store_true")
     s.set_defaults(fn=cmd_ui)
+
+    s = sub.add_parser("connection", help="check every AI model (installed, logged in, answering) · login · test")
+    s.add_argument("action", nargs="?", choices=["check", "test", "login"], default="check")
+    s.add_argument("target", nargs="?", help="for login: claude | codex | opencode")
+    s.add_argument("extra", nargs="?", help="for `login opencode`: the provider to sign in to (e.g. zai, anthropic)")
+    s.set_defaults(fn=cmd_connection)
 
     s = sub.add_parser("doctor", help="check the setup")
     s.add_argument("--ping", action="store_true", help="also call the model and Telegram")

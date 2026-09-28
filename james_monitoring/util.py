@@ -21,7 +21,8 @@ TZ_ALIASES = {
 def normalize_tz(name: str) -> str:
     """Return a timezone name that ZoneInfo accepts, or raise ValueError."""
     name = (name or "UTC").strip()
-    for candidate in (name, TZ_ALIASES.get(name, "")):
+    # Prefer the current name: some systems still accept old aliases, but the rest of the world uses the new one.
+    for candidate in (TZ_ALIASES.get(name, ""), name):
         if not candidate:
             continue
         try:

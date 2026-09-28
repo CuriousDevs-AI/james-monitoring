@@ -60,6 +60,7 @@ def test_first_push_to_empty_remote_sets_upstream(tmp_path):
     ws.ensure()
     ws.write("team/charter.md", "x")
     assert ws.commit("first")
+    ws.wait_push()
     assert not ws.state().get("push_error")
     heads = subprocess.run(["git", "ls-remote", "--heads", str(remote)], capture_output=True, text=True).stdout
     assert heads.strip(), "nothing reached the empty remote"

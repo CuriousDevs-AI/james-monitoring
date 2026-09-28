@@ -60,8 +60,10 @@ async def test_pause_and_budget(rt):
 
 async def test_bad_action_is_reported_not_crashing(rt):
     rt.llm.push({"reply": "Starting.", "actions": [{"type": "update_task", "id": "T-999", "status": "doing"}]})
+    rt.llm.push({"reply": "There is no T-999 — which task did you mean?", "actions": []})     # the repair round
     out = await rt.dispatch("sofia", Event("dm", "start", sender="pankaj"))
-    assert "Starting." in out and "⚠️ update_task: No task T-999" in out
+    assert "which task did you mean" in out and "⚠️ update_task: No task T-999" in out
+    assert "Some actions FAILED" in rt.llm.calls[-1][1][-1]["content"]        # it was told what failed
 
 
 async def test_review_notifies_owner(rt):
@@ -113,3 +115,18 @@ async def test_questions_about_a_task_are_not_saved_as_feedback(rt):
     assert not rt.tasks.get(t.id).doc.sections.get("Feedback", "").strip()
     await rt.dispatch("sofia", Event("dm", f"{t.id} use the blue theme", sender="pankaj"))
     assert "blue theme" in rt.tasks.get(t.id).doc.sections["Feedback"]
+
+
+async def test_status_messages_speak_in_the_first_person(rt):
+    from james_monitoring.llm import LLMError
+
+    class Down:
+        def complete(self, system, messages):
+            raise LLMError("claude CLI failed: Not logged in")
+    rt.llm = Down()
+    out = await rt.dispatch("james", Event("dm", "status?", sender="pankaj"))
+    assert out.startswith("⚠️ I couldn't think right now (model error: claude CLI failed: Not logged in). I've flagged it")
+    out = await rt.dispatch("sofia", Event("dm", "status?", sender="pankaj"))
+    assert "I couldn't think" in out and "James has been told" in out and "Sofia couldn't" not in out
+    rt.set_paused("sofia", True)
+    assert (await rt.dispatch("sofia", Event("dm", "hi", sender="pankaj"))).startswith("⏸ I'm paused")
