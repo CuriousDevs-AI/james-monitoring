@@ -490,7 +490,9 @@ class Runtime:
         if ev.source == "system" and not post:
             return
         if post:
-            await post(room, m.id, f"(queued while I was {it.get('why', 'away')}) {reply}")
+            why = str(it.get("why") or "")
+            since = ("while " + why if " was " in why or why.startswith("I ") else f"while I was {why or 'away'}")
+            await post(room, m.id, f"(answering what came in {since}) {reply}")
         else:
             await self.bus.send_owner(m.id, reply)
 
@@ -788,7 +790,7 @@ class Runtime:
         pid = self.project_of(ev)
         if not why and self.project_paused(pid):
             p = self.cfg.projects[pid]
-            self._enqueue(m, ev, f"{p.name or pid} is paused")
+            self._enqueue(m, ev, f"{p.name or pid} was paused")
             return (f"⏸ {p.name or pid} is paused — this waits in the queue and is answered when you resume the "
                     f"project.")
         if why:
@@ -954,6 +956,7 @@ class Runtime:
                     notes += more
                     actions += fixed_actions
                     reply = fixed.reply or reply
+        reply = self._fix_ids(reply, notes)
         reply = reply or ("(no reply)" if not actions else "")
         hist.append({"role": "user", "content": user_msg})
         hist.append({"role": "assistant", "content": json.dumps({"reply": reply, "actions": _compact(actions)},
@@ -971,6 +974,18 @@ class Runtime:
         if notes:
             out = (out + "\n\n" if out else "") + "\n".join(notes)
         return out or "(no reply)"
+
+    def _fix_ids(self, reply: str, notes: list[str]) -> str:
+        """Models guess the id of a task they're creating ("Created T-002") before it exists. A task id in the
+        reply that doesn't exist becomes the id that was really created (if it's clear which), else "the new task"."""
+        real = {t.id for t in self.tasks.all()}
+        bad = [x for x in dict.fromkeys(TASK_ID.findall(reply or "")) if x not in real]
+        if not bad:
+            return reply
+        created = [x for n in notes for x in re.findall(r"(T-\d{3,}) created", n)]
+        for i, x in enumerate(bad):
+            reply = re.sub(rf"\b{x}\b", created[i] if len(created) == len(bad) else "the new task", reply)
+        return reply
 
     async def _apply_all(self, m: Member, actions: list[dict], ev: Event) -> tuple[list[str], bool]:
         """Apply each action on its own: one bad action is reported and the rest still run."""
@@ -1022,7 +1037,11 @@ class Runtime:
                                    details=str(a.get("why") or a.get("description") or ""), level="red",
                                    task=str(a.get("task") or a.get("id") or ""), kind="action",
                                    payload={"action": a, "project": ev.project, "room": ev.room})
-            await self.bus.send_owner(m.id, ask.summary, ask=ask, urgent=True)
+            post = getattr(self.bus, "post", None)
+            if post and ev.room and ev.room.startswith(PROJECT_ROOM):   # asked in a project room → the card is there
+                await post(ev.room, m.id, ask.card(self.cfg.monitor.name), kind="ask", ask=ask)
+            else:
+                await self.bus.send_owner(m.id, ask.summary, ask=ask, urgent=True)
             return f"🙋 {ask.id}: waiting for {self.cfg.owner_name} to approve — {self.describe(m, a)}"
         note = await self._do(m, a, ev)
         self._audit("agent", m.id, t, str(a.get("id") or a.get("task") or a.get("path") or a.get("to") or ""),

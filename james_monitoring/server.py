@@ -32,7 +32,7 @@ from .fileio import path_lock, read_config, set_env, write_config
 from .hub import Hub
 from .llm import LLMError, LLMResult, make_llm
 from .monitor import open_decisions, team_status_lines
-from .runtime import Runtime
+from .runtime import Event, Runtime
 from .scheduler import Scheduler
 from .setup import detect_git_identity, detect_timezone, scaffold, slug
 from .tasks import PRIORITIES, TaskError
@@ -538,12 +538,14 @@ class App:
         self.rt.ws.commit(f"project {pid} {'paused' if pause else 'resumed'}", author=self.rt.cfg.owner_name)
         self.load()
         msg = f"{name} is paused — nobody works on it; messages and tasks wait." if pause else f"{name} is running again."
-        if not pause:
-            n = self.submit(self.rt.drain_queue(), timeout=30)
-            if n:
-                msg += f" {n} waiting message{'s' if n != 1 else ''} being answered."
+        waiting = sum(1 for it in self.rt.queued() if self.rt.project_of(Event(**it["event"])) == pid) if not pause else 0
+        if waiting:
+            msg += f" {waiting} waiting message{'s' if waiting != 1 else ''} being answered."
+        # the notice first: whoever answers what waited reads that the project is running again
         self.submit(self.hub.post(PROJECT_ROOM + pid, self.rt.cfg.monitor.id,
                                   ("⏸ " if pause else "▶️ ") + msg, kind="notice"), timeout=30)
+        if not pause:
+            self.submit(self.rt.drain_queue(), timeout=30)
         return {"message": msg, "project": self._project_json(self.rt.cfg.projects[pid])}
 
     @config_txn
@@ -1163,7 +1165,10 @@ class App:
             if llm["provider"] == "opencode" and "/" not in str(llm.get("model") or ""):
                 raise ValueError("Pick an OpenCode model (provider/model).")
         if b.get("department") and b["department"] not in cfg.departments:
-            raise ValueError(f"There's no department {b['department']}.")
+            if not b.get("department_name"):
+                raise ValueError(f"There's no department {b['department']}.")
+            b["department"] = self.departments_save({"name": b["department_name"]})["id"]   # new: create it
+            cfg = self.rt.cfg
         bad = [p for p in (b.get("projects") or []) if p not in cfg.projects]
         if bad:
             raise ValueError(f"There's no project {', '.join(bad)}.")
