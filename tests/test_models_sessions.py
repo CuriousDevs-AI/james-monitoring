@@ -98,3 +98,20 @@ def test_models_module_assigns_and_reports(tmp_path, monkeypatch):
     finally:
         app.submit(app._stop_services(app.sched, app.gw, app.slack), timeout=10)
         app.loop.call_soon_threadsafe(app.loop.stop)
+
+
+def test_a_session_lasts_until_the_conversation_is_long_not_until_calls_add_up(tmp_path):
+    from james_monitoring.llm import LLMResult, Session
+    from james_monitoring.runtime import SESSION_MAX_CONTEXT
+    from tests.conftest import make_raw
+    from james_monitoring.config import parse_config
+    from james_monitoring.llm.fake import FakeLLM
+    from james_monitoring.runtime import ConsoleBus, Runtime
+    rt = Runtime(parse_config(make_raw(tmp_path), base_dir=tmp_path), FakeLLM(), bus=ConsoleBus(quiet=True))
+    m = rt.cfg.member("sofia")
+    sess = Session("sofia:sofia")
+    for i in range(30):                            # 30 turns of a 25k-token conversation: 750k added up
+        rt._save_session(m, sess, LLMResult(text="{}", input_tokens=25_000, output_tokens=500, session_id="s-1"))
+    assert rt.session_for(m, "sofia").id == "s-1"   # still the same session
+    rt._save_session(m, sess, LLMResult(text="{}", input_tokens=SESSION_MAX_CONTEXT, output_tokens=1, session_id="s-1"))
+    assert rt.session_for(m, "sofia").id == ""      # the conversation itself got long: start fresh

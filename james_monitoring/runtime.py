@@ -37,8 +37,10 @@ TURN_SECONDS = 420
 # the model changes or it gets long or old (the fresh one is seeded with the recent conversation).
 WATCHDOG_SECONDS = TURN_SECONDS + 120  # a turn still running after this is stopped (a hung CLI, a dead network)
 RETRY_BACKOFF = (3, 10)             # seconds between retries of a model call that hit a temporary problem
-SESSION_MAX_CALLS = 40
-SESSION_MAX_TOKENS = 600_000
+# A CLI session (claude/codex/opencode) is resumed until the conversation itself gets long — measured by the last
+# call's input (the whole conversation so far), not by adding up every call — or old, or the model changes.
+SESSION_MAX_CONTEXT = 150_000       # tokens in the conversation (the last call's full input, cached included)
+SESSION_MAX_CALLS = 200             # a safety net
 SESSION_MAX_DAYS = 3                # model calls in one turn (retries, file reads, repair) stop after this                 # own recent exchanges per channel (the room transcript adds everyone else)
 ROOM_CONTEXT = 16                 # recent messages of the current room shown to the agent
 ELSEWHERE = 4                     # recent messages from each other room the agent is part of
@@ -292,7 +294,7 @@ class Runtime:
         key = f"{m.id}:{room}"
         rec = self._sessions().get(key) or {}
         fresh = (not rec.get("id") or rec.get("model") != self.model_name(m, project)
-                 or int(rec.get("calls", 0)) >= SESSION_MAX_CALLS or int(rec.get("tokens", 0)) >= SESSION_MAX_TOKENS
+                 or int(rec.get("calls", 0)) >= SESSION_MAX_CALLS or int(rec.get("context", 0)) >= SESSION_MAX_CONTEXT
                  or (time.time() - float(rec.get("started", 0) or 0)) > SESSION_MAX_DAYS * 86400)
         return Session(key, "" if fresh else rec["id"], "" if fresh else rec.get("system_hash", ""))
 
@@ -307,7 +309,8 @@ class Runtime:
                 rec = {"id": res.session_id, "started": time.time(), "calls": 0, "tokens": 0}
             rec.update(model=model, system_hash=res.system_hash, last=time.time(),
                        calls=int(rec.get("calls", 0)) + 1,
-                       tokens=int(rec.get("tokens", 0)) + getattr(res, "billable_tokens", res.total_tokens))
+                       tokens=int(rec.get("tokens", 0)) + getattr(res, "billable_tokens", res.total_tokens),
+                       context=int(res.input_tokens or 0))        # how long the conversation is now
             data[sess.key] = rec
         self._update_sessions(fn)
         sess.id, sess.system_hash = res.session_id, res.system_hash

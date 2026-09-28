@@ -431,7 +431,8 @@ requested.
 - **Per person, per project.** Set a model in `team[].llm`, in `projects.<id>.llm`, or in
   `projects.<id>.agents.<id>.llm`.
 - **CLI sessions** are saved per person per room in `.jm/sessions.json`, so a restart resumes the conversation.
-  A fresh session starts when the model changes, or after 40 calls, 600k tokens or 3 days.
+  A fresh session starts when the model changes, when the conversation itself passes 150k tokens, or after
+  3 days (200 calls at most).
 - **Reliability.** Temporary failures (rate limits, overload, network) are retried after 3 s and then 10 s. Login
   and key errors aren't retried; they're shown with the fix. A turn is capped at 7 minutes of model calls, and a
   watchdog stops a hung turn after 9 minutes.
