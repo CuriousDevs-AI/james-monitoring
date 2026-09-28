@@ -24,7 +24,7 @@ def app(tmp_path):
     a.load()
     yield a
     if a.ready:
-        a.submit(a._stop_services(), timeout=10)
+        a.submit(a._stop_services(a.sched, a.gw, a.slack), timeout=10)
     a.loop.call_soon_threadsafe(a.loop.stop)
 
 
@@ -176,3 +176,28 @@ def test_projects_own_their_team_room_and_board(app):
 
     with pytest.raises(ValueError, match="no such project"):
         app.chat_send("p-nope", "hi")
+
+
+def test_saving_settings_while_the_console_is_in_use(app):
+    """C2: reloads swap the runtime in one step — requests during a save never crash or see 'setup needed'."""
+    import threading
+    app.setup({"company": "Acme", "owner": "Maria", "timezone": "UTC", "provider": "fake"})
+    errors, stop = [], threading.Event()
+
+    def hammer():
+        while not stop.is_set():
+            try:
+                assert app.ready
+                app.dashboard()
+                app.state()
+            except Exception as e:  # noqa: BLE001
+                errors.append(repr(e))
+    threads = [threading.Thread(target=hammer) for _ in range(3)]
+    [t.start() for t in threads]
+    saves = [threading.Thread(target=app.settings_save, args=({"daily_report": f"17:{i:02d}"},)) for i in range(6)]
+    [t.start() for t in saves]
+    [t.join() for t in saves]
+    stop.set()
+    [t.join() for t in threads]
+    assert errors == []
+    assert app.rt.cfg.daily_report.startswith("17:") and app.state()["company"] == "Acme"

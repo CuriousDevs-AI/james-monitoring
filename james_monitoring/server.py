@@ -23,13 +23,14 @@ from pathlib import Path
 import yaml
 
 from .asks import AskError
-from .chat import PROJECT_ROOM, TEAM_ROOM, ChatStore, MultiBus, WebBus
-from .commands import ack_assignment, run_command
-from .config import ConfigError, load_config
+from .chat import BACKCHANNEL, PROJECT_ROOM, TEAM_ROOM
+from .commands import ack_assignment
+from .config import ACTION_TYPES, LEVELS, ConfigError, load_config
+from .fileio import path_lock, read_config, set_env, write_config
+from .hub import Hub
 from .llm import LLMError, LLMResult, make_llm
 from .monitor import open_decisions, team_status_lines
-from .router import group_targets, is_status_request
-from .runtime import Event, Runtime
+from .runtime import Runtime
 from .scheduler import Scheduler
 from .setup import detect_timezone, scaffold, slug
 from .tasks import PRIORITIES, TaskError
@@ -37,6 +38,8 @@ from .ui import TeamAdmin
 from .util import normalize_tz, today
 
 log = logging.getLogger("jm.server")
+
+PROVIDERS = ("claude-code", "codex-cli", "anthropic", "openai", "fake")
 
 
 class _BrokenLLM:
@@ -50,6 +53,17 @@ class _BrokenLLM:
         raise LLMError(self.err)
 
 
+def config_txn(fn):
+    """Hold the config lock for the whole request: read → change → validate → write → reload is one step."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(self, *a, **kw):
+        with path_lock(self.cfg_path):
+            return fn(self, *a, **kw)
+    return wrapper
+
+
 class App:
     def __init__(self, base_dir: Path, telegram: bool = True):
         self.base = Path(base_dir).resolve()
@@ -59,14 +73,23 @@ class App:
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True, name="jm-loop")
         self.thread.start()
         self.rt: Runtime | None = None
+        self.hub: Hub | None = None
         self.gw = None
+        self.slack = None
         self.sched: Scheduler | None = None
-        self.chat: ChatStore | None = None
         self.admin: TeamAdmin | None = None
         self.llm_error = ""
         self.telegram_error = ""
-        self.pending: dict[str, int] = {}          # room → agents still thinking
+        self.slack_error = ""
         self._lock = threading.RLock()
+
+    @property
+    def chat(self):
+        return self.hub.chat if self.hub else None
+
+    @property
+    def pending(self) -> dict[str, int]:
+        return self.hub.pending if self.hub else {}
 
     # -- lifecycle ----------------------------------------------------------------------
     def submit(self, coro, timeout: float | None = 600):
@@ -78,65 +101,94 @@ class App:
         return self.rt is not None
 
     def load(self) -> None:
+        """(Re)build the team from config.yaml.
+
+        The new runtime is built completely first and swapped in in one step, so requests never see a half-loaded
+        app. The old runtime's work in flight (an agent mid-reply, a coding run) keeps running: it shares the
+        per-person locks — one person never handles two messages at once — and its messages are forwarded to the
+        new hub. Nothing waits for it, so saving Settings is instant even during a 30-minute coding run."""
         with self._lock:
-            if self.rt:
-                self.submit(self._stop_services())
-            self.rt = None
             if not self.cfg_path.exists():
+                if self.rt:
+                    self.submit(self._stop_services(self.sched, self.gw, self.slack), timeout=60)
+                self.rt = None
                 return
             cfg = load_config(self.cfg_path)
             try:
-                llm = make_llm(cfg.llm)
-                self.llm_error = ""
+                llm, llm_error = make_llm(cfg.llm), ""
             except LLMError as e:
-                llm, self.llm_error = _BrokenLLM(str(e)), str(e)
-            self.chat = ChatStore(cfg.workspace_path)
-            web = WebBus(self.chat)
-            self.gw, self.telegram_error = None, ""
+                llm, llm_error = _BrokenLLM(str(e)), str(e)
+            gw, tg_error, slack = None, "", None
             if self.telegram_enabled and any(m.bot_token for m in cfg.team) and cfg.monitor.bot_token:
                 from .gateway import TelegramGateway
                 try:
                     gw = TelegramGateway(cfg)
                     gw.build()
-                    gw.chat = self.chat
-                    self.gw = gw
                 except Exception as e:  # noqa: BLE001
-                    self.telegram_error = str(e)
-            rt = Runtime(cfg, llm, bus=MultiBus(web, self.gw))
-            self.admin = TeamAdmin(self.cfg_path)
-            self.rt = rt
-            self.submit(self._start_services())
+                    gw, tg_error = None, str(e)
+            if self.telegram_enabled and cfg.slack.configured:
+                from .slack import SlackTransport
+                slack = SlackTransport(cfg)
+            hub = Hub()
+            rt = Runtime(cfg, llm, bus=hub, shared=self.rt)
+            hub.attach(rt)
+            admin = TeamAdmin(self.cfg_path)
+
+            old_hub, old = self.hub, (self.sched, self.gw, self.slack)
+            if self.rt:                          # stop polling/schedule before the new ones start (no 409s)
+                self.submit(self._stop_services(*old), timeout=60)
+            if old_hub:
+                old_hub.successor = hub
+            (self.hub, self.rt, self.gw, self.slack, self.admin, self.llm_error, self.telegram_error,
+             self.slack_error, self.sched) = (hub, rt, gw, slack, admin, llm_error, tg_error, "", None)
+            self.submit(self._start_services(), timeout=120)
 
     async def _start_services(self) -> None:
+        rt, hub = self.rt, self.hub
         if self.gw:
             try:
-                await self.gw.start(self.rt)
+                await self.gw.start(rt, hub)
             except Exception as e:  # noqa: BLE001 - the console must keep working without Telegram
                 self.telegram_error = str(e)
                 log.exception("telegram failed to start")
+                hub.remove("telegram")
                 self.gw = None
-                self.rt.bus = MultiBus(WebBus(self.chat))
+        if self.slack:
+            try:
+                await self.slack.start(rt, hub)
+            except Exception as e:  # noqa: BLE001 - …or without Slack
+                self.slack_error = str(e)[:300]
+                log.exception("slack failed to start")
+                hub.remove("slack")
+                self.slack = None
 
         async def digest(text):
-            await self.rt.bus.send_owner(self.rt.cfg.monitor.id, "🛠 Work session:\n" + text)
-        self.sched = Scheduler(self.rt, on_digest=digest)
+            await rt.bus.send_owner(rt.cfg.monitor.id, "🛠 Work session:\n" + text)
+        self.sched = Scheduler(rt, on_digest=digest)
         self.sched.start()
 
-    async def _stop_services(self) -> None:
-        if self.sched:
-            await self.sched.stop()
-        if self.gw:
-            await self.gw.shutdown()
-        if self.rt:
-            await self.rt.drain()
+    async def _stop_services(self, sched=None, gw=None, slack=None, drain: bool = False) -> None:
+        for what, stop in (("scheduler", sched and sched.stop), ("telegram", gw and gw.shutdown),
+                           ("slack", slack and slack.shutdown)):
+            if stop:
+                try:
+                    await asyncio.wait_for(stop(), 30)
+                except Exception:  # noqa: BLE001 - a stuck channel must not block the reload
+                    log.exception("stopping %s failed", what)
+        if drain and self.rt:
+            try:
+                await asyncio.wait_for(self.rt.drain(), 30)
+            except asyncio.TimeoutError:
+                pass
 
     def raw(self) -> dict:
-        return yaml.safe_load(self.cfg_path.read_text()) or {}
+        return read_config(self.cfg_path)
 
     def save_raw(self, raw: dict) -> None:
-        self.cfg_path.write_text(yaml.safe_dump(raw, sort_keys=False, allow_unicode=True))
+        write_config(self.cfg_path, raw)          # validated, backed up (.bak), atomic
 
     # -- setup ----------------------------------------------------------------------------
+    @config_txn
     def setup(self, b: dict) -> dict:
         if self.cfg_path.exists():
             raise ValueError("This folder already has a team. Use Settings to change it.")
@@ -152,10 +204,10 @@ class App:
             "company": company, "timezone": normalize_tz(str(b.get("timezone") or detect_timezone())),
             "owner": {"name": owner, "telegram_user_id": 0},
             "llm": {"provider": provider, "model": str(b.get("model") or ""), "base_url": str(b.get("base_url") or ""),
-                    "api_key_env": key_env, "max_tokens": 2000},
+                    "api_key_env": key_env, "max_tokens": 8000},
             "workspace": {"path": str(b.get("workspace") or "./team-workspace"), "push": bool(b.get("push"))},
             "telegram": {"group_chat_id": 0, "quiet_hours": ["22:00", "08:00"]},
-            "monitor": {"daily_report": "18:30", "check_every_minutes": 60, "work_sessions": [],
+            "monitor": {"daily_report": "18:30", "check_every_minutes": 60, "work_sessions": ["10:00", "15:00"],
                         "stale_days": 7, "blocked_escalate_days": 2, "ask_default_hours": 24},
             "budget": {"daily_tokens_per_agent": 300000},
             "executor": {"command": [], "timeout_minutes": 30},
@@ -182,21 +234,29 @@ class App:
             "timezone": cfg.timezone, "manager": cfg.monitor.id, "model": f"{cfg.llm.provider}"
             f"{('/' + cfg.llm.model) if cfg.llm.model else ''}", "llm_error": self.llm_error,
             "telegram": {"connected": bool(self.gw), "error": self.telegram_error,
+                         "health": {k: v for k, v in (s.get("telegram_health") or {}).items() if v},
                          "owner_id": cfg.owner_user_id, "group_id": cfg.group_chat_id,
                          "manager_token": bool(cfg.monitor.bot_token)},
+            "slack": {"connected": bool(self.slack), "error": self.slack_error or (self.slack.error if self.slack else ""),
+                      "tokens": bool(cfg.slack.bot_token and cfg.slack.app_token),
+                      "owner_ids": cfg.slack.owner_user_ids, "channels": cfg.slack.channels,
+                      "workspace": self.slack.team_name if self.slack else ""},
             "paused_all": bool(s.get("paused_all")), "paused": s.get("paused", []),
             "members": [{"id": m.id, "name": m.name, "role": m.role, "manager": m.monitor,
                          "projects": m.projects, "paused": m.id in s.get("paused", []),
-                         "telegram": bool(m.bot_token)} for m in cfg.team],
+                         "telegram": bool(m.bot_token), "model": self.rt.model_name(m),
+                         "own_model": bool(m.llm)} for m in cfg.team],
             "projects": [self._project_json(p) for p in cfg.projects.values()],
             "priorities": PRIORITIES, "workspace": str(cfg.workspace_path),
+            "permissions": cfg.permissions, "action_types": ACTION_TYPES, "backchannel": BACKCHANNEL,
         }
 
     def _project_json(self, p) -> dict:
-        tasks = [t for t in self.rt.tasks.all() if t.project == p.id]
+        tasks = [t for t in self.rt.tasks.all() if t.project == p.id and t.status != "cut"]   # cut ≠ progress
         tz = self.rt.cfg.timezone
         return {"id": p.id, "name": p.name or p.id, "description": p.description, "lead": p.lead,
                 "status": p.status, "repo": p.repo, "members": [m.id for m in self.rt.cfg.project_members(p.id)],
+                "telegram_chat_id": p.telegram_chat_id, "slack": bool(self.rt.cfg.slack.channels.get(PROJECT_ROOM + p.id)),
                 "room": PROJECT_ROOM + p.id,
                 "counts": {"total": len(tasks), "done": sum(1 for t in tasks if t.status == "done"),
                            "open": sum(1 for t in tasks if t.is_open),
@@ -222,6 +282,7 @@ class App:
         return {**self._project_json(p), "people": people, "tasks": tasks,
                 "last": (self.chat.since(PROJECT_ROOM + pid, -1) or [])[-3:]}
 
+    @config_txn
     def project_members(self, pid: str, members: list[str]) -> dict:
         raw = self.raw()
         if pid not in (raw.get("projects") or {}):
@@ -269,6 +330,8 @@ class App:
             "asks": [self._ask_json(a) for a in rt.asks.pending()],
             "decisions": open_decisions(rt.ws),
             "review": [self._task_json(t) for t in tasks if t.status == "review"],
+            "blocked_on_you": [self._task_json(t) for t in self._blocked_on_owner()],
+            "queued": len(rt.queued()),
             "attention": [self._task_json(t) for t in open_ if t.status == "blocked" or t.overdue(tz)],
             "critical": [self._task_json(t) for t in sorted(open_, key=lambda t: str(t.doc.meta.get("due") or "9999"))
                          if t.priority == "P0"][:5],
@@ -276,6 +339,48 @@ class App:
             "projects": [self._project_json(p) for p in cfg.projects.values()],
             "budget": cfg.daily_tokens_per_agent, "push_error": rt.ws.state().get("push_error", ""),
         }
+
+    def pulse(self) -> dict:
+        """Small and cheap, polled every few seconds: what changed, what's unread, what needs you."""
+        rt = self.rt
+        import hashlib
+        h = hashlib.sha1()
+        for d in ("tasks", "asks", "reports", "decisions"):
+            for f in sorted((rt.ws.root / d).glob("*.md")):
+                st = f.stat()
+                h.update(f"{f.name}:{st.st_mtime_ns}:{st.st_size};".encode())
+        h.update(json.dumps(rt.ws.state().get("paused", [])).encode())
+        rooms = {r: self.chat.last_index(r) for r in self.hub.rooms()}
+        last_who = {}
+        for r, i in rooms.items():
+            if i >= 0:
+                m = self.chat.since(r, i - 1)[-1:]
+                last_who[r] = m[0]["who"] if m else ""
+        pend = rt.asks.pending()
+        review = [t for t in rt.tasks.all() if t.status == "review"]
+        return {"version": h.hexdigest()[:16], "rooms": rooms, "last_who": last_who, "thinking": dict(self.pending),
+                "asks": [a.id for a in pend], "red": sum(1 for a in pend if a.level == "red"),
+                "needs_you": len(pend) + len(review) + len(self._blocked_on_owner()),
+                "paused_all": bool(rt.ws.state().get("paused_all"))}
+
+    def _blocked_on_owner(self) -> list:
+        rt, cfg = self.rt, self.rt.cfg
+        keys = (cfg.owner_key, cfg.owner_name.lower(), cfg.owner_name.split()[0].lower())
+        return [t for t in rt.tasks.all() if t.status == "blocked" and any(k in t.blocked_on.lower() for k in keys)
+                and "approval ask-" not in t.blocked_on.lower()]
+
+    def test_model(self, b: dict) -> dict:
+        """Setup/Settings: does this provider answer? (One tiny call.)"""
+        from .config import parse_llm
+        conf = parse_llm({k: v for k, v in b.items() if k in ("provider", "model", "base_url") and v})
+        if b.get("api_key") and conf.api_key_env:
+            os.environ.setdefault(conf.api_key_env, str(b["api_key"]))
+        try:
+            r = make_llm(conf).complete('Reply with exactly: {"reply": "pong", "actions": []}',
+                                        [{"role": "user", "content": "ping"}])
+        except LLMError as e:
+            return {"ok": False, "error": str(e)[:300]}
+        return {"ok": "pong" in r.text.lower(), "reply": r.text[:120], "tokens": r.total_tokens}
 
     def _task_json(self, t) -> dict:
         m = t.doc.meta
@@ -287,6 +392,8 @@ class App:
     def _ask_json(self, a) -> dict:
         m = a.doc.meta
         return {"id": a.id, "from": a.requester, "summary": a.summary, "level": a.level, "status": a.status,
+                "decided_by": m.get("decided_by", ""), "decided_at": m.get("decided_at", ""),
+                "outcome": a.doc.sections.get("Outcome", ""),
                 "task": m.get("task", ""), "deadline": m.get("deadline", ""), "kind": a.kind,
                 "recommendation": m.get("recommendation", ""), "details": a.doc.sections.get("Details", ""),
                 "created": m.get("created", "")}
@@ -301,7 +408,10 @@ class App:
             raise ValueError(f"no member {mid}")
         ws = self.rt.ws
         skill = ws.root / "team" / m.id / "skill"
+        llm = self.rt.cfg.llm_for(m)
         return {"id": m.id, "name": m.name, "role": m.role, "projects": m.projects, "manager": m.monitor,
+                "llm": {"provider": llm.provider, "model": llm.model, "base_url": llm.base_url, "own": bool(m.llm)},
+                "permissions": m.permissions,
                 "persona": ws.read(f"team/{m.id}/persona.md"), "memory": ws.read(f"team/{m.id}/memory.md"),
                 "log": ws.tail_log(m.id, 40), "status": self.rt.tasks.person_status(m.id),
                 "skill_files": sorted(str(p.relative_to(skill)) for p in skill.rglob("*") if p.is_file())
@@ -313,113 +423,35 @@ class App:
         return {"messages": self.chat.since(room, after), "thinking": self.pending.get(room, 0)}
 
     def chat_send(self, room: str, text: str) -> dict:
-        text = text.strip()
-        if not text:
-            raise ValueError("empty message")
-        cfg = self.rt.cfg
-        pid = room[len(PROJECT_ROOM):] if room.startswith(PROJECT_ROOM) else ""
-        if pid and pid not in cfg.projects:
-            raise ValueError(f"no such project {pid}")
-        if not pid and room != TEAM_ROOM and not cfg.member(room):
-            raise ValueError(f"no such room {room}")
-        owner = self.rt.owner_id
-        self.chat.append(room, owner, text)
-        if text.startswith("/"):
-            self.submit(self._command(room, text), timeout=None)
-        elif pid:
-            self.submit(self._project_message(pid, text), timeout=None)
-        elif room == TEAM_ROOM:
-            self.submit(self._team_message(text), timeout=None)
-        else:
-            self.submit(self._dm(room, text), timeout=None)
+        msg = self.hub.receive(room, text, via="console")      # shown at once; raises for a bad room
+        self.submit(self.hub.handle(room, msg, via="console"), timeout=None)
         return {"ok": True}
 
-    async def _dm(self, mid: str, text: str) -> None:
-        self.pending[mid] = self.pending.get(mid, 0) + 1
-        try:
-            reply = await self.rt.dispatch(mid, Event("dm", text, sender=self.rt.owner_id))
-            self.chat.append(mid, mid, reply)
-        except Exception as e:  # noqa: BLE001
-            self.chat.append(mid, mid, f"⚠️ {e}", kind="notice")
-        finally:
-            self.pending[mid] -= 1
-
-    async def _team_message(self, text: str) -> None:
-        cfg = self.rt.cfg
-        is_all, targets = group_targets(text, cfg, self.gw.usernames if self.gw else None)
-        if is_all and is_status_request(text):
-            for m in cfg.team:
-                st, line = self.rt.tasks.person_status(m.id)
-                self.chat.append(TEAM_ROOM, m.id, f"{st} — {line}")
-            return
-
-        async def one(mid):
-            self.pending[TEAM_ROOM] = self.pending.get(TEAM_ROOM, 0) + 1
-            try:
-                reply = await self.rt.dispatch(mid, Event("group", text, sender=self.rt.owner_id))
-                self.chat.append(TEAM_ROOM, mid, reply)
-            except Exception as e:  # noqa: BLE001
-                self.chat.append(TEAM_ROOM, mid, f"⚠️ {e}", kind="notice")
-            finally:
-                self.pending[TEAM_ROOM] -= 1
-        await asyncio.gather(*(one(t) for t in targets))
-
-    async def _project_message(self, pid: str, text: str) -> None:
-        """A project room: @all means everyone on the project; no mention goes to the lead (or the manager)."""
-        cfg, room = self.rt.cfg, PROJECT_ROOM + pid
-        members = [m.id for m in cfg.project_members(pid)]
-        is_all, targets = group_targets(text, cfg, self.gw.usernames if self.gw else None)
-        mentioned = bool(re.search(r"(?<!\w)@\w", text))
-        if is_all:
-            targets = members
-        elif not mentioned:
-            lead = cfg.projects[pid].lead
-            targets = [lead] if lead in members else [cfg.monitor.id]
-        if not targets:
-            self.chat.append(room, cfg.monitor.id, "Nobody is on this project yet — add people on the project page.",
-                             kind="notice")
-            return
-        if is_all and is_status_request(text):
-            for mid in targets:
-                mine = [t for t in self.rt.tasks.for_owner(mid) if t.project == pid]
-                line = "; ".join(t.line(cfg.timezone) for t in mine[:3]) or "nothing open on this project"
-                self.chat.append(room, mid, line)
-            return
-
-        async def one(mid):
-            self.pending[room] = self.pending.get(room, 0) + 1
-            try:
-                reply = await self.rt.dispatch(mid, Event("group", text, sender=self.rt.owner_id, project=pid))
-                self.chat.append(room, mid, reply)
-            except Exception as e:  # noqa: BLE001
-                self.chat.append(room, mid, f"⚠️ {e}", kind="notice")
-            finally:
-                self.pending[room] -= 1
-        await asyncio.gather(*(one(t) for t in targets))
-
-    async def _command(self, room: str, text: str) -> None:
-        cmd, _, args = text[1:].partition(" ")
-        shared = room == TEAM_ROOM or room.startswith(PROJECT_ROOM)
-        speaker = self.rt.cfg.monitor.id if shared else room
-        try:
-            out = await run_command(self.rt, cmd.lower().split("@")[0], args.strip(), speaker,
-                                    private=not shared)
-        except (ValueError, TaskError, AskError) as e:
-            out = f"⚠️ {e}"
-        self.chat.append(room, speaker, out, kind="system")
+    def rooms(self) -> list[dict]:
+        """Every room with its latest message — the chat sidebar in one call."""
+        out = []
+        for r in self.hub.rooms():
+            last = self.chat.since(r, max(-1, self.chat.last_index(r) - 1))[-1:] if self.chat.last_index(r) >= 0 else []
+            out.append({"room": r, "last": last[0] if last else None, "count": self.chat.last_index(r) + 1})
+        return out
 
     # -- tasks -----------------------------------------------------------------------------
     def task_create(self, b: dict) -> dict:
         rt = self.rt
-        owner = str(b.get("owner", "")).lower()
-        if not rt.cfg.member(owner):
+        title = " ".join(str(b.get("title") or "").split())
+        if not title:
+            raise ValueError("Give the task a title.")
+        owner = str(b.get("owner") or "").lower()
+        if not owner or not rt.cfg.member(owner):
             raise ValueError("Pick who owns this task.")
         pid = str(b.get("project") or "")
+        if pid and pid not in rt.cfg.projects:
+            raise ValueError(f"There's no project {pid}.")
         if pid and pid in rt.cfg.projects and owner not in [m.id for m in rt.cfg.project_members(pid)]:
             self.project_members(pid, [m.id for m in rt.cfg.project_members(pid)] + [owner])
             rt = self.rt
         dm = [x.strip() for x in (b.get("done_means") or []) if str(x).strip()]
-        t = rt.tasks.create(title=str(b.get("title", "")).strip() or "untitled", owner=owner,
+        t = rt.tasks.create(title=title, owner=owner,
                             created_by=rt.owner_id, priority=str(b.get("priority") or "P1"),
                             due=str(b.get("due") or "") or None, project=str(b.get("project") or ""),
                             done_means=dm, description=str(b.get("description") or ""))
@@ -431,33 +463,52 @@ class App:
     def task_action(self, b: dict) -> dict:
         rt, tid, act = self.rt, str(b.get("id", "")), str(b.get("action", ""))
         by = rt.owner_id
+        if act == "status" and str(b.get("status")) == "done":
+            act = "accept"                                    # done always means accepted: same path, same follow-ups
         if act == "status":
             t, msg = rt.tasks.set_status(tid, str(b.get("status")), by=by, note=str(b.get("note") or ""),
                                          blocked_on=str(b.get("blocked_on") or ""))
+            if t.status == "blocked":
+                self.submit(rt.on_blocked(t, by), timeout=30)
         elif act == "accept":
-            t, msg = rt.tasks.set_status(tid, "done", by=by, note=str(b.get("note") or "accepted"))
+            msg = self.submit(rt.accept(tid, str(b.get("note") or "accepted")), timeout=60)
+            t = rt.tasks.get(tid)
         elif act == "cut":
             t, msg = rt.tasks.set_status(tid, "cut", by=by, note=str(b.get("note") or ""))
         elif act == "feedback":
-            text = str(b.get("text") or "").strip()
-            if not text:
-                raise ValueError("Write the feedback first.")
-            t, msg = rt.tasks.add_feedback(tid, rt.cfg.owner_name, text), ""
-            rt.ws.remember(t.owner, f"Feedback on {t.id}: {text}")
+            msg = self.submit(rt.feedback(tid, str(b.get("text") or "")), timeout=60)
+            t = rt.tasks.get(tid)
+        elif act == "changes":
+            msg = self.submit(rt.request_changes(tid, str(b.get("text") or "")), timeout=60)
+            t = rt.tasks.get(tid)
         elif act == "edit":
-            t, msg = rt.tasks.update_fields(tid, by, **{k: b.get(k) for k in ("priority", "due", "title", "owner",
-                                                                          "project") if b.get(k)}), ""
+            fields = {k: b.get(k) for k in ("priority", "due", "title", "owner", "project") if b.get(k)}
+            if "owner" in fields and not rt.cfg.member(str(fields["owner"])):
+                raise ValueError(f"There's nobody called {fields['owner']} on the team.")
+            if "project" in fields and fields["project"] not in rt.cfg.projects:
+                raise ValueError(f"There's no project {fields['project']}.")
+            t, msg = rt.tasks.update_fields(tid, by, **fields), ""
         else:
             raise ValueError(f"unknown action {act}")
         rt.ws.commit(f"{tid}: {act} by {rt.cfg.owner_name}", author=rt.cfg.owner_name)
-        return {**self._task_json(t), "message": msg}
+        return {**self._task_json(t), "message": msg if isinstance(msg, str) else ""}
+
+    def pause(self, who: str, pause: bool) -> dict:
+        msg = self.rt.set_paused(who, pause)
+        if not pause:
+            n = self.submit(self.rt.drain_queue(), timeout=30)
+            if n:
+                msg += f" · {n} queued message{'s' if n != 1 else ''} being answered"
+        return {"message": msg}
 
     def decide(self, ask_id: str, decision: str, note: str = "") -> dict:
         if decision not in ("approved", "rejected"):
             raise ValueError("decision must be approved or rejected")
-        return {"result": self.submit(self.rt.decide_ask(ask_id, decision, by=self.rt.cfg.owner_name, note=note))}
+        return {"result": self.submit(self.rt.decide_ask(ask_id, decision, by=self.rt.cfg.owner_name, note=note,
+                                                         via="console"))}
 
     # -- projects, members, decisions, settings --------------------------------------------
+    @config_txn
     def project_save(self, b: dict) -> dict:
         pid = slug(str(b.get("id") or b.get("name") or ""))
         if not pid:
@@ -467,6 +518,14 @@ class App:
         for k in ("name", "description", "lead", "repo", "status"):
             if k in b:
                 p[k] = str(b[k]).strip()
+        if "telegram_chat_id" in b:
+            v = str(b.get("telegram_chat_id") or "").strip()
+            if v and not v.lstrip("-").isdigit():
+                raise ValueError("Telegram chat id is a number, like -1001234567890.")
+            if v:
+                p["telegram_chat_id"] = int(v)
+            else:
+                p.pop("telegram_chat_id", None)
         members = [str(x) for x in b.get("members") or []]
         if p.get("lead") and members and p["lead"] not in members:
             members.append(p["lead"])
@@ -487,6 +546,7 @@ class App:
         self.load()
         return {"id": pid}
 
+    @config_txn
     def member_update(self, b: dict) -> dict:
         mid = str(b.get("id", ""))
         raw = self.raw()
@@ -496,6 +556,20 @@ class App:
                     m["role"] = str(b["role"]).strip()
                 if "projects" in b:
                     m["projects"] = [p.strip() for p in b["projects"] if p.strip()]
+                if "llm" in b:
+                    want = b.get("llm") or {}
+                    if not want.get("provider"):
+                        m.pop("llm", None)                          # back to the company default
+                    else:
+                        if want["provider"] not in PROVIDERS:
+                            raise ValueError(f"Unknown AI provider {want['provider']} (use {', '.join(PROVIDERS)}).")
+                        m["llm"] = {k: str(want[k]) for k in ("provider", "model", "base_url") if want.get(k)}
+                if "permissions" in b:
+                    perms = {k: v for k, v in (b.get("permissions") or {}).items() if k in ACTION_TYPES and v in LEVELS}
+                    if perms:
+                        m["permissions"] = perms
+                    else:
+                        m.pop("permissions", None)
                 break
         else:
             raise ValueError(f"no member {mid}")
@@ -516,8 +590,11 @@ class App:
         return {"company": raw.get("company"), "timezone": raw.get("timezone"), "owner": raw.get("owner", {}),
                 "llm": {k: v for k, v in (raw.get("llm") or {}).items()}, "monitor": raw.get("monitor", {}),
                 "budget": raw.get("budget", {}), "telegram": raw.get("telegram", {}),
-                "workspace": raw.get("workspace", {}), "executor": raw.get("executor", {})}
+                "workspace": raw.get("workspace", {}), "executor": raw.get("executor", {}),
+                "permissions": self.rt.cfg.permissions, "slack": {k: v for k, v in (raw.get("slack") or {}).items()},
+                "sync": {"mirror_owner": self.rt.cfg.mirror_owner}}
 
+    @config_txn
     def settings_save(self, b: dict) -> dict:
         raw = self.raw()
         if b.get("company"):
@@ -542,8 +619,7 @@ class App:
         if "base_url" in b:
             llm["base_url"] = str(b["base_url"] or "")
         if b.get("api_key") and llm.get("api_key_env"):
-            from .setup import _append_env
-            _append_env(self.base / ".env", {llm["api_key_env"]: str(b["api_key"])})
+            set_env(self.base / ".env", {llm["api_key_env"]: str(b["api_key"])})
         if "coding_tool" in b:
             raw.setdefault("executor", {})["command"] = {
                 "claude": ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits"],
@@ -554,20 +630,101 @@ class App:
                 tg[k] = int(b[k])
         if "owner_telegram_id" in b and str(b["owner_telegram_id"]).strip().isdigit():
             raw.setdefault("owner", {})["telegram_user_id"] = int(b["owner_telegram_id"])
+        if isinstance(b.get("permissions"), dict):
+            raw["permissions"] = {k: v for k, v in b["permissions"].items() if k in ACTION_TYPES and v in LEVELS}
+        if "slack_owner_ids" in b:
+            ids = [x.strip() for x in re.split(r"[,\s]+", str(b["slack_owner_ids"] or "")) if x.strip()]
+            if any(not re.fullmatch(r"[UW][A-Z0-9]{6,}", x) for x in ids):
+                raise ValueError("Slack member ids look like U012AB3CD (Profile → ⋮ → Copy member ID).")
+            raw.setdefault("slack", {})["owner_user_ids"] = ids
+        if "mirror_owner" in b:
+            raw.setdefault("sync", {})["mirror_owner"] = bool(b["mirror_owner"])
         self.save_raw(raw)
         self.load()
         return {"ok": True}
 
+    # -- slack connection from the console -------------------------------------------------
+    @config_txn
+    def slack_connect(self, bot_token: str, app_token: str) -> dict:
+        from .slack import check_tokens
+        r = check_tokens(bot_token.strip(), app_token.strip())
+        if not r.get("ok"):
+            return r
+        sc = self.rt.cfg.slack
+        set_env(self.base / ".env", {sc.bot_token_env: bot_token.strip(), sc.app_token_env: app_token.strip()})
+        os.environ[sc.bot_token_env], os.environ[sc.app_token_env] = bot_token.strip(), app_token.strip()
+        self.load()
+        return r
+
+    @config_txn
+    def slack_provision(self) -> dict:
+        from .slack import _client, provision
+        cfg = self.rt.cfg
+        if not cfg.slack.bot_token:
+            raise ValueError("Connect Slack first (bot and app tokens).")
+        if not cfg.slack.owner_user_ids:
+            raise ValueError("Add your Slack member id first, so you are invited to the channels.")
+        rooms = [TEAM_ROOM] + [PROJECT_ROOM + p for p in cfg.projects] + [m.id for m in cfg.team] + [BACKCHANNEL]
+        try:
+            made = provision(self.slack.web if self.slack and self.slack.web else _client(cfg.slack.bot_token), cfg, rooms)
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(f"Slack said no: {e} — check the app's scopes (docs/SLACK.md).") from e
+        raw = self.raw()
+        raw.setdefault("slack", {}).setdefault("channels", {}).update(made)
+        self.save_raw(raw)
+        self.rt.ws.commit("slack channels connected", author=cfg.owner_name)
+        self.load()
+        return {"channels": made}
+
+    def slack_email(self, email: str) -> dict:
+        from .slack import SlackError, lookup_email
+        if not self.rt.cfg.slack.bot_token:
+            raise ValueError("Connect Slack first (bot and app tokens).")
+        try:
+            uid = lookup_email(self.rt.cfg.slack.bot_token, email)
+        except SlackError as e:
+            raise ValueError(str(e)) from None
+        with path_lock(self.cfg_path):
+            raw = self.raw()
+            ids = raw.setdefault("slack", {}).setdefault("owner_user_ids", [])
+            if uid not in ids:
+                ids.append(uid)
+            self.save_raw(raw)
+            self.load()
+        return {"found": True, "id": uid}
+
+    def slack_detect(self) -> dict:
+        if not self.slack:
+            raise ValueError("Slack isn't running yet — connect the tokens first.")
+        code = getattr(self, "_slack_code", "")
+        if not code:
+            raise ValueError("Get a code first (Detect me shows it).")
+        uid = self.slack.wait_for_unknown_user(90, code=code)
+        if not uid:
+            return {"found": False}
+        with path_lock(self.cfg_path):
+            raw = self.raw()
+            ids = raw.setdefault("slack", {}).setdefault("owner_user_ids", [])
+            if uid not in ids:
+                ids.append(uid)
+            self.save_raw(raw)
+            self.load()
+        return {"found": True, "id": uid}
+
     # -- telegram connection from the console ----------------------------------------------
     def telegram_manager(self, token: str) -> dict:
-        from .setup import _append_env
         check = self.admin.check_token(token)
         if not check.get("ok"):
             return check
         mgr = self.rt.cfg.monitor
-        _append_env(self.base / ".env", {mgr.bot_token_env: token})
+        set_env(self.base / ".env", {mgr.bot_token_env: token})
         os.environ[mgr.bot_token_env] = token
         return check
+
+    def telegram_code(self) -> dict:
+        """A one-time code the owner sends to the manager's bot: only that message makes someone the owner."""
+        self._tg_code = f"{secrets.randbelow(900000) + 100000}"
+        return {"code": self._tg_code}
 
     def telegram_detect(self, what: str) -> dict:
         if self.gw:
@@ -581,17 +738,21 @@ class App:
         async def go():
             async with TelegramProbe(token, cfg.telegram_api_base) as p:
                 if what == "owner":
-                    return await p.wait_for_owner(90)
+                    code = getattr(self, "_tg_code", "")
+                    if not code:
+                        raise ValueError("Get a code first (Detect me shows it).")
+                    return await p.wait_for_owner(90, code=code)
                 return await p.wait_for_group(cfg.owner_user_id, 90)
         found = asyncio.run(go())
         if not found:
             return {"found": False}
-        raw = self.raw()
-        if what == "owner":
-            raw.setdefault("owner", {})["telegram_user_id"] = found.id
-        else:
-            raw.setdefault("telegram", {})["group_chat_id"] = found.id
-        self.save_raw(raw)
+        with path_lock(self.cfg_path):
+            raw = self.raw()
+            if what == "owner":
+                raw.setdefault("owner", {})["telegram_user_id"] = found.id
+            else:
+                raw.setdefault("telegram", {})["group_chat_id"] = found.id
+            self.save_raw(raw)
         return {"found": True, "id": found.id, "name": getattr(found, "name", "") or getattr(found, "title", "")}
 
 
@@ -643,6 +804,8 @@ def make_handler(app: App, key: str):
                     "/api/task": lambda: app.task_detail(q.get("id", "")),
                     "/api/asks": lambda: [app._ask_json(a) for a in reversed(app.rt.asks.all())][:50],
                     "/api/chat": lambda: app.chat_since(q.get("room", TEAM_ROOM), int(q.get("after", -1))),
+                    "/api/rooms": lambda: app.rooms(),
+                    "/api/pulse": lambda: app.pulse(),
                     "/api/member": lambda: app.member_detail(q.get("id", "")),
                     "/api/project": lambda: app.project_detail(q.get("id", "")),
                     "/api/team": lambda: app.admin.state(),
@@ -666,17 +829,24 @@ def make_handler(app: App, key: str):
         def do_POST(self):
             if not self._ok():
                 return self._json(403, {"error": "forbidden"})
-            n = int(self.headers.get("Content-Length") or 0)
-            if n > 30_000_000:
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return self._json(400, {"error": "bad Content-Length"})
+            if n < 0 or n > 30_000_000:
                 return self._json(413, {"error": "too large"})
             try:
                 b = json.loads(self.rfile.read(n) or b"{}")
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 return self._json(400, {"error": "bad json"})
+            if not isinstance(b, dict):
+                return self._json(400, {"error": "expected a JSON object"})
             path = self.path.split("?", 1)[0]
             try:
                 if path == "/api/setup":
                     return self._json(200, app.setup(b))
+                if path == "/api/test_model":
+                    return self._json(200, app.test_model(b))
                 if not app.ready:
                     return self._json(409, {"error": "setup needed"})
                 a = app.admin
@@ -706,9 +876,16 @@ def make_handler(app: App, key: str):
                     "/api/remove": lambda: (a.remove(str(b.get("id", ""))), app.load())[0],
                     "/api/report/run": lambda: {"file": app.submit(app.rt.run_daily_report())},
                     "/api/work": lambda: {"digest": app.submit(app.rt.run_work_session(), timeout=1800)},
-                    "/api/pause": lambda: {"message": app.rt.set_paused(str(b.get("who", "all")), bool(b.get("pause")))},
+                    "/api/pause": lambda: app.pause(str(b.get("who", "all")), bool(b.get("pause"))),
                     "/api/telegram/manager": lambda: app.telegram_manager(str(b.get("token", "")).strip()),
                     "/api/telegram/detect": lambda: app.telegram_detect(str(b.get("what", "owner"))),
+                    "/api/telegram/code": lambda: app.telegram_code(),
+                    "/api/slack/code": lambda: {"code": setattr(app, "_slack_code", f"{secrets.randbelow(900000) + 100000}")
+                                               or app._slack_code},
+                    "/api/slack/connect": lambda: app.slack_connect(str(b.get("bot_token", "")), str(b.get("app_token", ""))),
+                    "/api/slack/provision": lambda: app.slack_provision(),
+                    "/api/slack/detect": lambda: app.slack_detect(),
+                    "/api/slack/email": lambda: app.slack_email(str(b.get("email", ""))),
                     "/api/restart": lambda: (app.load(), {"ok": True})[1],
                 }
                 fn = routes.get(path)
@@ -733,7 +910,8 @@ def serve(base_dir: Path, host: str = "127.0.0.1", port: int = 8765, open_browse
     url = f"http://{shown}:{srv.server_address[1]}/?k={key}"
     status = "setup needed — finish it in the browser" if not app.ready else (
         f"{app.rt.cfg.company}: {len(app.rt.cfg.team)} people"
-        + (", Telegram connected" if app.gw else ", Telegram not connected (chat in the console)"))
+        + (", Telegram connected" if app.gw else ", Telegram not connected")
+        + (", Slack connected" if app.slack else ""))
     print(f"james-monitoring console: {url}\n{status}\nCtrl-C to stop.")
     if host == "0.0.0.0":
         print("⚠️  Listening on all interfaces. Anyone with the link can control the team — prefer an SSH tunnel.")
@@ -751,6 +929,6 @@ def serve(base_dir: Path, host: str = "127.0.0.1", port: int = 8765, open_browse
         srv.server_close()
         if app.ready:
             try:
-                app.submit(app._stop_services(), timeout=30)
+                app.submit(app._stop_services(app.sched, app.gw, app.slack, drain=True), timeout=90)
             except Exception:  # noqa: BLE001
                 pass

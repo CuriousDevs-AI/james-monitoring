@@ -105,7 +105,7 @@ def test_console_http_requires_key_and_serves_page(tmp_path):
         assert e.value.code == 400
     finally:
         srv.shutdown()
-        app.submit(app._stop_services(), timeout=10)
+        app.submit(app._stop_services(app.sched, app.gw, app.slack), timeout=10)
 
 
 def test_whole_team_in_one_upload(tmp_path):

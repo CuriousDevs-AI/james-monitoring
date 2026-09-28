@@ -5,15 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Console · james-monitoring</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" media="print" onload="this.media='all'">
 <style>
 /* Design system: same tokens as Janus — light, technical, warm neutrals, blue accent, square corners */
 :root{
   --background:#ffffff;--surface:#ffffff;--surface-2:#f7f5f1;--surface-3:#efebe3;--foreground:#0a1424;--muted:#647085;
   --border:#e8e1d8;--border-strong:#d7cdbe;--accent:#2563eb;--accent-fg:#ffffff;--accent-muted:rgba(37,99,235,.08);
-  --accent-border:rgba(37,99,235,.35);--success:#16a34a;--success-muted:rgba(22,163,74,.1);--warning:#d97706;
+  --accent-border:rgba(37,99,235,.35);--success:#15803d;--success-muted:rgba(22,163,74,.1);--warning:#b45309;
   --warning-muted:rgba(217,119,6,.1);--danger:#dc2626;--danger-muted:rgba(220,38,38,.1);--info:#7c3aed;--info-muted:rgba(124,58,237,.1);
-  --ring:rgba(37,99,235,.35);--font:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --ring:#1d4ed8;--font:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
   --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
 }
 *{box-sizing:border-box;border-color:var(--border)}
@@ -35,7 +35,7 @@ aside{width:248px;flex:none;border-right:1px solid var(--border);background:var(
 .brand{height:56px;display:flex;align-items:center;gap:9px;padding:0 16px;border-bottom:1px solid var(--border)}
 .logo{width:24px;height:24px;background:var(--foreground);color:var(--background);display:grid;place-items:center;font-weight:700;font-size:12px}
 .brand b{font-size:13px;display:block;line-height:1.1} .brand small{font-size:10px;color:var(--muted)}
-.navsec{padding:12px 12px 0} .navsec p{margin:0 0 4px;padding:0 8px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:rgba(100,112,133,.75)}
+.navsec{padding:12px 12px 0} .navsec p{margin:0 0 4px;padding:0 8px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 .navitem{display:flex;align-items:center;gap:10px;padding:6px 8px;font-size:13px;color:var(--muted);cursor:pointer;user-select:none}
 .navitem:hover{background:var(--surface-2);color:var(--foreground)} .navitem.on{background:var(--accent-muted);color:var(--foreground)} .navitem.on svg{color:var(--accent)}
 .navitem .count{margin-left:auto}
@@ -46,7 +46,7 @@ aside{width:248px;flex:none;border-right:1px solid var(--border);background:var(
 .crumb{display:flex;gap:6px;align-items:center;font-size:13px;min-width:0} .crumb span{color:var(--muted)} .crumb b{font-weight:500}
 .search{display:flex;align-items:center;gap:8px;border:1px solid var(--border);background:var(--surface-2);padding:6px 10px;color:var(--muted);font-size:12px;cursor:pointer;min-width:220px}
 .search:hover{border-color:var(--border-strong);color:var(--foreground)} .kbd{margin-left:auto;border:1px solid var(--border);padding:0 4px;font-size:10px;font-family:var(--mono)}
-.menu-btn{display:none}
+.btn.menu-btn{display:none}
 main{padding:20px 24px 60px;animation:fade .15s ease-out}
 .navscroll{flex:1;overflow:auto;padding-bottom:12px} .navadd{cursor:pointer;display:inline-grid;place-items:center;width:18px;height:18px;color:var(--muted)} .navadd:hover{background:var(--surface-3);color:var(--foreground)}
 .ellip{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -64,12 +64,12 @@ main{padding:20px 24px 60px;animation:fade .15s ease-out}
 .tab{display:flex;align-items:center;gap:7px;padding:9px 14px;font-size:13px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
 .tab:hover{color:var(--foreground)} .tab.on{color:var(--foreground);border-bottom-color:var(--accent);font-weight:500} .tab.on svg{color:var(--accent)} .tab .n{font-size:10.5px;background:var(--surface-3);padding:0 5px;color:var(--muted)}
 .pchat .conv{border:1px solid var(--border);height:calc(100vh - 330px);min-height:420px}
-.rooms-h{padding:12px 12px 6px;font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:rgba(100,112,133,.8);border-bottom:1px solid var(--border);background:var(--surface-2)}
+.rooms-h{padding:12px 12px 6px;font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border);background:var(--surface-2)}
 .chipsel{display:flex;flex-wrap:wrap;gap:6px} .chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 4px;border:1px solid var(--border);cursor:pointer;font-size:12.5px;background:var(--surface);user-select:none}
 .bulkbar{margin-top:12px;border-color:var(--accent);background:var(--accent-muted)} .bulkbar .card-b{gap:16px;align-items:center}
 .chip:hover{border-color:var(--border-strong)} .chip.on{border-color:var(--accent);background:var(--accent-muted)} .chip.on::after{content:"✓";color:var(--accent);font-size:11px}
 @media(max-width:860px){aside{position:fixed;left:-260px;z-index:40;transition:left .15s} aside.open{left:0;box-shadow:0 0 30px rgba(10,20,36,.12)} .pmeta{gap:16px}
-  .menu-btn{display:inline-flex} .search{min-width:0} .search .label,.search .kbd{display:none} main{padding:16px}
+  .btn.menu-btn{display:inline-flex} .search{min-width:0} .search .label,.search .kbd{display:none} main{padding:16px}
   .topbar{padding:0 12px;gap:6px} .hide-sm,.crumb .co{display:none!important} .topbar .btn .lbl{display:none}
   body.nav-open::after{content:"";position:fixed;inset:0;background:rgba(10,20,36,.25);z-index:35}}
 
@@ -84,6 +84,8 @@ h2.sec{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.0
 .card-h h3{margin:0;font-size:13px;font-weight:600} .card-b{padding:12px 14px}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;font:500 13px var(--font);border:1px solid transparent;cursor:pointer;white-space:nowrap;transition:background .12s,border-color .12s;color:var(--foreground);background:transparent}
 .btn:focus-visible,input:focus,select:focus,textarea:focus{outline:none;box-shadow:0 0 0 2px var(--ring)}
+[tabindex]:focus-visible,.navitem:focus-visible,.room:focus-visible,.tab:focus-visible,.li.click:focus-visible,.tcard:focus-visible,.pcard:focus-visible,.chip:focus-visible,.badge.click:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .btn.primary{background:var(--accent);color:var(--accent-fg)} .btn.primary:hover{background:#1d4fd8}
 .btn.secondary{background:var(--surface-3);border-color:var(--border)} .btn.secondary:hover{border-color:var(--border-strong)}
 .btn.outline{border-color:var(--border)} .btn.outline:hover{background:var(--surface-2)}
@@ -138,6 +140,21 @@ textarea{min-height:84px;resize:vertical} input[type=checkbox]{width:auto}
 .msg .meta{font-size:10.5px;color:var(--muted);margin-bottom:3px} .msg.me .meta{text-align:right}
 .msg.system{align-self:center;max-width:92%} .msg.system .bubble{background:var(--surface-3);font-family:var(--mono);font-size:12px}
 .msg.ask .bubble{border:1px solid rgba(220,38,38,.45);box-shadow:inset 3px 0 0 var(--danger)} .msg.notice .bubble{box-shadow:inset 3px 0 0 var(--warning)}
+.msg.internal .bubble{background:var(--surface-2);border-style:dashed;color:var(--muted);font-size:12.5px} .via{font-size:9.5px;padding:0 4px;border:1px solid var(--border);margin-left:4px;text-transform:uppercase;letter-spacing:.04em}
+.perm{display:grid;grid-template-columns:1fr 120px;gap:6px 10px;align-items:center} .perm select{padding:4px 6px}
+.readonly{padding:12px;font-size:12px;color:var(--muted);text-align:center}
+.content,main,.cols>div{min-width:0} body{overflow-x:hidden}
+.li{flex-wrap:wrap} .li>.grow{min-width:min(200px,60%)} .li>.row:last-child{flex-shrink:0;margin-left:auto} .card-h{flex-wrap:wrap}
+.unread{margin-left:auto;background:var(--accent);color:#fff;font:600 10px/1 var(--mono);padding:3px 6px;border-radius:9px}
+.day{align-self:center;font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:6px 0}
+.bubble .md p{margin:0 0 4px} .bubble .md p:last-child{margin:0} .bubble pre{margin:6px 0;background:rgba(10,20,36,.05)} .msg.me .bubble a{color:#fff;text-decoration:underline}
+.thinking{align-self:flex-start;font-size:12px;color:var(--muted);padding:4px 2px}
+.outcome{margin-top:8px;font-size:12px;font-weight:500}
+.spin{width:14px;height:14px;border:2px solid var(--border-strong);border-top-color:var(--accent);border-radius:50%;animation:rot .8s linear infinite;display:inline-block}
+@keyframes rot{to{transform:rotate(360deg)}}
+.movesel{display:none;margin-top:6px;padding:3px 6px;font-size:12px} @media (pointer:coarse){.movesel{display:block}}
+.req::after{content:" *";color:var(--danger)} .dirty{color:var(--warning);font-size:12px}
+@media(max-width:620px){.li{flex-wrap:wrap} .li>.row:last-child{width:100%;justify-content:flex-end} .metrics{grid-template-columns:repeat(3,1fr)} .metric{padding:8px 10px} .metric .v{font-size:18px} .tabs{flex-wrap:nowrap} .ph .actions{width:100%}}
 .composer{border-top:1px solid var(--border);background:var(--surface);padding:10px 12px}
 .composer .box{display:flex;gap:8px;align-items:flex-end} .composer textarea{min-height:40px;height:40px;resize:none}
 .chips{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap} .chips .badge{cursor:pointer} .badge.click{cursor:pointer} .badge.click:hover{border-color:var(--accent);color:var(--accent)} .chips .badge:hover{border-color:var(--accent-border);color:var(--accent)}
@@ -178,7 +195,13 @@ textarea{min-height:84px;resize:vertical} input[type=checkbox]{width:auto}
 
 <script>
 // ------------------------------------------------------------------ basics
-const KEY = new URLSearchParams(location.search).get("k") || "";
+// The key comes in the link; keep it for this tab and take it out of the address bar (history, screenshots).
+const KEY = (() => { const q = new URLSearchParams(location.search).get("k"); let k = q || "";
+  try { if (q) sessionStorage.setItem("jm-key", q); else k = sessionStorage.getItem("jm-key") || ""; } catch {}
+  if (q) history.replaceState(null, "", location.pathname + location.hash); return k; })();
+const store = {get: (k, d) => { try { const v = localStorage.getItem("jm:" + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set: (k, v) => { try { localStorage.setItem("jm:" + k, JSON.stringify(v)); } catch {} }};
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 let S = null, VIEW = "overview", ROOM = "", PROJECT = "", PTAB = "overview", timers = [], PENDING_ASKS = 0, FILTER = {project: "", owner: "", powner: ""};
 const $ = (s, r = document) => r.querySelector(s);
 async function api(path, body) {
@@ -223,6 +246,8 @@ const ICON = {
   bot: '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>',
   menu: '<line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/>',
   arrow: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>', eye: '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+  slack: '<rect width="3" height="8" x="13" y="2" rx="1.5"/><path d="M19 8.5V10h1.5A1.5 1.5 0 1 0 19 8.5"/><rect width="3" height="8" x="8" y="14" rx="1.5"/><path d="M5 15.5V14H3.5A1.5 1.5 0 1 0 5 15.5"/><rect width="8" height="3" x="14" y="13" rx="1.5"/><path d="M15.5 19H14v1.5a1.5 1.5 0 1 0 1.5-1.5"/><rect width="8" height="3" x="2" y="8" rx="1.5"/><path d="M8.5 5H10V3.5A1.5 1.5 0 1 0 8.5 5"/>',
+  lock: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
   refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
 };
 const icon = (n, cls = "") => { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"); s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("class", "i " + cls); s.innerHTML = ICON[n] || ""; return s; };
@@ -239,28 +264,39 @@ const projMark = (p, size = "") => h("span", {class: "pmark " + size, style: `ba
 const facepile = (ids, max = 5) => h("span", {class: "pile"}, (ids || []).slice(0, max).map(id => { const a = avatar(nameOf(id), "sm"); a.title = nameOf(id); return a; }),
   (ids || []).length > max ? h("span", {class: "av sm more"}, "+" + ((ids || []).length - max)) : null);
 const roomInfo = id => { if (id === "team") return {kind: "team", name: "All hands", sub: "Whole company · announcements · @all status"};
+  if (id === "backchannel") return {kind: "back", name: "Team backchannel", sub: "Teammates talking to each other · read-only"};
   if (id.startsWith(PROOM)) { const p = projOf(id.slice(PROOM.length)) || {id: id.slice(PROOM.length), name: id.slice(PROOM.length), members: []};
     return {kind: "project", project: p, name: "# " + p.name, sub: `${p.members.length} ${p.members.length === 1 ? "person" : "people"} · project room`}; }
   return {kind: "dm", name: nameOf(id), sub: (S.members.find(m => m.id === id) || {}).role || ""}; };
 const roomAvatar = (id, size = "") => { const r = roomInfo(id); return r.kind === "team" ? h("span", {class: "av " + size, style: "background:var(--foreground)"}, icon("team"))
+  : r.kind === "back" ? h("span", {class: "av " + size, style: "background:var(--muted)"}, icon("bot"))
   : r.kind === "project" ? projMark(r.project, size || "sm2") : avatar(r.name, size); };
-const humanIds = s => String(s ?? "").replace(/\b[a-z][a-z0-9_]*\b/g, w => (S?.members || []).some(m => m.id === w) ? nameOf(w) : w);
+const humanIds = s => String(s ?? "").replace(/\b[a-z][a-z0-9_-]*\b/g, w => (S?.members || []).some(m => m.id === w) ? nameOf(w) : (S && w === S.owner_key) ? S.owner : w);
 const personLine = l => { const m = /^(T-\d+) \[P\d\] (.+?) — \S+ — (\S+) — due (\S+)(?: date)?(.*)$/.exec(l || ""); return m ? `${m[1]} · ${m[2]} · ${m[3]}${m[4] !== "no" ? " · due " + m[4] : ""}${humanIds(m[5])}` : humanIds(l); };
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-function md(src) {
-  let out = "", list = false; const inl = s => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+function md(src, names = true) {
+  let out = "", list = false, fence = null;
+  const inl = s => esc(names ? humanIds(s) : s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/(^|[\s(])\*([^*\s][^*]*)\*(?=[\s).,!?]|$)/g, "$1<i>$2</i>")
+    .replace(/(https?:\/\/[^\s<)]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
   for (const l of String(src || "").split("\n")) {
+    if (/^\s*```/.test(l)) { if (fence === null) { if (list) { out += "</ul>"; list = false; } fence = []; } else { out += "<pre>" + esc(fence.join("\n")) + "</pre>"; fence = null; } continue; }
+    if (fence !== null) { fence.push(l); continue; }
     const m = l.match(/^(#{1,3})\s+(.*)/), li = l.match(/^\s*[-*]\s+(.*)/);
     if (li) { if (!list) { out += "<ul>"; list = true; } out += "<li>" + inl(li[1].replace(/^\[ \]\s*/, "☐ ").replace(/^\[x\]\s*/i, "☑ ")) + "</li>"; continue; }
     if (list) { out += "</ul>"; list = false; }
     if (m) out += `<h${m[1].length + 1}>${inl(m[2])}</h${m[1].length + 1}>`; else if (l.trim()) out += "<p>" + inl(l) + "</p>";
   }
+  if (fence !== null) out += "<pre>" + esc(fence.join("\n")) + "</pre>";
   return out + (list ? "</ul>" : "");
 }
 function toast(text, tone = "success") {
   const t = h("div", {class: "toast"}, h("span", {class: "ico " + tone, style: "width:22px;height:22px"}, icon(tone === "danger" ? "alert" : "check")), text);
   $("#toasts").append(t); setTimeout(() => t.remove(), 3200);
 }
+const PROVIDERS = [["claude-code", "Claude subscription — claude CLI, no API key"], ["codex-cli", "ChatGPT / Codex subscription — codex CLI, no API key"], ["anthropic", "Anthropic API key"], ["openai", "OpenAI-compatible API — OpenAI, Ollama, OpenRouter"]];
+const LEVEL_TXT = {green: "Just do it", yellow: "Do it, tell me", red: "Ask me first"};
+const ACTION_TXT = {create_task: "Create tasks", update_task: "Update tasks (status, dates)", write_file: "Save documents (docs/)", message_agent: "Message a teammate", post_group: "Post in All hands", post_room: "Post in a project room", run_code: "Run the coding agent (branch only)"};
 const STATUS_TONE = {"on track": "success", "at risk": "warning", "blocked": "danger", "not started": ""};
 const PRI_TONE = {P0: "danger", P1: "warning", P2: ""};
 const TASK_TONE = {todo: "", doing: "accent", blocked: "danger", review: "warning", done: "success", cut: ""};
@@ -269,18 +305,42 @@ const empty = (ic, title, text, action) => h("div", {class: "empty"}, h("div", {
 const pageHeader = (title, desc, ...actions) => h("div", {class: "ph"}, h("div", {}, h("h1", {}, title), desc ? h("p", {}, desc) : null), h("div", {class: "actions"}, actions));
 
 // ------------------------------------------------------------------ sheet + palette
+let SHEET_RETURN = null;
 function openSheet(title, ...kids) {
-  $("#sheet").put(h("div", {class: "sheet-h"}, h("b", {}, title), h("span", {class: "grow"}), h("button", {class: "btn ghost icon", onclick: closeSheet, title: "Close (Esc)"}, icon("x"))),
+  const sh = $("#sheet"); if (!sh.classList.contains("open")) SHEET_RETURN = document.activeElement;
+  sh.setAttribute("role", "dialog"); sh.setAttribute("aria-modal", "true"); sh.setAttribute("aria-label", String(title));
+  sh.put(h("div", {class: "sheet-h"}, h("b", {}, title), h("span", {class: "grow"}), h("button", {class: "btn ghost icon", onclick: () => closeSheet(), title: "Close (Esc)", "aria-label": "Close"}, icon("x"))),
     h("div", {class: "sheet-b"}, kids));
-  $("#sheet").classList.add("open"); $("#scrim").classList.add("open");
+  sh.classList.add("open"); $("#scrim").classList.add("open");
+  sh.querySelectorAll("input,textarea").forEach(el => { el.dataset.orig = el.value; });
+  setTimeout(() => { if (!sh.contains(document.activeElement)) (sh.querySelector("input,textarea,select,button:not(.icon)") || sh.querySelector("button"))?.focus(); }, 0);
 }
-function closeSheet() { $("#sheet").classList.remove("open"); $("#scrim").classList.remove("open"); }
-$("#scrim").onclick = () => { closeSheet(); closePalette(); };
+function sheetDirty() { return [...$("#sheet").querySelectorAll("input:not([type=checkbox]),textarea")].some(el => el.value.trim() && el.value !== (el.dataset.orig ?? "")); }
+function closeSheet(force = true) {
+  if (!$("#sheet").classList.contains("open")) return true;
+  if (!force && sheetDirty() && !confirm("Discard what you typed?")) return false;
+  $("#sheet").classList.remove("open"); $("#scrim").classList.remove("open");
+  if (SHEET_RETURN && document.contains(SHEET_RETURN)) SHEET_RETURN.focus(); SHEET_RETURN = null; return true;
+}
+$("#scrim").onclick = () => { closePalette(); closeSheet(false); };
+document.addEventListener("keydown", e => {        // keep Tab inside an open panel
+  const sh = $("#sheet"); if (e.key !== "Tab" || !sh.classList.contains("open")) return;
+  const f = [...sh.querySelectorAll("a[href],button:not([disabled]),input,select,textarea,[tabindex]")].filter(x => x.offsetParent);
+  if (!f.length) return; const first = f[0], last = f.at(-1);
+  if (e.shiftKey && document.activeElement === first) { last.focus(); e.preventDefault(); }
+  else if (!e.shiftKey && document.activeElement === last) { first.focus(); e.preventDefault(); }
+});
+// Everything clickable is reachable and usable from the keyboard (divs used as buttons get role + tabindex).
+const CLICKABLE = ".navitem,.room,.tab,.li.click,.tcard,.pcard,.chip,.badge.click,.pal-i,.navadd,.chips .badge";
+function a11y(root = document) { root.querySelectorAll(CLICKABLE).forEach(el => { if (!el.hasAttribute("tabindex")) el.tabIndex = 0; if (!el.hasAttribute("role")) el.setAttribute("role", "button"); }); }
+new MutationObserver(() => a11y()).observe(document.body, {childList: true, subtree: true});
+document.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && e.target.matches?.(CLICKABLE) && !e.target.matches("input,textarea,select")) { e.preventDefault(); e.target.click(); } });
 
 async function openPalette() {
   const pal = $("#palette"); const input = h("input", {placeholder: "Jump to a page, task, person or project… or run an action"}), list = h("div", {class: "pal-list"});
   pal.put(input, list); pal.classList.add("open"); $("#scrim").classList.add("open"); input.focus();
-  const tasks = await api("/api/tasks").catch(() => []);
+  if (!openPalette.cache || Date.now() - openPalette.at > 30000) { openPalette.cache = await api("/api/tasks").catch(() => []); openPalette.at = Date.now(); }
+  const tasks = openPalette.cache;
   const items = [
     ...NAV.flatMap(s => s.items).map(([v, t, ic]) => ({g: "Go to", label: t, ic, run: () => go(v)})),
     {g: "Actions", label: "New task", ic: "plus", run: () => newTaskSheet()}, {g: "Actions", label: "Run a work session now", ic: "zap", run: runWork},
@@ -309,7 +369,7 @@ async function openPalette() {
 function closePalette() { $("#palette").classList.remove("open"); if (!$("#sheet").classList.contains("open")) $("#scrim").classList.remove("open"); }
 document.addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); S && !S.setup_needed && openPalette(); }
-  else if (e.key === "Escape") { closePalette(); closeSheet(); }
+  else if (e.key === "Escape") { if ($("#palette").classList.contains("open")) closePalette(); else closeSheet(false); }
 });
 
 // ------------------------------------------------------------------ shell
@@ -328,7 +388,7 @@ async function boot() {
   const side = h("aside", {id: "side"},
     h("div", {class: "brand"}, h("span", {class: "logo"}, initials(S.company)[0]), h("span", {}, h("b", {}, S.company), h("small", {}, "Team console"))),
     h("div", {class: "navscroll"}, NAV.map((sec, i) => [h("div", {class: "navsec"}, h("p", {}, sec.title), sec.items.map(([v, t, ic]) => h("div", {class: "navitem" + (VIEW === v ? " on" : ""), onclick: () => go(v)},
-      icon(ic), t, v === "approvals" && PENDING_ASKS ? h("span", {class: "count"}, badge(PENDING_ASKS, "danger")) : null))),
+      icon(ic), t, v === "approvals" ? h("span", {class: "count", id: "nav-asks"}) : v === "chat" ? h("span", {class: "count", id: "nav-unread"}) : v === "overview" ? h("span", {class: "count", id: "nav-needs"}) : null))),
       i === 0 ? h("div", {class: "navsec"}, h("p", {class: "row", style: "justify-content:space-between"}, "Your projects", h("span", {class: "navadd", title: "New project", onclick: () => projectSheet()}, icon("plus"))),
         S.projects.filter(p => p.status !== "done").map(p => h("div", {class: "navitem" + (VIEW === "project" && PROJECT === p.id ? " on" : ""), onclick: () => openProject(p.id, VIEW === "project" ? PTAB : "overview")},
           projMark(p, "xs"), h("span", {class: "ellip"}, p.name), p.counts.blocked ? h("span", {class: "count"}, badge(p.counts.blocked, "danger")) : p.counts.open ? h("span", {class: "count mono xs muted"}, p.counts.open) : null)),
@@ -338,14 +398,51 @@ async function boot() {
     h("button", {class: "btn ghost icon menu-btn", onclick: () => document.body.classList.toggle("nav-open", $("#side").classList.toggle("open"))}, icon("menu")),
     h("div", {class: "crumb"}, h("span", {class: "co"}, S.company), h("span", {class: "co"}, "/"), VIEW === "project" ? [h("a", {class: "co", href: "#", onclick: e => { e.preventDefault(); go("projects"); }}, "Projects"), h("span", {class: "co"}, "/"), h("b", {}, projOf(PROJECT)?.name || PROJECT)] : h("b", {}, TITLES[VIEW] || "")),
     S.paused_all ? badge("PAUSED", "warning") : null, h("span", {class: "grow"}),
-    h("div", {class: "search", onclick: openPalette}, icon("search"), h("span", {class: "label"}, "Search everything…"), h("span", {class: "kbd"}, "⌘K")),
-    h("span", {class: "hide-sm"}, S.telegram.connected ? badge("Telegram", "success") : badge("Telegram off")), S.llm_error ? badge("Model issue", "danger") : null,
+    h("div", {class: "search", onclick: openPalette, role: "button", tabindex: 0}, icon("search"), h("span", {class: "label"}, "Search everything…"), h("span", {class: "kbd"}, IS_MAC ? "⌘K" : "Ctrl K")),
+    h("span", {class: "hide-sm row", style: "gap:4px"}, S.telegram.connected ? badge("Telegram", "success") : badge("Telegram off"), S.slack.connected ? badge("Slack", "success") : S.slack.tokens ? badge("Slack error", "danger") : null), S.llm_error ? badge("Model issue", "danger") : null,
     h("button", {class: "btn secondary sm", onclick: togglePause}, icon(S.paused_all ? "play" : "pause"), h("span", {class: "lbl"}, S.paused_all ? "Resume" : "Pause team")),
     h("button", {class: "btn primary sm", onclick: () => newTaskSheet()}, icon("plus"), h("span", {class: "lbl"}, "New task")));
   $("#app").put(h("div", {class: "shell"}, side, h("div", {class: "content"}, top, h("main", {id: "main"}))));
+  if (PULSE) paintPulse(); else pulse();
   render();
 }
-async function togglePause() { await api("/api/pause", {who: "all", pause: !S.paused_all}); toast(S.paused_all ? "Team resumed" : "Team paused", S.paused_all ? "success" : "warning"); refresh(); }
+async function togglePause() {
+  if (!S.paused_all && !confirm("Pause the whole team? Nobody works until you resume; messages to them wait in a queue.")) return;
+  const r = await api("/api/pause", {who: "all", pause: !S.paused_all}); toast(r.message || (S.paused_all ? "Team resumed" : "Team paused"), S.paused_all ? "success" : "warning"); refresh(); }
+
+// ------------------------------------------------------------------ pulse: live badges, unread, background refresh
+let PULSE = null, PULSE_VERSION = "";
+const seen = r => store.get("seen:" + r, -1);
+const markSeen = (r, i) => { if (i > seen(r)) store.set("seen:" + r, i); };
+function unreadOf(r) {   // messages after the last one you saw; nothing is unread if you spoke last
+  if (!PULSE || PULSE.last_who[r] === S.owner_key) return 0; return Math.max(0, (PULSE.rooms[r] ?? -1) - seen(r)); }
+function paintPulse() {
+  if (!PULSE || !S || S.setup_needed) return;
+  const unread = Object.keys(PULSE.rooms).filter(r => r !== ROOM || VIEW !== "chat").reduce((n, r) => n + unreadOf(r), 0);
+  $("#nav-unread")?.put(unread ? h("span", {class: "unread"}, unread) : null);
+  $("#nav-asks")?.put(PULSE.asks.length ? badge(PULSE.asks.length, PULSE.red ? "danger" : "warning") : null);
+  $("#nav-needs")?.put(PULSE.needs_you ? badge(PULSE.needs_you, "danger") : null);
+  document.title = (unread + PULSE.needs_you ? `(${unread + PULSE.needs_you}) ` : "") + `${S.company} · Console`;
+  document.querySelectorAll(".room[data-room]").forEach(el => { const n = unreadOf(el.dataset.room); el.querySelector(".unread")?.remove(); if (n && el.dataset.room !== ROOM) el.append(h("span", {class: "unread"}, n)); });
+}
+const LIVE_VIEWS = ["overview", "board", "approvals", "projects", "project", "reports"];
+async function pulse() {
+  if ((document.hidden && PULSE) || !KEY || !S || S.setup_needed) return;     // hidden tabs rest (after the first pulse)
+  try { PULSE = await api("/api/pulse"); } catch { return; }
+  paintPulse();
+  const roomsKey = JSON.stringify(PULSE.rooms);
+  if (VIEW === "chat" && roomsKey !== pulse.rooms) {            // keep room previews fresh (one request)
+    pulse.rooms = roomsKey;
+    (await api("/api/rooms").catch(() => [])).forEach(r => { const el = document.querySelector(`.room[data-room="${r.room}"] .p`); const last = r.last;
+      if (el && last) el.textContent = (last.who === S.owner_key ? "You: " : (roomInfo(r.room).kind === "dm" ? "" : nameOf(last.who) + ": ")) + humanIds(last.text.split("\n")[0]); });
+  }
+  const changed = PULSE_VERSION && PULSE.version !== PULSE_VERSION; PULSE_VERSION = PULSE.version;
+  const busy = $("#sheet").classList.contains("open") || $("#palette").classList.contains("open") ||
+    document.activeElement?.matches?.("input,textarea,select") || (VIEW === "project" && PTAB === "chat");
+  if (changed && !busy && LIVE_VIEWS.includes(VIEW)) { const y = scrollY; await render(); scrollTo(0, y); }
+  if (PULSE.paused_all !== S.paused_all) refresh();
+}
+setInterval(pulse, 4000); document.addEventListener("visibilitychange", () => { if (!document.hidden) pulse(); });
 async function refresh() { S = await api("/api/state"); boot(); }
 function go(v) { VIEW = v; closeSheet(); document.body.classList.remove("nav-open"); boot(); scrollTo(0, 0); }
 // The page you are on lives in the URL (#people, #project/ojas/board, #chat/riya), so refresh and Back work.
@@ -356,37 +453,51 @@ function readHash() { const [v, a, b] = decodeURIComponent(location.hash.slice(1
   const view = HASH_VIEW[v] || v; if (!TITLES[view]) return false;
   VIEW = view; if (view === "project") { PROJECT = a || ""; PTAB = ["overview", "chat", "board", "team"].includes(b) ? b : "overview"; } else if (view === "chat" && a) ROOM = a;
   return true; }
-window.addEventListener("hashchange", () => { if (location.hash !== hashOf() && readHash() && S && !S.setup_needed) { closeSheet(); boot(); } });
+window.addEventListener("hashchange", () => { document.body.classList.remove("nav-open"); $("#side")?.classList.remove("open");
+  if (location.hash !== hashOf() && readHash() && S && !S.setup_needed) { closeSheet(); boot(); } });
 function render() {
   clearTimers();
   if (location.hash !== hashOf()) history[location.hash ? "pushState" : "replaceState"](null, "", location.pathname + location.search + hashOf());
   const fn = {overview: vOverview, chat: vChat, board: vBoard, projects: vProjects, project: vProject, team: vTeam, approvals: vApprovals, reports: vReports, settings: vSettings}[VIEW] || vOverview;
-  $("#main").put(h("div", {class: "muted"}, "Loading…"));
-  fn().catch(e => $("#main").put(h("div", {class: "card card-b err"}, e.message)));
+  if (!$("#main").children.length) $("#main").put(h("div", {class: "muted"}, "Loading…"));
+  return fn().catch(e => $("#main").put(h("div", {class: "card card-b err"}, e.message)));
 }
-async function runWork() { toast("Work session started — each person moves their top task"); const r = await api("/api/work", {}).catch(e => ({digest: e.message}));
-  openSheet("Work session", r.digest ? h("pre", {}, r.digest) : empty("zap", "Nothing to do", "Nobody has open to-do or doing tasks.")); if (VIEW === "overview" || VIEW === "board") render(); }
-async function runReport() { await api("/api/report/run", {}); toast("Report written and posted"); go("reports"); }
+let BUSY = {};
+async function busy(key, label, fn) {
+  if (BUSY[key]) return toast(label + " is already running", "warning");
+  BUSY[key] = true; document.querySelectorAll(`[data-busy="${key}"]`).forEach(b => { b.disabled = true; b.dataset.label = b.textContent; b.put(h("span", {class: "spin"}), " " + label + "…"); });
+  try { return await fn(); } finally { BUSY[key] = false; document.querySelectorAll(`[data-busy="${key}"]`).forEach(b => { b.disabled = false; }); if (LIVE_VIEWS.includes(VIEW)) render(); }
+}
+async function runWork() { await busy("work", "Work session", async () => {
+  openSheet("Work session", h("div", {class: "row"}, h("span", {class: "spin"}), "Each person is moving their top task — this can take a few minutes. You can close this; the digest also arrives in ", nameOf(S.manager), "'s chat."));
+  const r = await api("/api/work", {}).catch(e => ({digest: "⚠️ " + e.message}));
+  if ($("#sheet").classList.contains("open")) openSheet("Work session", r.digest ? h("div", {class: "md", html: md(r.digest)}) : empty("zap", "Nothing to do", "Nobody has open to-do or doing tasks.")); }); }
+async function runReport() { await busy("report", "Writing report", async () => { try { await api("/api/report/run", {}); toast("Report written and posted"); go("reports"); } catch (e) { toast(e.message, "danger"); } }); }
 
 // ------------------------------------------------------------------ setup
 function renderSetup() {
   const f = {company: h("input", {placeholder: "e.g. Acme Robotics"}), owner: h("input", {placeholder: "Your name"}), timezone: h("input", {value: S.timezone}),
     goals: h("textarea", {placeholder: "One goal per line (optional)"}),
-    provider: h("select", {}, h("option", {value: "claude-code"}, "Claude subscription — claude CLI, no API key"), h("option", {value: "anthropic"}, "Anthropic API key"), h("option", {value: "openai"}, "OpenAI-compatible — OpenAI, Codex, Ollama, OpenRouter")),
+    provider: h("select", {}, PROVIDERS.map(([v, t]) => h("option", {value: v}, t))),
     model: h("input", {placeholder: "blank = default · e.g. sonnet"}), base_url: h("input", {placeholder: "only for Ollama / OpenRouter"}), api_key: h("input", {type: "password", placeholder: "only for API providers"}),
     workspace: h("input", {value: "./team-workspace"}), clone_url: h("input", {placeholder: "optional · https://github.com/you/team.git"}), push: h("input", {type: "checkbox"}),
     manager_name: h("input", {value: "James"}), manager_role: h("input", {value: "Delivery manager and chief of staff"})};
   const err = h("div", {class: "err"}), go_ = h("button", {class: "btn primary"}, "Create the team", icon("arrow"));
-  go_.onclick = async () => { err.textContent = ""; go_.disabled = true; go_.textContent = "Setting up…";
+  go_.onclick = async () => { err.textContent = "";
+    if (!f.company.value.trim() || !f.owner.value.trim()) { err.textContent = "Company and your name are required."; return (f.company.value.trim() ? f.owner : f.company).focus(); }
+    go_.disabled = true; go_.textContent = "Setting up…";
     const b = {}; for (const [k, el] of Object.entries(f)) b[k] = el.type === "checkbox" ? el.checked : el.value;
     try { await api("/api/setup", b); VIEW = "team"; await refresh(); toast("Team created — now add people"); } catch (e) { err.textContent = e.message; go_.disabled = false; go_.textContent = "Create the team"; } };
   const step = (n, title, sub, ...kids) => h("div", {class: "card", style: "margin-bottom:12px"}, h("div", {class: "card-h"}, h("span", {class: "step-n"}, n), h("h3", {}, title), h("span", {class: "muted small"}, sub)), h("div", {class: "card-b"}, kids));
   $("#app").put(h("div", {class: "setup bg-grid"}, h("div", {class: "setup-in"},
     h("div", {class: "row", style: "margin-bottom:18px"}, h("span", {class: "logo"}, "J"), h("b", {}, "james-monitoring")),
     h("div", {class: "ph"}, h("div", {}, h("h1", {}, "Set up your company"), h("p", {}, `Folder ${S.folder} · everything can be changed later in Settings.`))),
-    step("1", "Company", "who and why", h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Company / project"), f.company), h("div", {}, h("label", {class: "f"}, "Your name"), f.owner)),
+    step("1", "Company", "who and why", h("div", {class: "two"}, h("div", {}, h("label", {class: "f req"}, "Company / project"), f.company), h("div", {}, h("label", {class: "f req"}, "Your name"), f.owner)),
       h("label", {class: "f"}, "Timezone"), f.timezone, h("label", {class: "f"}, "Goals"), f.goals),
-    step("2", "AI model", "any provider, switch any time", h("label", {class: "f"}, "Provider"), f.provider, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Model"), f.model), h("div", {}, h("label", {class: "f"}, "API base URL"), f.base_url)), h("label", {class: "f"}, "API key"), f.api_key),
+    step("2", "AI model", "any provider, switch any time — and per person later", h("label", {class: "f req"}, "Provider"), f.provider, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Model"), f.model), h("div", {}, h("label", {class: "f"}, "API base URL"), f.base_url)), h("label", {class: "f"}, "API key"), f.api_key,
+      h("div", {class: "row", style: "margin-top:8px"}, (() => { const out = h("span", {class: "small"}); const b = h("button", {class: "btn outline sm", onclick: async () => { b.disabled = true; out.put(h("span", {class: "spin"}), " asking the model…");
+        const r = await api("/api/test_model", {provider: f.provider.value, model: f.model.value, base_url: f.base_url.value, api_key: f.api_key.value}).catch(e => ({ok: false, error: e.message}));
+        out.put(r.ok ? badge(`Works · ${r.tokens} tokens`, "success") : badge(r.error || `Odd reply: ${r.reply}`, "danger")); b.disabled = false; }}, "Test model"); return [b, out]; })())),
     step("3", "Team repo", "tasks, personas, memory, reports", h("label", {class: "f"}, "Folder"), f.workspace, h("label", {class: "f"}, "Clone from git URL"), f.clone_url, h("div", {class: "xs muted", style: "margin-top:4px"}, "Use a ", h("b", {}, "private"), " repo — it holds personas, memory, tasks and your decisions. Nobody else needs access."),
       h("label", {class: "f row", style: "margin-top:10px"}, f.push, h("span", {}, "Push to the remote after every change"))),
     step("4", "Manager", "watches everyone and reports to you", h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Name"), f.manager_name), h("div", {}, h("label", {class: "f"}, "Role"), f.manager_role))),
@@ -402,21 +513,27 @@ async function vOverview() {
     ...d.asks.map(a => h("div", {class: "li"}, h("span", {class: "ico " + (a.level === "red" ? "danger" : "warning")}, icon("approvals")),
       h("div", {class: "grow"}, h("div", {class: "row"}, h("span", {class: "t"}, a.summary), badge(a.level === "red" ? "Needs you" : "FYI", a.level === "red" ? "danger" : "warning")),
         h("div", {class: "xs muted"}, h("span", {class: "mono"}, a.id), " · from ", nameOf(a.from), a.task ? " · " + a.task : "")),
-      h("div", {class: "row"}, h("button", {class: "btn success sm", onclick: async () => { await decide(a.id, "approved"); render(); }}, icon("check"), "Approve"),
-        h("button", {class: "btn danger sm", onclick: async () => { await decide(a.id, "rejected"); render(); }}, "Reject")))),
+      h("div", {class: "row"}, h("button", {class: "btn success sm", onclick: async () => { if (await decide(a.id, "approved", "", a.summary)) render(); }}, icon("check"), "Approve"),
+        h("button", {class: "btn danger sm", onclick: async () => { if (await decide(a.id, "rejected")) render(); }}, "Reject")))),
+    ...(d.blocked_on_you || []).map(t => h("div", {class: "li click", onclick: () => taskSheet(t.id)}, h("span", {class: "ico danger"}, icon("alert")),
+      h("div", {class: "grow"}, h("div", {class: "row"}, h("span", {class: "t"}, t.title), badge("Blocked on you", "danger")),
+        h("div", {class: "xs muted"}, h("span", {class: "mono"}, t.id), " · ", nameOf(t.owner), " needs: ", humanIds(t.blocked_on))),
+      h("div", {class: "row"}, h("button", {class: "btn outline sm", onclick: e => { e.stopPropagation(); ROOM = t.owner; go("chat"); }}, icon("chat"), "Reply")))),
     ...d.review.map(t => h("div", {class: "li"}, h("span", {class: "ico warning"}, icon("eye")),
       h("div", {class: "grow"}, h("div", {class: "t"}, t.title), h("div", {class: "xs muted"}, h("span", {class: "mono"}, t.id), " · ", nameOf(t.owner), " · ready for review")),
       h("div", {class: "row"}, h("button", {class: "btn outline sm", onclick: () => taskSheet(t.id)}, "Open"),
+        h("button", {class: "btn outline sm", onclick: () => changesSheet(t)}, "Request changes"),
         h("button", {class: "btn primary sm", onclick: async () => { await api("/api/task", {id: t.id, action: "accept"}); toast(t.id + " accepted"); render(); }}, icon("check"), "Accept")))),
     ...d.decisions.map(x => h("div", {class: "li click", onclick: () => go("reports")}, h("span", {class: "ico accent"}, icon("target")), h("div", {class: "grow"}, h("div", {class: "t"}, x), h("div", {class: "xs muted"}, "Open decision")), icon("arrow")))];
   const tline = t => h("div", {class: "li click", onclick: () => taskSheet(t.id)}, avatar(nameOf(t.owner), "sm"),
     h("div", {class: "grow"}, h("div", {class: "row"}, h("span", {class: "t"}, t.title), badge(t.priority, PRI_TONE[t.priority]), t.overdue ? badge("Overdue", "danger") : null),
-      h("div", {class: "xs muted"}, h("span", {class: "mono"}, t.id), ` · ${nameOf(t.owner)} · ${t.status}`, t.due ? h("span", {class: "mono"}, " · due " + t.due) : null, t.blocked_on ? " · blocked on " + t.blocked_on : "")));
+      h("div", {class: "xs muted"}, h("span", {class: "mono"}, t.id), ` · ${nameOf(t.owner)} · ${t.status}`, t.due ? h("span", {title: t.due}, " · " + dueText(t.due)) : null, t.blocked_on ? " · blocked on " + humanIds(t.blocked_on) : "")));
   const card = (title, ic, body, extra) => h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon(ic), h("h3", {}, title), h("span", {class: "grow"}), extra), body);
   $("#main").put(
     pageHeader("Overview", `${S.company} · what needs you, who's on track, what's moving`,
-      h("button", {class: "btn outline", onclick: runWork}, icon("zap"), "Work session now"), h("button", {class: "btn secondary", onclick: runReport}, icon("reports"), "Write report")),
+      h("button", {class: "btn outline", onclick: runWork, "data-busy": "work"}, icon("zap"), "Work session now"), h("button", {class: "btn secondary", onclick: runReport, "data-busy": "report"}, icon("reports"), "Write report")),
     d.push_error ? h("div", {class: "card card-b", style: "margin-bottom:12px;border-color:rgba(220,38,38,.3);color:var(--danger)"}, "Team repo can't push: " + d.push_error) : null,
+    d.queued ? h("div", {class: "card card-b small", style: "margin-bottom:12px"}, `${d.queued} message${d.queued === 1 ? "" : "s"} waiting for paused or over-budget people — answered when they can work again.`) : null,
     h("div", {class: "metrics"}, metric("Open tasks", d.tasks.open), metric("Needs your review", d.tasks.review, d.tasks.review ? "warning" : ""),
       metric("Blocked", d.tasks.blocked, d.tasks.blocked ? "danger" : ""), metric("Overdue", d.tasks.overdue, d.tasks.overdue ? "danger" : ""), metric("Done", d.tasks.done, "success")),
     h("div", {class: "cols"},
@@ -433,62 +550,98 @@ async function vOverview() {
             h("div", {class: "xs muted", style: "white-space:nowrap;overflow:hidden;text-overflow:ellipsis", title: p.line}, personLine(p.line)), p.error ? h("div", {class: "err xs"}, p.error) : null),
           p.tokens ? h("span", {class: "xs muted mono"}, Math.round(p.tokens / 1000) + "k") : null)))),
         card("Recent activity", "commit", d.commits.length ? h("div", {class: "list"}, d.commits.map(c => { const [hash, date, ...rest] = c.split(" ");
-          return h("div", {class: "li", style: "padding:8px 14px"}, h("span", {class: "mono xs muted", style: "width:62px"}, hash), h("span", {class: "small grow"}, humanIds(rest.join(" "))), h("span", {class: "mono xs muted"}, date)); }))
+          return h("div", {class: "li", style: "padding:8px 14px"}, h("span", {class: "mono xs muted", style: "width:62px"}, hash), h("span", {class: "small grow"}, humanIds(rest.join(" ").replace(/^([^:]+):/, "$1 —"))), h("span", {class: "mono xs muted"}, date)); }))
           : h("div", {class: "card-b muted small"}, "No activity yet.")))));
 }
-async function decide(id, decision, note = "") { try { const r = await api("/api/ask", {id, decision, note}); toast(r.result, decision === "approved" ? "success" : "warning"); } catch (e) { toast(e.message, "danger"); } }
+// Approving spends money / posts / merges for real: confirm it. Rejecting asks why (the requester is told).
+async function decide(id, decision, note = "", summary = "") {
+  if (decision === "approved" && !confirm(`Approve ${id}?\n\n${summary || "This lets it go ahead."}`)) return false;
+  if (decision === "rejected") { const why = prompt(`Reject ${id} — why? (they'll be told; optional)`, note); if (why === null) return false; note = why; }
+  try { const r = await api("/api/ask", {id, decision, note}); toast(humanIds(r.result), decision === "approved" ? "success" : "warning");
+    if (PULSE) PULSE.asks = PULSE.asks.filter(x => x !== id); if (typeof refreshAsks === "function") await refreshAsks(); pulse(); return true; }
+  catch (e) { toast(e.message, "danger"); return false; } }
+const dueText = d => { if (!d) return ""; const days = Math.round((new Date(d + "T00:00") - new Date(new Date().toDateString())) / 864e5);
+  return days === 0 ? "due today" : days === 1 ? "due tomorrow" : days === -1 ? "1 day late" : days < 0 ? `${-days} days late` : days < 7 ? `due in ${days} days` : "due " + new Date(d + "T00:00").toLocaleDateString([], {month: "short", day: "numeric"}); };
 
 // ------------------------------------------------------------------ chat
 async function vChat() {
-  const rooms = [...S.projects.filter(p => p.status !== "done").map(p => p.room), "team", ...S.members.map(m => m.id)];
+  const rooms = [...S.projects.filter(p => p.status !== "done").map(p => p.room), "team", "backchannel", ...S.members.map(m => m.id)];
   if (!rooms.includes(ROOM)) ROOM = rooms[0] || "team";
   history.replaceState(null, "", location.pathname + location.search + hashOf());
   const previews = {};
-  await Promise.all(rooms.map(async r => { const c = await api(`/api/chat?room=${encodeURIComponent(r)}&after=-1`).catch(() => ({messages: []})); previews[r] = c.messages.at(-1); }));
+  (await api("/api/rooms").catch(() => [])).forEach(r => { previews[r.room] = r.last; });
   const item = r => { const info = roomInfo(r), last = previews[r];
-    return h("div", {class: "room" + (r === ROOM ? " on" : ""), onclick: () => { ROOM = r; render(); }}, roomAvatar(r),
-      h("div", {style: "min-width:0"}, h("div", {class: "n"}, info.name), h("div", {class: "p"}, last ? (last.who === S.owner_key ? "You: " : (info.kind === "dm" ? "" : nameOf(last.who) + ": ")) + last.text.split("\n")[0] : info.sub))); };
+    return h("div", {class: "room" + (r === ROOM ? " on" : ""), "data-room": r, "aria-current": r === ROOM ? "true" : null, onclick: () => { ROOM = r; render(); }}, roomAvatar(r),
+      h("div", {style: "min-width:0;flex:1"}, h("div", {class: "n"}, info.name), h("div", {class: "p"}, last ? (last.who === S.owner_key ? "You: " : (info.kind === "dm" ? "" : nameOf(last.who) + ": ")) + humanIds(last.text.split("\n")[0]) : info.sub))); };
   const grp = (title, ids) => ids.length ? [h("div", {class: "rooms-h"}, title), ids.map(item)] : null;
-  const list = h("div", {class: "rooms"},
-    grp("Project rooms", rooms.filter(r => r.startsWith(PROOM))), grp("Company", ["team"]), grp("Direct messages", S.members.map(m => m.id)),
+  const list = h("div", {class: "rooms", role: "navigation", "aria-label": "Rooms"},
+    grp("Project rooms", rooms.filter(r => r.startsWith(PROOM))), grp("Company", ["team", "backchannel"]), grp("Direct messages", S.members.map(m => m.id)),
     S.projects.length ? null : h("div", {class: "xs muted", style: "padding:12px"}, "Create a project to get a room for its team."));
   $("#main").style.padding = "16px 24px";
   const panel = chatPanel(ROOM);
   $("#main").put(h("div", {class: "chat"}, list, panel));
+  paintPulse();
+}
+
+// Approval cards in chat show their outcome once decided — anywhere (console, Telegram, Slack).
+let ASKS = {};
+async function refreshAsks() { try { (await api("/api/asks")).forEach(a => { ASKS[a.id] = a; }); } catch {} }
+function askFooter(id) {
+  const a = ASKS[id], pending = PULSE ? PULSE.asks.includes(id) : (!a || a.status === "pending");
+  if (pending) return h("div", {class: "row", style: "margin-top:8px"},
+    h("button", {class: "btn success sm", onclick: () => decide(id, "approved", "", a?.summary)}, icon("check"), "Approve"),
+    h("button", {class: "btn danger sm", onclick: () => decide(id, "rejected")}, "Reject"));
+  if (!a) return h("div", {class: "outcome muted"}, "Decided");
+  return h("div", {class: "outcome", style: `color:var(--${a.status === "approved" ? "success" : "danger"})`},
+    (a.status === "approved" ? "✅ Approved" : a.status === "rejected" ? "❌ Rejected" : a.status) + (a.decided_by ? ` by ${a.decided_by}` : "") + (a.decided_at ? " · " + a.decided_at.slice(0, 16).replace("T", " ") : ""));
 }
 
 // A conversation: header, messages (polled), composer. Works for DMs, All hands and project rooms.
 function chatPanel(room, opts = {}) {
   const info = roomInfo(room), kind = info.kind;
-  const msgs = h("div", {class: "msgs"}), think = h("div", {class: "xs muted", style: "min-height:16px;margin-bottom:6px"});
-  const box = h("textarea", {placeholder: kind === "team" ? "Message the whole company — @all give status · @name … · /help"
+  const msgs = h("div", {class: "msgs", role: "log", "aria-live": "polite"}), think = h("div", {class: "thinking"});
+  const box = h("textarea", {"aria-label": "Message", placeholder: kind === "team" ? "Message the whole company — @all give status · @name … · /help"
     : kind === "project" ? `Message ${info.name} — no @ goes to the lead · @all = everyone on this project · @name`
     : `Message ${info.name} — instructions, corrections, questions…`});
-  const send = async (text) => { const t = (text ?? box.value).trim(); if (!t) return; box.value = ""; try { await api("/api/chat", {room, text: t}); poll(); } catch (e) { toast(e.message, "danger"); } };
+  const draftKey = "draft:" + room; box.value = store.get(draftKey, "");
+  box.addEventListener("input", () => store.set(draftKey, box.value));
+  let lastSent = "";
+  const send = async (text) => { const t = (text ?? box.value).trim(); if (!t) return; box.value = ""; store.set(draftKey, "");
+    lastSent = t; try { await api("/api/chat", {room, text: t}); poll(); } catch (e) { box.value = t; toast(e.message, "danger"); } };
   box.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
-  const quick = kind === "team" ? ["@all give status", "/status", "/board", "/report"]
+  const readonly = kind === "back";
+  const quick = readonly ? [] : kind === "team" ? ["@all give status", "/status", "/board", "/report"]
     : kind === "project" ? ["@all give status", "@all what's the plan for this week?", "What's blocking this project?"]
     : ["What are you working on?", "What's blocking you?", "/log " + room];
-  let after = -1;
+  let after = -1, lastDay = "", polling = false; const cards = [];
   async function poll() {
+    if (polling || (document.hidden && after >= 0)) return; polling = true;
     try {
       const r = await api(`/api/chat?room=${encodeURIComponent(room)}&after=${after}`);
       const stick = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80;
+      if (r.messages.some(m => m.kind === "ask" || m.kind === "system") || cards.length) await refreshAsks();
+      think.remove();
       for (const m of r.messages) {
         after = Math.max(after, m.i); const mine = m.who === S.owner_key, sys = m.kind === "system";
-        const bubble = h("div", {class: "bubble"}, m.text);
-        if (m.kind === "ask" && m.ask_id) bubble.append(h("div", {class: "row", style: "margin-top:8px"},
-          h("button", {class: "btn success sm", onclick: () => decide(m.ask_id, "approved")}, icon("check"), "Approve"), h("button", {class: "btn danger sm", onclick: () => decide(m.ask_id, "rejected")}, "Reject")));
-        msgs.append(h("div", {class: "msg" + (mine ? " me" : "") + (sys ? " system" : "") + (m.kind === "ask" ? " ask" : "") + (m.kind === "notice" ? " notice" : "")},
+        const day = new Date(m.ts * 1000).toDateString();
+        if (day !== lastDay) { lastDay = day; msgs.append(h("div", {class: "day"}, day === new Date().toDateString() ? "Today" : new Date(m.ts * 1000).toLocaleDateString([], {weekday: "short", month: "short", day: "numeric"}))); }
+        const bubble = h("div", {class: "bubble"}, mine ? m.text : h("div", {class: "md", html: md(m.text)}));
+        if (m.kind === "ask" && m.ask_id) { const slot = h("div", {}, askFooter(m.ask_id)); cards.push([m.ask_id, slot]); bubble.append(slot); }
+        if (m.kind === "notice" && /^⚠️/.test(m.text) && !mine && lastSent) bubble.append(h("div", {style: "margin-top:6px"},
+          h("button", {class: "btn outline sm", onclick: () => send(lastSent)}, icon("refresh"), "Try again")));
+        msgs.append(h("div", {class: "msg" + (mine ? " me" : "") + (sys ? " system" : "") + (m.kind === "ask" ? " ask" : "") + (m.kind === "notice" ? " notice" : "") + (m.kind === "internal" ? " internal" : "")},
           sys ? null : (mine ? avatar(S.owner, "sm") : avatar(nameOf(m.who), "sm")),
-          h("div", {}, h("div", {class: "meta"}, (mine ? "You" : nameOf(m.who)) + (m.via === "telegram" ? " · via Telegram" : "") + " · " + new Date(m.ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})), bubble)));
+          h("div", {}, h("div", {class: "meta"}, (mine ? "You" : nameOf(m.who)) + (m.kind === "internal" ? " · to the team" : "") + " · " + new Date(m.ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}),
+            m.via && m.via !== "console" ? h("span", {class: "via"}, m.via) : null), bubble)));
       }
+      cards.forEach(([id, slot]) => slot.put(askFooter(id)));
       if (!r.messages.length && after < 0 && !msgs.children.length) msgs.put(empty(kind === "project" ? "hash" : "chat", "No messages yet",
-        kind === "team" ? "Announcements for everyone. Try “@all give status”." : kind === "project" ? `Only people on ${info.project?.name || "this project"} get these messages. Try “@all give status”.` : `Say hi to ${info.name} — give an instruction or ask a question.`));
+        kind === "back" ? "When teammates hand work to each other outside a project, it shows up here." : kind === "team" ? "Announcements for everyone. Try “@all give status”." : kind === "project" ? `Only people on ${info.project?.name || "this project"} get these messages. Try “@all give status”.` : `Say hi to ${info.name} — give an instruction or ask a question.`));
       else if (r.messages.length && msgs.querySelector(".empty")) msgs.querySelector(".empty").remove();
-      think.put(r.thinking ? h("span", {}, kind === "dm" ? info.name + " is thinking" : "The team is replying", h("span", {class: "dots"}, h("span", {}, "."), h("span", {}, "."), h("span", {}, "."))) : null);
+      if (r.thinking) msgs.append(think.put(kind === "dm" ? info.name + " is typing" : "The team is replying", h("span", {class: "dots"}, h("span", {}, "."), h("span", {}, "."), h("span", {}, "."))));
       if (stick || r.messages.length) msgs.scrollTop = msgs.scrollHeight;
-    } catch (e) { think.textContent = e.message; }
+      if (after >= 0) { markSeen(room, after); paintPulse(); }
+    } catch (e) { msgs.append(think.put(h("span", {class: "err"}, e.message))); } finally { polling = false; }
   }
   const p = info.project;
   const head = h("div", {class: "conv-h"}, roomAvatar(room), h("div", {style: "min-width:0"}, h("b", {}, info.name), h("div", {class: "xs muted"}, info.sub)), h("span", {class: "grow"}),
@@ -497,9 +650,11 @@ function chatPanel(room, opts = {}) {
     kind === "project" ? h("button", {class: "btn outline sm", onclick: () => newTaskSheet({project: p.id})}, icon("plus"), "Task") : null,
     kind === "dm" ? h("button", {class: "btn outline sm", onclick: () => newTaskSheet({owner: room})}, icon("plus"), "Task") : null,
     kind === "dm" ? h("button", {class: "btn outline sm", onclick: () => memberSheet(room)}, "Profile") : null);
-  const el = h("div", {class: "conv"}, head, msgs, h("div", {class: "composer"}, think, h("div", {class: "chips"}, quick.map(q => h("span", {class: "badge outline", onclick: () => send(q)}, q))),
-    h("div", {class: "box"}, box, h("button", {class: "btn primary icon", onclick: () => send(), title: "Send (Enter)"}, icon("send")))));
-  poll().then(() => box.focus()); timers.push(setInterval(poll, 1500));
+  // Suggestions fill the box (you can edit before sending) — one click never messages everyone.
+  const el = h("div", {class: "conv"}, head, msgs, readonly ? h("div", {class: "composer readonly"}, icon("lock"), " Read-only — message a person or a project room to join in.")
+    : h("div", {class: "composer"}, h("div", {class: "chips"}, quick.map(q => h("span", {class: "badge outline", title: "Put in the message box", onclick: () => { box.value = q; box.focus(); store.set(draftKey, q); }}, q))),
+    h("div", {class: "box"}, box, h("button", {class: "btn primary icon", onclick: () => send(), title: "Send (Enter)", "aria-label": "Send"}, icon("send")))));
+  poll().then(() => readonly || box.focus()); timers.push(setInterval(poll, 1500));
   return el;
 }
 
@@ -507,28 +662,42 @@ function chatPanel(room, opts = {}) {
 async function vBoard() {
   $("#main").style.padding = "";
   const tasks = await api("/api/tasks");
-  const fp = h("select", {style: "width:180px", onchange: e => { FILTER.project = e.target.value; render(); }}, h("option", {value: ""}, "All projects"), S.projects.map(p => h("option", {value: p.id, selected: FILTER.project === p.id}, p.name)), h("option", {value: "-", selected: FILTER.project === "-"}, "No project"));
-  const fo = h("select", {style: "width:160px", onchange: e => { FILTER.owner = e.target.value; render(); }}, h("option", {value: ""}, "Everyone"), S.members.map(m => h("option", {value: m.id, selected: FILTER.owner === m.id}, m.name)));
-  const shown = tasks.filter(t => (!FILTER.project || (FILTER.project === "-" ? !t.project : t.project === FILTER.project)) && (!FILTER.owner || t.owner === FILTER.owner));
-  $("#main").put(pageHeader("Board", "Every task across projects. Drag cards between columns — Done means accepted by you.", fp, fo, h("button", {class: "btn primary", onclick: () => newTaskSheet()}, icon("plus"), "New task")),
-    boardPanel(shown, {showProject: !FILTER.project || FILTER.project === "-"}));
+  const fp = h("select", {"aria-label": "Project", style: "width:170px", onchange: e => { FILTER.project = e.target.value; render(); }}, h("option", {value: ""}, "All projects"), S.projects.map(p => h("option", {value: p.id, selected: FILTER.project === p.id}, p.name)), h("option", {value: "-", selected: FILTER.project === "-"}, "No project"));
+  const fo = h("select", {"aria-label": "Owner", style: "width:150px", onchange: e => { FILTER.owner = e.target.value; render(); }}, h("option", {value: ""}, "Everyone"), S.members.map(m => h("option", {value: m.id, selected: FILTER.owner === m.id}, m.name)));
+  const fpr = h("select", {"aria-label": "Priority", style: "width:130px", onchange: e => { FILTER.pri = e.target.value; render(); }}, [["", "Any priority"], ["P0", "P0 only"], ["P1", "P1"], ["P2", "P2"], ["late", "Overdue only"]].map(([v, t]) => h("option", {value: v, selected: (FILTER.pri || "") === v}, t)));
+  const q = h("input", {type: "search", "aria-label": "Search tasks", placeholder: "Search tasks…", value: FILTER.q || "", style: "width:180px"});
+  q.addEventListener("input", () => { FILTER.q = q.value; clearTimeout(q._t); q._t = setTimeout(() => { render().then(() => { const n = $("#main input[type=search]"); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }); }, 250); });
+  const cut = h("label", {class: "row small", style: "gap:4px"}, h("input", {type: "checkbox", checked: !!FILTER.cut, onchange: e => { FILTER.cut = e.target.checked; render(); }}), "Show cut");
+  const needle = (FILTER.q || "").toLowerCase().trim();
+  const shown = tasks.filter(t => (!FILTER.project || (FILTER.project === "-" ? !t.project : t.project === FILTER.project)) && (!FILTER.owner || t.owner === FILTER.owner)
+    && (!FILTER.pri || (FILTER.pri === "late" ? t.overdue : t.priority === FILTER.pri)) && (!needle || `${t.id} ${t.title} ${nameOf(t.owner)} ${t.blocked_on}`.toLowerCase().includes(needle)));
+  $("#main").put(pageHeader("All tasks", "Every task across projects. Drag cards (or use Move on a phone) — Done means accepted by you.", q, fp, fo, fpr, cut, h("button", {class: "btn primary", onclick: () => newTaskSheet()}, icon("plus"), "New task")),
+    boardPanel(shown, {showProject: !FILTER.project || FILTER.project === "-", showCut: FILTER.cut}));
 }
 function boardPanel(tasks, opts = {}) {
-  const cols = [["todo", "To do"], ["doing", "Doing"], ["blocked", "Blocked"], ["review", "Review"], ["done", "Done"]];
+  const cols = [["todo", "To do"], ["doing", "Doing"], ["blocked", "Blocked"], ["review", "Review"], ["done", "Done"], ...(opts.showCut ? [["cut", "Cut"]] : [])];
   const move = async (id, to) => {
     const t = tasks.find(x => x.id === id); if (!t || t.status === to) return;
-    if (to === "blocked") return taskSheet(id, {status: "blocked"});
-    try { const r = await api("/api/task", to === "done" ? {id, action: "accept"} : {id, action: "status", status: to}); toast(r.message || `${id} → ${to}`); render(); } catch (e) { toast(e.message, "danger"); }
+    if (to === "blocked") { toast("Say who it's blocked on and what's needed — then Set status", "warning"); return taskSheet(id, {status: "blocked"}); }
+    if (to === "done" && !confirm(`Accept ${id} as done?\n\n${t.title}`)) return;
+    if (to === "cut") return toast("Cut a task from its panel (it asks for a reason)", "warning");
+    try { const r = await api("/api/task", to === "done" ? {id, action: "accept"} : {id, action: "status", status: to}); toast(humanIds(r.message) || `${id} → ${to}`); render(); } catch (e) { toast(e.message, "danger"); }
   };
+  const recent = Date.now() - 14 * 864e5;
   return h("div", {class: "board"}, cols.map(([st, title]) => {
-    const items = tasks.filter(t => t.status === st).sort((a, b) => (a.priority + a.id).localeCompare(b.priority + b.id));
+    let items = tasks.filter(t => t.status === st).sort((a, b) => st === "done" ? String(b.done_on).localeCompare(String(a.done_on)) : (a.priority + a.id).localeCompare(b.priority + b.id));
+    const older = st === "done" && !opts.allDone ? items.filter(t => t.done_on && new Date(t.done_on) < recent).length : 0;
+    if (older) items = items.filter(t => !t.done_on || new Date(t.done_on) >= recent);
     const col = h("div", {class: "col"}, h("div", {class: "col-h"}, h("span", {class: "dot " + ({doing: "on-track", blocked: "blocked", review: "at-risk", done: "on-track"}[st] || "")}), title, h("span", {class: "grow"}), h("span", {class: "mono"}, items.length)),
       h("div", {class: "col-b"}, items.length ? items.map(t => { const c = h("div", {class: "tcard", draggable: "true", onclick: () => taskSheet(t.id)},
           h("div", {class: "row"}, h("span", {class: "mono xs muted"}, t.id), badge(t.priority, PRI_TONE[t.priority]), t.overdue ? badge("Overdue", "danger") : null),
-          h("div", {class: "ttl"}, t.title), h("div", {class: "row xs muted"}, avatar(nameOf(t.owner), "sm"), nameOf(t.owner), h("span", {class: "grow"}), t.due ? h("span", {class: "mono"}, t.due) : null),
-          opts.showProject && t.project ? h("div", {style: "margin-top:6px"}, h("span", {class: "badge outline", onclick: e => { e.stopPropagation(); openProject(t.project); }}, "# " + (projOf(t.project)?.name || t.project))) : null);
+          h("div", {class: "ttl"}, t.title), h("div", {class: "row xs muted"}, avatar(nameOf(t.owner), "sm"), nameOf(t.owner), h("span", {class: "grow"}), t.due && !["done", "cut"].includes(t.status) ? h("span", {title: t.due, style: t.overdue ? "color:var(--danger)" : ""}, dueText(t.due)) : null),
+          opts.showProject && t.project ? h("div", {style: "margin-top:6px"}, h("span", {class: "badge outline click", onclick: e => { e.stopPropagation(); openProject(t.project); }}, "# " + (projOf(t.project)?.name || t.project))) : null,
+          h("select", {class: "movesel", "aria-label": "Move to", onclick: e => e.stopPropagation(), onchange: e => { e.stopPropagation(); const v = e.target.value; e.target.value = ""; if (v) move(t.id, v); }},
+            h("option", {value: ""}, "Move to…"), cols.filter(([c]) => c !== st && c !== "cut").map(([c, ct]) => h("option", {value: c}, ct))));
         c.addEventListener("dragstart", e => { e.dataTransfer.setData("text/plain", t.id); c.classList.add("drag"); }); c.addEventListener("dragend", () => c.classList.remove("drag")); return c; })
-        : h("div", {class: "xs muted", style: "padding:6px 2px"}, st === "todo" ? "Nothing to do yet." : "—")));
+        : h("div", {class: "xs muted", style: "padding:6px 2px"}, st === "todo" ? "Nothing to do yet." : "—"),
+        older ? h("button", {class: "btn ghost sm", onclick: () => { opts.allDone = true; const b = boardPanel(tasks, opts); col.closest(".board").replaceWith(b); }}, `+ ${older} done earlier`) : null));
     col.addEventListener("dragover", e => { e.preventDefault(); col.classList.add("over"); }); col.addEventListener("dragleave", () => col.classList.remove("over"));
     col.addEventListener("drop", e => { e.preventDefault(); col.classList.remove("over"); move(e.dataTransfer.getData("text/plain"), st); });
     return col;
@@ -544,38 +713,65 @@ function newTaskSheet(pre = {}) {
   const fillOwners = () => { const p = projOf(f.project.value), keep = f.owner.value || pre.owner || p?.lead;
     const on = p ? S.members.filter(m => p.members.includes(m.id)) : S.members, off = p ? S.members.filter(m => !p.members.includes(m.id)) : [];
     const opt = m => h("option", {value: m.id, selected: m.id === keep}, m.name + (p && m.id === p.lead ? " · lead" : ""));
-    f.owner.put(p ? [h("optgroup", {label: `On ${p.name}`}, on.map(opt)), off.length ? h("optgroup", {label: "Others — joins the project"}, off.map(opt)) : null] : on.map(opt));
+    f.owner.put(h("option", {value: "", disabled: true, selected: !keep}, "Choose who owns it…"), p ? [h("optgroup", {label: `On ${p.name}`}, on.map(opt)), off.length ? h("optgroup", {label: "Others — joins the project"}, off.map(opt)) : null] : on.map(opt));
     hint.textContent = p && f.owner.value && !p.members.includes(f.owner.value) ? `${nameOf(f.owner.value)} will be added to ${p.name}.` : ""; };
   f.project.onchange = fillOwners; f.owner.onchange = fillOwners; fillOwners();
   const err = h("div", {class: "err"}), create = h("button", {class: "btn primary"}, icon("check"), "Create and assign");
-  create.onclick = async () => { err.textContent = ""; create.disabled = true;
+  create.onclick = async () => { err.textContent = "";
+    if (!f.title.value.trim()) { err.textContent = "Give the task a title."; return f.title.focus(); }
+    if (!f.owner.value) { err.textContent = "Choose who owns it."; return f.owner.focus(); }
+    create.disabled = true;
     try { const t = await api("/api/tasks", {title: f.title.value, owner: f.owner.value, priority: f.priority.value, due: f.due.value, project: f.project.value, description: f.description.value, done_means: f.done.value.split("\n")});
       toast(`${t.id} assigned to ${nameOf(t.owner)}`); closeSheet(); S = await api("/api/state"); if (["board", "overview", "projects", "project"].includes(VIEW)) boot(); } catch (e) { err.textContent = e.message; create.disabled = false; } };
-  openSheet("New task", h("label", {class: "f"}, "Title"), f.title, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Project"), f.project), h("div", {}, h("label", {class: "f"}, "Owner"), f.owner)), hint,
+  openSheet("New task", h("label", {class: "f req"}, "Title"), f.title, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Project"), f.project), h("div", {}, h("label", {class: "f req"}, "Owner"), f.owner)), hint,
     h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Priority"), f.priority), h("div", {}, h("label", {class: "f"}, "Due"), f.due)),
     h("label", {class: "f"}, "Description"), f.description, h("label", {class: "f"}, "Done means"), f.done,
     h("div", {class: "row", style: "margin-top:14px"}, create, err), h("p", {class: "xs muted"}, "The owner gets it in their chat and replies with a plan."));
   f.title.focus(); f.title.addEventListener("keydown", e => { if (e.key === "Enter") create.click(); });
 }
+function changesSheet(t) {
+  const box = h("textarea", {placeholder: "What needs to change? Be specific — this is saved on the task and in their memory."}), err = h("div", {class: "err"});
+  const send = h("button", {class: "btn primary"}, "Send back");
+  send.onclick = async () => { if (!box.value.trim()) { err.textContent = "Say what needs to change."; return box.focus(); } send.disabled = true;
+    try { const r = await api("/api/task", {id: t.id, action: "changes", text: box.value}); toast(humanIds(r.message) || "Sent back"); closeSheet(); render(); } catch (e) { err.textContent = e.message; send.disabled = false; } };
+  openSheet(`Request changes · ${t.id}`, h("p", {class: "small muted", style: "margin-top:0"}, `${t.title} goes back to ${nameOf(t.owner)} as “doing”; they're told now and rework it first.`), box, h("div", {class: "row", style: "margin-top:10px"}, send, err));
+}
+
 async function taskSheet(id, preset = {}) {
   const t = await api("/api/task?id=" + encodeURIComponent(id)); const sec = t.sections || {};
-  const err = h("div", {class: "err"}), fb = h("textarea", {placeholder: "Feedback — saved on the task and in the owner's memory"});
-  const act = async (b, msg) => { try { const r = await api("/api/task", {id, ...b}); toast(r.message || msg); taskSheet(id); if (["board", "overview"].includes(VIEW)) render(); } catch (e) { err.textContent = e.message; } };
-  const status = h("select", {}, ["todo", "doing", "blocked", "review", "done", "cut"].map(s => h("option", {value: s, selected: s === (preset.status || t.status)}, s)));
-  const blockedOn = h("input", {placeholder: "Blocked on — person + exact thing needed", value: t.blocked_on || ""});
-  const owner = h("select", {}, S.members.map(m => h("option", {value: m.id, selected: m.id === t.owner}, m.name)));
-  const pr = h("select", {}, S.priorities.map(p => h("option", {value: p, selected: p === t.priority}, p))), due = h("input", {type: "date", value: t.due || ""});
+  const err = h("div", {class: "err", role: "alert"}), fb = h("textarea", {"aria-label": "Feedback", placeholder: "Feedback — saved on the task and in their memory, and sent to them now"});
+  const act = async (b, msg) => { err.textContent = ""; try { const r = await api("/api/task", {id, ...b}); toast(humanIds(r.message) || msg); taskSheet(id); if (LIVE_VIEWS.includes(VIEW)) render(); return true; } catch (e) { err.textContent = e.message; return false; } };
+  const status = h("select", {"aria-label": "Status"}, ["todo", "doing", "blocked", "review"].map(s => h("option", {value: s, selected: s === (preset.status || t.status)}, s)),
+    ["done", "cut"].includes(t.status) ? h("option", {value: t.status, selected: true, disabled: true}, t.status) : null);
+  const blockedOn = h("input", {"aria-label": "Blocked on", placeholder: "Who + the exact thing needed (e.g. Marcus — API schema)", value: t.blocked_on || ""});
+  const owner = h("select", {"aria-label": "Owner"}, S.members.map(m => h("option", {value: m.id, selected: m.id === t.owner}, m.name)));
+  const pr = h("select", {"aria-label": "Priority"}, S.priorities.map(p => h("option", {value: p, selected: p === t.priority}, p))), due = h("input", {type: "date", "aria-label": "Due", value: t.due || ""});
+  const showBlocked = () => { blockedOn.parentElement.style.display = status.value === "blocked" ? "" : "none"; };
+  const save = async () => {
+    const changes = {};
+    if (owner.value !== t.owner) changes.owner = owner.value;
+    if (pr.value !== t.priority) changes.priority = pr.value;
+    if ((due.value || "") !== (t.due || "")) changes.due = due.value;
+    if (Object.keys(changes).length && !await act({action: "edit", ...changes}, "Saved")) return;
+    if (status.value !== t.status || (status.value === "blocked" && blockedOn.value !== (t.blocked_on || ""))) {
+      if (status.value === "blocked" && !blockedOn.value.trim()) { err.textContent = "Say who it's blocked on and what's needed."; return blockedOn.focus(); }
+      await act({action: "status", status: status.value, blocked_on: blockedOn.value}, "Status changed");
+    } else if (!Object.keys(changes).length) toast("Nothing changed", "warning");
+  };
   openSheet(t.id,
-    h("div", {class: "row"}, badge(t.priority, PRI_TONE[t.priority]), badge(t.status, TASK_TONE[t.status]), t.overdue ? badge("Overdue", "danger") : null, t.project ? badge(t.project) : null),
-    h("h2", {style: "font-size:17px;margin:10px 0 4px"}, t.title), h("div", {class: "row small muted"}, avatar(nameOf(t.owner), "sm"), nameOf(t.owner), " · due ", h("span", {class: "mono"}, t.due || "—")),
-    t.status === "review" ? h("div", {class: "card card-b", style: "margin-top:12px;background:var(--warning-muted);border-color:rgba(217,119,6,.3)"}, h("div", {class: "row"}, h("b", {class: "grow"}, "Ready for your review"), h("button", {class: "btn primary sm", onclick: () => act({action: "accept"}, "Accepted")}, icon("check"), "Accept"))) : null,
-    ["Goal", "Done means", "Output", "Feedback", "Log"].map(k => sec[k] ? [h("h2", {class: "sec"}, k), h("div", {class: "md" + (k === "Log" ? " small" : "")}, h("div", {html: md(sec[k])}))] : null),
-    h("h2", {class: "sec"}, "Give feedback"), fb, h("div", {class: "row", style: "margin-top:6px"}, h("button", {class: "btn secondary sm", onclick: () => act({action: "feedback", text: fb.value}, "Feedback saved")}, "Send feedback")),
-    h("h2", {class: "sec"}, "Edit"), h("div", {class: "three"}, h("div", {}, h("label", {class: "f"}, "Owner"), owner), h("div", {}, h("label", {class: "f"}, "Priority"), pr), h("div", {}, h("label", {class: "f"}, "Due"), due)),
-    h("div", {class: "row", style: "margin-top:8px"}, h("button", {class: "btn outline sm", onclick: () => act({action: "edit", owner: owner.value, priority: pr.value, due: due.value}, "Saved")}, "Save changes")),
+    h("div", {class: "row"}, badge(t.priority, PRI_TONE[t.priority]), badge(t.status, TASK_TONE[t.status]), t.overdue ? badge(dueText(t.due), "danger") : t.due && !["done", "cut"].includes(t.status) ? badge(dueText(t.due)) : null,
+      t.project ? h("span", {class: "badge outline click", onclick: () => openProject(t.project)}, "# " + (projOf(t.project)?.name || t.project)) : null, t.meta?.rework === "True" ? badge("Rework requested", "warning") : null),
+    h("h2", {style: "font-size:17px;margin:10px 0 4px"}, t.title), h("div", {class: "row small muted"}, avatar(nameOf(t.owner), "sm"), nameOf(t.owner), t.due ? [" · due ", h("span", {class: "mono", title: t.due}, t.due)] : null),
+    t.status === "review" ? h("div", {class: "card card-b", style: "margin-top:12px;background:var(--warning-muted);border-color:rgba(217,119,6,.3)"}, h("div", {class: "row"}, h("b", {class: "grow"}, "Ready for your review"),
+      h("button", {class: "btn outline sm", onclick: () => changesSheet(t)}, "Request changes"), h("button", {class: "btn primary sm", onclick: () => confirm(`Accept ${t.id} as done?`) && act({action: "accept"}, "Accepted")}, icon("check"), "Accept"))) : null,
+    t.status === "blocked" ? h("div", {class: "card card-b small", style: "margin-top:12px;background:var(--danger-muted);border-color:rgba(220,38,38,.3)"}, h("b", {}, "Blocked on "), humanIds(t.blocked_on)) : null,
+    [["Goal", "Brief"], ["Done means", "Done means"], ["Output", "Output"], ["Feedback", "Your feedback"], ["Log", "Log"]].map(([k, label]) => sec[k] ? [h("h2", {class: "sec"}, label), h("div", {class: "md" + (k === "Log" ? " small" : "")}, h("div", {html: md(sec[k])}))] : null),
+    h("h2", {class: "sec"}, "Give feedback"), fb, h("div", {class: "row", style: "margin-top:6px"}, h("button", {class: "btn secondary sm", onclick: async () => { if (!fb.value.trim()) { err.textContent = "Write the feedback first."; return fb.focus(); } fb.dataset.orig = fb.value; await act({action: "feedback", text: fb.value}, "Feedback sent"); }}, t.status === "review" ? "Send back with this feedback" : "Send feedback")),
+    h("h2", {class: "sec"}, "Details"), h("div", {class: "three"}, h("div", {}, h("label", {class: "f"}, "Owner"), owner), h("div", {}, h("label", {class: "f"}, "Priority"), pr), h("div", {}, h("label", {class: "f"}, "Due"), due)),
     h("div", {class: "two", style: "margin-top:4px"}, h("div", {}, h("label", {class: "f"}, "Status"), status), h("div", {}, h("label", {class: "f"}, "Blocked on"), blockedOn)),
-    h("div", {class: "row", style: "margin-top:8px"}, h("button", {class: "btn outline sm", onclick: () => act({action: "status", status: status.value, blocked_on: blockedOn.value}, "Status changed")}, "Set status"),
-      h("span", {class: "grow"}), h("button", {class: "btn danger sm", onclick: () => confirm("Cut this task?") && act({action: "cut"}, "Cut")}, "Cut task")), err);
+    h("div", {class: "row", style: "margin-top:10px"}, h("button", {class: "btn primary sm", onclick: save}, icon("check"), "Save"), h("span", {class: "xs muted"}, "Done = Accept (above)."), h("span", {class: "grow"}),
+      ["done", "cut"].includes(t.status) ? null : h("button", {class: "btn danger sm", onclick: () => { const why = prompt(`Cut ${t.id}? Say why (it's logged):`); if (why !== null) act({action: "cut", note: why}, "Cut"); }}, "Cut task")), err);
+  status.onchange = showBlocked; showBlocked();
   if (preset.status === "blocked") blockedOn.focus();
 }
 
@@ -678,14 +874,15 @@ function projectTeam(p) {
 function projectSheet(p = {}) {
   const f = {name: h("input", {value: p.name || "", placeholder: "e.g. Mobile app"}), description: h("textarea", {placeholder: "What it is and the goal — everyone on the project reads this"}, p.description || ""),
     lead: h("select", {}, h("option", {value: ""}, "—"), S.members.map(m => h("option", {value: m.id, selected: m.id === p.lead}, m.name))),
-    status: h("select", {}, ["active", "paused", "done"].map(s => h("option", {value: s, selected: s === (p.status || "active")}, s))), repo: h("input", {value: p.repo || "", placeholder: "optional · local path of its git repo, for code tasks"})};
+    status: h("select", {}, ["active", "paused", "done"].map(s => h("option", {value: s, selected: s === (p.status || "active")}, s))), repo: h("input", {value: p.repo || "", placeholder: "optional · local path of its git repo, for code tasks"}),
+    tg: h("input", {class: "mono", value: p.telegram_chat_id || "", placeholder: "optional · a Telegram group just for this project (-100…)"})};
   const picked = new Set(p.members || []);
   const chips = p.id ? null : h("div", {class: "chipsel"}, S.members.map(m => { const c = h("span", {class: "chip" + (picked.has(m.id) ? " on" : ""), onclick: () => { picked.has(m.id) ? picked.delete(m.id) : picked.add(m.id); c.classList.toggle("on"); }}, avatar(m.name, "sm"), m.name); return c; }));
   const err = h("div", {class: "err"});
   openSheet(p.id ? "Edit project" : "New project", h("label", {class: "f"}, "Name"), f.name, h("label", {class: "f"}, "Brief"), f.description,
     chips ? [h("label", {class: "f"}, "Team"), chips, h("div", {class: "xs muted", style: "margin-top:4px"}, "You can change this any time on the project's Team tab.")] : null,
-    h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Lead"), f.lead), h("div", {}, h("label", {class: "f"}, "Status"), f.status)), h("label", {class: "f"}, "Code repo"), f.repo,
-    h("div", {class: "row", style: "margin-top:14px"}, h("button", {class: "btn primary", onclick: async () => { try { const r = await api("/api/projects", {id: p.id, name: f.name.value, description: f.description.value, lead: f.lead.value, status: f.status.value, repo: f.repo.value, members: [...picked]});
+    h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Lead"), f.lead), h("div", {}, h("label", {class: "f"}, "Status"), f.status)), h("label", {class: "f"}, "Code repo"), f.repo, h("label", {class: "f"}, "Telegram group for this room"), f.tg,
+    h("div", {class: "row", style: "margin-top:14px"}, h("button", {class: "btn primary", onclick: async () => { try { const r = await api("/api/projects", {id: p.id, name: f.name.value, description: f.description.value, lead: f.lead.value, status: f.status.value, repo: f.repo.value, telegram_chat_id: f.tg.value, members: [...picked]});
       toast("Project saved"); closeSheet(); S = await api("/api/state"); if (!p.id) openProject(r.id); else boot(); } catch (e) { err.textContent = e.message; } }}, icon("check"), p.id ? "Save" : "Create project"), err));
   f.name.focus();
 }
@@ -724,7 +921,7 @@ function memberCard(m) {
     s.ok && s.manager ? badge(s.reads_groups ? "Reads the group" : "Privacy ON → /setprivacy Disable", s.reads_groups ? "success" : "warning") : null)).catch(() => {});
   return h("div", {class: "card"}, h("div", {class: "card-b"}, h("div", {class: "row", style: "flex-wrap:nowrap"}, avatar(m.name, "lg"), h("div", {class: "grow", style: "min-width:0"},
       h("div", {class: "row"}, h("b", {style: "font-size:14px"}, m.name), m.manager ? badge("Manager", "info") : null), h("div", {class: "small muted"}, m.role))),
-    h("div", {class: "row", style: "margin:10px 0 8px"}, badge(m.persona_lines ? `Persona · ${m.persona_lines} lines` : "No persona"), m.skill_files ? badge(`${m.skill_files} skill files`) : null, m.projects.map(pid => h("span", {class: "badge outline click", onclick: () => openProject(pid)}, "# " + (projOf(pid)?.name || pid)))), st),
+    h("div", {class: "row", style: "margin:10px 0 8px"}, (() => { const x = S.members.find(y => y.id === m.id); return x ? badge(x.model, x.own_model ? "info" : "") : null; })(), badge(m.persona_lines ? `Persona · ${m.persona_lines} lines` : "No persona"), m.skill_files ? badge(`${m.skill_files} skill files`) : null, m.projects.map(pid => h("span", {class: "badge outline click", onclick: () => openProject(pid)}, "# " + (projOf(pid)?.name || pid)))), st),
     h("div", {class: "card-h", style: "border-top:1px solid var(--border);border-bottom:none"}, h("button", {class: "btn outline sm", onclick: () => { ROOM = m.id; go("chat"); }}, icon("chat"), "Chat"),
       h("button", {class: "btn outline sm", onclick: () => memberSheet(m.id)}, "Profile"), h("button", {class: "btn ghost sm", onclick: () => newTaskSheet({owner: m.id})}, icon("plus"), "Task"), h("span", {class: "grow"}),
       m.manager ? null : h("button", {class: "btn ghost sm", style: "color:var(--danger)", onclick: async () => { if (!confirm(`Remove ${m.name}? Their files stay in the team repo history.`)) return; await api("/api/remove", {id: m.id}); toast("Removed " + m.name, "warning"); await refresh(); }}, "Remove")));
@@ -808,6 +1005,9 @@ async function memberSheet(id) {
   const on = new Set(m.projects || []);
   const projects = h("div", {class: "chipsel"}, S.projects.length ? S.projects.map(p => { const c = h("span", {class: "chip" + (on.has(p.id) ? " on" : ""), onclick: () => { on.has(p.id) ? on.delete(p.id) : on.add(p.id); c.classList.toggle("on"); }}, projMark(p, "xs"), p.name); return c; }) : h("span", {class: "xs muted"}, "No projects yet."));
   const role = h("input", {value: m.role}), persona = h("textarea", {class: "mono", style: "min-height:260px;font-size:12px"}, m.persona);
+  const prov = h("select", {}, h("option", {value: ""}, "Company default"), PROVIDERS.map(([v, t]) => h("option", {value: v, selected: m.llm.own && m.llm.provider === v}, t)));
+  const model = h("input", {value: m.llm.own ? m.llm.model : "", placeholder: "blank = the tool's default · e.g. sonnet, opus, gpt-5-codex"});
+  const perms = Object.fromEntries(S.action_types.map(a => [a, h("select", {}, h("option", {value: ""}, `Company (${LEVEL_TXT[S.permissions[a]]})`), ["green", "yellow", "red"].map(l => h("option", {value: l, selected: m.permissions[a] === l}, LEVEL_TXT[l])))]));
   const paused = (S.paused || []).includes(id), err = h("div", {class: "err"});
   openSheet(m.name,
     h("div", {class: "row", style: "flex-wrap:nowrap"}, avatar(m.name, "lg"), h("div", {class: "grow"}, h("div", {class: "row"}, h("b", {style: "font-size:15px"}, m.name), m.manager ? badge("Manager", "info") : null, badge(m.status[0], STATUS_TONE[m.status[0]]), paused ? badge("Paused", "warning") : null),
@@ -815,9 +1015,13 @@ async function memberSheet(id) {
     h("div", {class: "row", style: "margin:12px 0"}, h("button", {class: "btn outline sm", onclick: () => { ROOM = id; go("chat"); }}, icon("chat"), "Message"), h("button", {class: "btn outline sm", onclick: () => newTaskSheet({owner: id})}, icon("plus"), "Task"),
       h("button", {class: "btn outline sm", onclick: async () => { await api("/api/pause", {who: id, pause: !paused}); toast(paused ? "Resumed" : "Paused", paused ? "success" : "warning"); S = await api("/api/state"); memberSheet(id); }}, icon(paused ? "play" : "pause"), paused ? "Resume" : "Pause")),
     h("h2", {class: "sec"}, "Tasks"), m.tasks.length ? h("div", {class: "card list"}, m.tasks.map(t => h("div", {class: "li click", style: "padding:8px 12px", onclick: () => taskSheet(t.id)}, h("span", {class: "mono xs muted"}, t.id), h("span", {class: "grow small"}, t.title), badge(t.status, TASK_TONE[t.status])))) : h("div", {class: "small muted"}, "No tasks."),
-    h("h2", {class: "sec"}, "Profile"), h("label", {class: "f"}, "Role"), role, h("label", {class: "f"}, "Projects"), projects, h("label", {class: "f"}, "Persona — what the agent reads"), persona,
+    h("h2", {class: "sec"}, "Profile"), h("label", {class: "f"}, "Role"), role, h("label", {class: "f"}, "Projects"), projects,
+    h("label", {class: "f"}, "AI model — each person can run on a different one"), h("div", {class: "two"}, prov, model),
+    h("div", {class: "xs muted", style: "margin-top:4px"}, "Now: ", h("span", {class: "mono"}, (S.members.find(x => x.id === id) || {}).model || "")),
+    h("label", {class: "f"}, "What they may do on their own"), h("div", {class: "perm"}, S.action_types.map(a => [h("span", {class: "small"}, ACTION_TXT[a] || a), perms[a]])),
+    h("label", {class: "f"}, "Persona — what the agent reads"), persona,
     m.skill_files.length ? h("div", {class: "xs muted", style: "margin-top:4px"}, "Stored skill package: ", h("span", {class: "mono"}, m.skill_files.join(", "))) : null,
-    h("div", {class: "row", style: "margin-top:8px"}, h("button", {class: "btn primary sm", onclick: async () => { try { await api("/api/member", {id, role: role.value, projects: [...on], persona: persona.value}); toast("Profile saved"); S = await api("/api/state"); } catch (e) { err.textContent = e.message; } }}, icon("check"), "Save profile"), err),
+    h("div", {class: "row", style: "margin-top:8px"}, h("button", {class: "btn primary sm", onclick: async () => { try { await api("/api/member", {id, role: role.value, projects: [...on], persona: persona.value, llm: {provider: prov.value, model: model.value}, permissions: Object.fromEntries(Object.entries(perms).map(([k, el]) => [k, el.value]).filter(([, v]) => v))}); toast("Profile saved"); S = await api("/api/state"); } catch (e) { err.textContent = e.message; } }}, icon("check"), "Save profile"), err),
     h("h2", {class: "sec"}, "Memory — corrections are binding"), h("div", {class: "card card-b md", html: md(m.memory || "Empty.")}),
     h("h2", {class: "sec"}, "Activity"), h("pre", {}, m.log || "No activity yet."));
 }
@@ -825,13 +1029,16 @@ async function memberSheet(id) {
 // ------------------------------------------------------------------ approvals, reports
 async function vApprovals() {
   $("#main").style.padding = "";
-  const a = await api("/api/asks"); const pend = a.filter(x => x.status === "pending"), done = a.filter(x => x.status !== "pending");
+  const a = await api("/api/asks"); const pend = a.filter(x => x.status === "pending").sort((x, y) => (x.level === "red" ? 0 : 1) - (y.level === "red" ? 0 : 1) || String(x.deadline).localeCompare(String(y.deadline))), done = a.filter(x => x.status !== "pending");
   const item = x => h("div", {class: "li"}, h("span", {class: "ico " + (x.status === "pending" ? (x.level === "red" ? "danger" : "warning") : x.status === "approved" ? "success" : "")}, icon("approvals")),
     h("div", {class: "grow"}, h("div", {class: "row"}, h("span", {class: "t"}, x.summary), x.status === "pending" ? badge(x.level === "red" ? "Needs you" : "FYI", x.level === "red" ? "danger" : "warning") : badge(x.status, x.status === "approved" ? "success" : "danger")),
-      h("div", {class: "xs muted"}, h("span", {class: "mono"}, x.id), ` · from ${nameOf(x.from)}`, x.task ? " · " + x.task : "", x.created ? h("span", {class: "mono"}, " · " + x.created.slice(0, 16).replace("T", " ")) : null),
-      x.details ? h("pre", {style: "margin-top:6px"}, x.details) : null, x.recommendation ? h("div", {class: "xs muted", style: "margin-top:4px"}, `${nameOf(S.manager)} recommends: ${x.recommendation}`) : null),
-    x.status === "pending" ? h("div", {class: "row"}, h("button", {class: "btn success sm", onclick: async () => { await decide(x.id, "approved"); render(); }}, icon("check"), "Approve"), h("button", {class: "btn danger sm", onclick: async () => { await decide(x.id, "rejected"); render(); }}, "Reject")) : null);
-  $("#main").put(pageHeader("Approvals", "🔴 requests — money, anything public, production, deleting, legal — never decide themselves. They wait for you."),
+      h("div", {class: "xs muted row", style: "gap:4px"}, h("span", {class: "mono"}, x.id), ` · from ${nameOf(x.from)}`, x.task ? " · " + x.task : "", x.created ? h("span", {class: "mono"}, " · " + x.created.slice(0, 16).replace("T", " ")) : null,
+        x.status === "pending" && x.deadline ? h("span", {style: new Date(x.deadline) < new Date() ? "color:var(--danger)" : ""}, " · answer by " + new Date(x.deadline).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"})) : null,
+        x.status !== "pending" && x.decided_by ? " · " + x.status + " by " + x.decided_by : null,
+        x.kind === "action" ? badge("Runs when approved", "accent") : x.kind === "merge" ? badge("Merge to main", "accent") : null),
+      x.details ? h("pre", {style: "margin-top:6px"}, x.details) : null, x.recommendation ? h("div", {class: "xs muted", style: "margin-top:4px"}, `${nameOf(x.from)} suggests: ${x.recommendation}`) : null),
+    x.status === "pending" ? h("div", {class: "row"}, h("button", {class: "btn success sm", onclick: async () => { if (await decide(x.id, "approved", "", x.summary)) render(); }}, icon("check"), "Approve"), h("button", {class: "btn danger sm", onclick: async () => { if (await decide(x.id, "rejected")) render(); }}, "Reject")) : null);
+  $("#main").put(pageHeader("Approvals", "🔴 requests — money, anything public, production, deleting, legal, merges, and whatever you set to “Ask me first” in Settings — never decide themselves. Approve here, in chat, on Telegram or in Slack."),
     h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon("inbox"), h("h3", {}, "Waiting"), pend.length ? badge(pend.length, "danger") : null),
       pend.length ? h("div", {class: "list"}, pend.map(item)) : h("div", {class: "card-b"}, empty("check", "Nothing waiting", "Requests from the team show up here and in their chat."))),
     h("div", {class: "card"}, h("div", {class: "card-h"}, icon("clock"), h("h3", {}, "History")), done.length ? h("div", {class: "list"}, done.map(item)) : h("div", {class: "card-b muted small"}, "None yet.")));
@@ -845,7 +1052,7 @@ async function vReports() {
   const show = async n => { current = n; const r = await api("/api/report?name=" + encodeURIComponent(n)); view.innerHTML = md(r.text); drawList(); };
   const listBox = h("div", {class: "list"});
   const drawList = () => listBox.put(list.map(n => h("div", {class: "li click" + (n === current ? " on" : ""), style: n === current ? "background:var(--accent-muted)" : "", onclick: () => show(n)}, icon("reports"), h("span", {class: "mono small grow"}, n.replace(".md", "")))));
-  $("#main").put(pageHeader("Reports & decisions", "Daily reports are generated from the files — they can't invent progress.", h("button", {class: "btn primary", onclick: runReport}, icon("reports"), "Write report now")),
+  $("#main").put(pageHeader("Reports & decisions", "Daily reports are generated from the files — they can't invent progress.", h("button", {class: "btn primary", onclick: runReport, "data-busy": "report"}, icon("reports"), "Write report now")),
     h("div", {class: "cols"}, h("div", {class: "card"}, h("div", {class: "card-h"}, icon("reports"), h("h3", {}, current ? "Report · " + current.replace(".md", "") : "Report")), view),
       h("div", {}, h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon("clock"), h("h3", {}, "All reports")), list.length ? listBox : h("div", {class: "card-b muted small"}, "None yet.")),
         h("div", {class: "card"}, h("div", {class: "card-h"}, icon("target"), h("h3", {}, "Open decisions")), h("div", {class: "card-b"}, h("p", {class: "xs muted", style: "margin:0 0 8px"}, "Numbered lines appear in every report under “Needs you”. Remove a line when it's decided."), decBox,
@@ -854,28 +1061,70 @@ async function vReports() {
 }
 
 // ------------------------------------------------------------------ settings
+function slackCard(slackIds) {
+  const sl = S.slack, out = h("div", {class: "small", style: "min-height:18px;margin-top:8px"});
+  const bot = h("input", {type: "password", placeholder: "Bot token · xoxb-…"}), app = h("input", {type: "password", placeholder: "App-level token · xapp-… (connections:write)"});
+  const act = (path, wait, done) => async () => { out.textContent = wait; try { const r = await api(path, {bot_token: bot.value, app_token: app.value}); if (r.ok === false) return out.put(badge(r.error, "danger")); out.put(badge(done(r), "success")); S = await api("/api/state"); setTimeout(render, 900); } catch (e) { out.put(badge(e.message, "danger")); } };
+  const rooms = Object.entries(sl.channels || {});
+  return h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon("slack"), h("h3", {}, "Slack")),
+    h("div", {class: "card-b"}, h("p", {class: "small muted", style: "margin:0 0 10px"}, "Optional. One Slack app for the whole team — everyone posts under their own name. Channels stay in sync with this console and Telegram. Setup takes 3 minutes: ", h("a", {href: "https://api.slack.com/apps?new_app=1", target: "_blank", rel: "noopener"}, "create the app from our manifest"), " (docs/SLACK.md)."),
+      h("div", {class: "row"}, sl.connected ? badge("Running" + (sl.workspace ? " · " + sl.workspace : ""), "success") : badge(sl.tokens ? "Not running" : "Not connected"),
+        sl.owner_ids.length ? badge("You're set", "success") : badge("Your member id missing", "warning"), rooms.length ? badge(`${rooms.length} channels`, "success") : badge("No channels yet", "warning")),
+      sl.error ? h("div", {class: "err", style: "margin-top:6px"}, sl.error) : null,
+      h("label", {class: "f"}, "1 · Tokens"), h("div", {class: "two"}, bot, app),
+      h("button", {class: "btn secondary sm", style: "margin-top:6px", onclick: act("/api/slack/connect", "Checking…", r => `Connected to ${r.team} as ${r.bot}`)}, "Connect"),
+      h("label", {class: "f"}, "2 · You (only these Slack members can command the team)"),
+      (() => { const em = h("input", {type: "email", placeholder: "Your Slack email", style: "max-width:260px"}); return h("div", {class: "row", style: "flex-wrap:nowrap;margin-bottom:6px"}, em,
+        h("button", {class: "btn outline sm", onclick: async () => { try { const r = await api("/api/slack/email", {email: em.value}); slackIds.value = [...new Set([...slackIds.value.split(/[\s,]+/).filter(Boolean), r.id])].join(", "); out.put(badge(`You: ${r.id}`, "success")); S = await api("/api/state"); } catch (e) { out.put(badge(e.message, "danger")); } }}, "Find me")); })(),
+      slackIds,
+      h("div", {class: "row", style: "margin-top:6px"}, h("button", {class: "btn outline sm", onclick: async () => { try { const c = await api("/api/slack/code", {}); out.textContent = `Send ${c.code} to the app in Slack (DM or any of its channels) — waiting 90s…`;
+        const r = await api("/api/slack/detect", {}); out.put(badge(r.found ? `Found you: ${r.id}` : "Nothing arrived — try again", r.found ? "success" : "warning")); if (r.found) { slackIds.value = [...new Set([...slackIds.value.split(/[\s,]+/).filter(Boolean), r.id])].join(", "); S = await api("/api/state"); } } catch (e) { out.put(badge(e.message, "danger")); } }}, "Detect me"), h("span", {class: "xs muted"}, "or paste it and Save & restart")),
+      h("label", {class: "f"}, "3 · Channels"), h("button", {class: "btn outline sm", onclick: act("/api/slack/provision", "Creating channels…", r => `${Object.keys(r.channels).length} channels ready — you're invited`)}, "Create / connect channels"),
+      rooms.length ? h("div", {class: "xs muted mono", style: "margin-top:8px"}, rooms.map(([r, c]) => h("div", {}, `${roomInfo(r).name} → ${c}`))) : null, out,
+      h("p", {class: "xs muted", style: "margin:10px 0 0"}, "In Slack: /jm status · /jm approve ASK-3 (or !status). @name addresses someone, @here everyone in the channel, and a thread reply goes to whoever wrote the message. In the app's DM, “@riya …” reaches Riya; anything else goes to ", nameOf(S.manager), ".")));
+}
+
 async function vSettings() {
   $("#main").style.padding = "";
   const s = await api("/api/settings"); const m = s.monitor || {}, l = s.llm || {};
   const f = {company: h("input", {value: s.company || ""}), owner_name: h("input", {value: s.owner?.name || ""}), timezone: h("input", {value: s.timezone || ""}),
-    provider: h("select", {}, [["claude-code", "Claude subscription (claude CLI)"], ["anthropic", "Anthropic API"], ["openai", "OpenAI-compatible"]].map(([v, t]) => h("option", {value: v, selected: l.provider === v}, t))),
+    provider: h("select", {}, PROVIDERS.map(([v, t]) => h("option", {value: v, selected: l.provider === v}, t))),
     model: h("input", {value: l.model || ""}), base_url: h("input", {value: l.base_url || ""}), api_key: h("input", {type: "password", placeholder: "leave blank to keep"}),
     daily_report: h("input", {type: "time", value: m.daily_report || "18:30"}), work_sessions: h("input", {value: (m.work_sessions || []).join(", "), placeholder: "e.g. 10:00, 15:00 · blank = only when asked"}),
     budget: h("input", {type: "number", value: s.budget?.daily_tokens_per_agent || 300000}),
     coding_tool: h("select", {}, [["none", "None"], ["claude", "Claude Code"], ["codex", "Codex CLI"]].map(([v, t]) => h("option", {value: v, selected: v === ((s.executor?.command || [])[0] || "none")}, t))),
     owner_telegram_id: h("input", {class: "mono", value: s.owner?.telegram_user_id || ""}), group_chat_id: h("input", {class: "mono", value: s.telegram?.group_chat_id || ""})};
   const err = h("div", {class: "err"});
-  const save = async () => { err.textContent = ""; try { await api("/api/settings", {...Object.fromEntries(Object.entries(f).map(([k, e]) => [k, e.value])), work_sessions: f.work_sessions.value.split(",")}); toast("Settings saved — restarted"); await refresh(); } catch (e) { err.textContent = e.message; } };
+  const perms = Object.fromEntries(S.action_types.map(a => [a, h("select", {}, ["green", "yellow", "red"].map(lv => h("option", {value: lv, selected: (s.permissions || {})[a] === lv}, LEVEL_TXT[lv])))]));
+  const mirror = h("input", {type: "checkbox", checked: s.sync?.mirror_owner !== false});
+  const slackIds = h("input", {class: "mono", value: (s.slack?.owner_user_ids || []).join(", "), placeholder: "U012AB3CD — Slack: your profile → ⋮ → Copy member ID"});
+  const save = async () => { err.textContent = ""; try { await api("/api/settings", {...Object.fromEntries(Object.entries(f).map(([k, e]) => [k, e.value])), work_sessions: f.work_sessions.value.split(","),
+      permissions: Object.fromEntries(Object.entries(perms).map(([k, e]) => [k, e.value])), mirror_owner: mirror.checked, slack_owner_ids: slackIds.value}); toast("Settings saved — restarted"); await refresh(); } catch (e) { err.textContent = e.message; } };
   const tgToken = h("input", {type: "password", placeholder: "Manager bot token from @BotFather"}), tgOut = h("div", {class: "small", style: "min-height:18px;margin-top:8px"});
   const tg = S.telegram;
   const card = (title, ic, ...kids) => h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon(ic), h("h3", {}, title)), h("div", {class: "card-b"}, kids));
-  const detect = (what, waitMsg) => async () => { tgOut.textContent = waitMsg; try { const r = await api("/api/telegram/detect", {what}); tgOut.put(r.found ? badge(`${what === "owner" ? "You" : "Group"}: ${r.name} (${r.id})`, "success") : badge("Not detected — try again", "warning")); } catch (x) { tgOut.textContent = x.message; } };
-  $("#main").put(pageHeader("Settings", "Changes apply immediately — the team restarts in the background.", h("button", {class: "btn primary", onclick: save}, icon("check"), "Save & restart")),
+  const detect = (what, waitMsg) => async () => {
+    try {
+      if (what === "owner") { const c = await api("/api/telegram/code", {}); waitMsg = `Send ${c.code} to the manager's bot in Telegram (waiting 90s)…`; }
+      tgOut.textContent = waitMsg;
+      const r = await api("/api/telegram/detect", {what});
+      if (r.found) { (what === "owner" ? f.owner_telegram_id : f.group_chat_id).value = r.id; }   // so Save keeps it
+      tgOut.put(r.found ? badge(`${what === "owner" ? "You" : "Group"}: ${r.name} (${r.id})`, "success") : badge("Not detected — try again", "warning"));
+    } catch (x) { tgOut.textContent = x.message; } };
+  const dirty = h("span", {class: "dirty", role: "status"});
+  const main = $("#main");
+  if (!main._dirtyHook) { main._dirtyHook = true;
+    const mark = e => { if (VIEW === "settings" && !e.target.closest?.(".slack-tokens")) main.querySelector(".dirty")?.replaceChildren("Unsaved changes"); };
+    main.addEventListener("input", mark); main.addEventListener("change", mark); }
+  $("#main").put(pageHeader("Settings", "Changes apply when you save — the team reloads in the background (work in progress keeps going).", dirty, h("button", {class: "btn primary", onclick: save}, icon("check"), "Save & restart")),
     S.llm_error ? h("div", {class: "card card-b", style: "margin-bottom:12px;border-color:rgba(220,38,38,.3);color:var(--danger)"}, "Model problem: " + S.llm_error) : null, err,
     h("div", {class: "cols"}, h("div", {},
       card("Company", "overview", h("div", {class: "three"}, h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Name"), f.company), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Owner"), f.owner_name), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Timezone"), f.timezone))),
       card("AI model", "bot", h("label", {class: "f", style: "margin-top:0"}, "Provider"), f.provider, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Model"), f.model), h("div", {}, h("label", {class: "f"}, "Base URL"), f.base_url)),
         h("label", {class: "f"}, "API key"), f.api_key, h("label", {class: "f"}, "Coding tool for code tasks"), f.coding_tool),
+      card("Permissions", "approvals", h("p", {class: "small muted", style: "margin:0 0 10px"}, "What people may do on their own. “Ask me first” turns the action into an Approve/Reject card — it runs only after you approve. Money, anything public, production, deleting and legal always ask. Override per person in their profile."),
+        h("div", {class: "perm"}, S.action_types.map(a => [h("span", {class: "small"}, ACTION_TXT[a] || a), perms[a]]))),
+      card("Sync", "refresh", h("label", {class: "row small", style: "gap:8px;flex-wrap:nowrap"}, mirror, h("span", {}, "Show my messages in every channel — what I write in the console also appears on Telegram and Slack (and the other way round), so each one is the full conversation."))),
       card("Schedule & budget", "clock", h("div", {class: "two"}, h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Daily report"), f.daily_report), h("div", {}, h("label", {class: "f", style: "margin-top:0"}, "Daily tokens per person"), f.budget)),
         h("label", {class: "f"}, "Work sessions (Mon–Sat — the team works on its own)"), f.work_sessions)),
       h("div", {},
@@ -883,13 +1132,14 @@ async function vSettings() {
           h("div", {class: "row"}, tg.connected ? badge("Running", "success") : badge("Not running"), tg.manager_token ? badge("Manager bot set", "success") : badge("No manager bot"),
             tg.owner_id ? badge("Owner id set", "success") : badge("Owner id missing", "warning"), tg.group_id ? badge("Group set", "success") : badge("No group", "warning")),
           tg.error ? h("div", {class: "err", style: "margin-top:6px"}, tg.error) : null,
+          Object.entries(tg.health || {}).map(([mid, e]) => h("div", {class: "err xs", style: "margin-top:4px"}, `${nameOf(mid)}'s bot: ${e}`)),
           h("label", {class: "f"}, "1 · Manager bot token"), h("div", {class: "row", style: "flex-wrap:nowrap"}, tgToken, h("button", {class: "btn secondary sm", onclick: async () => { tgOut.textContent = "Checking…";
             try { const r = await api("/api/telegram/manager", {token: tgToken.value}); tgOut.put(r.ok ? badge(`@${r.username}${r.reads_groups ? "" : " — turn privacy OFF: @BotFather → /setprivacy → Disable"}`, r.reads_groups ? "success" : "warning") : badge(r.error, "danger")); S = await api("/api/state"); } catch (e) { tgOut.textContent = e.message; } }}, "Connect")),
-          h("label", {class: "f"}, "2 · Press Start on the manager bot, then"), h("button", {class: "btn outline sm", onclick: detect("owner", "Waiting up to 90s for your /start…")}, "Detect me"),
+          h("label", {class: "f"}, "2 · Press Start on the manager bot, then click and send it the code shown"), h("button", {class: "btn outline sm", onclick: detect("owner", "")}, "Detect me"),
           h("label", {class: "f"}, "3 · Add the manager bot to a group and send a message, then"), h("button", {class: "btn outline sm", onclick: detect("group", "Waiting up to 90s for a message in the group…")}, "Detect group"),
           h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Owner Telegram id"), f.owner_telegram_id), h("div", {}, h("label", {class: "f"}, "Group id"), f.group_chat_id)), tgOut,
-          h("div", {class: "row", style: "margin-top:10px"}, h("button", {class: "btn outline sm", onclick: async () => { await api("/api/restart", {}); toast("Restarted"); await refresh(); }}, icon("refresh"), "Restart to apply")),
           h("p", {class: "xs muted", style: "margin:10px 0 0"}, "Bots for team members are added on the People page.")),
+        slackCard(slackIds),
         card("Where things live", "projects", h("div", {class: "small"}, h("div", {class: "muted"}, "Team repo"), h("div", {class: "mono xs", style: "margin-bottom:8px;word-break:break-all"}, S.workspace), h("div", {class: "muted"}, "Model"), h("div", {class: "mono xs"}, S.model))))));
 }
 
