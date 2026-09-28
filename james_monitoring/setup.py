@@ -65,6 +65,17 @@ def slug(name: str) -> str:
     return re.sub(r"[^a-z0-9_]", "", name.lower().replace(" ", "_").replace("-", "_")) or "member"
 
 
+def detect_git_identity() -> tuple[str, str]:
+    """The founder's own git name/email (global git config) — team commits and PRs are made as them."""
+    def get(key):
+        try:
+            r = subprocess.run(["git", "config", "--global", key], capture_output=True, text=True, timeout=5)
+            return r.stdout.strip()
+        except Exception:  # noqa: BLE001
+            return ""
+    return get("user.name"), get("user.email")
+
+
 def detect_timezone() -> str:
     from .util import normalize_tz
     try:

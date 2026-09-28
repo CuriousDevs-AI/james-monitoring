@@ -176,8 +176,10 @@ class Workspace:
                 self._git("add", "-A")
                 if not self._git("status", "--porcelain").strip():
                     return False
-                self._git("-c", f"user.name={author}", "-c", "user.email=jm@localhost", "-c", "commit.gpgsign=false",
-                          "commit", "-q", "--no-verify", "-m", message)
+                name, email = self.cfg.git_author
+                who = author if author and author not in (name, self.cfg.owner_name, "james-monitoring") else ""
+                self._git("-c", f"user.name={name}", "-c", f"user.email={email}", "-c", "commit.gpgsign=false",
+                          "commit", "-q", "--no-verify", "-m", f"{who}: {message}" if who else message)
         except RuntimeError as e:
             log.error("commit failed: %s", e)
             self.update_state(lambda s: s.__setitem__("commit_error", str(e)[:300]))
@@ -228,7 +230,7 @@ class Workspace:
         return not err
 
     def git_log(self, n: int = 20, path: Path | None = None, since: str | None = None) -> str:
-        args = ["log", f"-{n}", "--date=short", "--pretty=format:%h %ad %an: %s"]
+        args = ["log", f"-{n}", "--date=short", "--pretty=format:%h %ad %s"]          # who did it is in the subject
         if since:
             args.append(f"--since={since}")
         try:

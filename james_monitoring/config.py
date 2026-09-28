@@ -89,6 +89,21 @@ class SlackConfig:
 
 
 @dataclass
+class GitHubConfig:
+    """Mirror the task board into a GitHub Project (issues + fields), and open code changes as PRs.
+    Uses the `gh` CLI, so everything on GitHub is done as the owner's own account."""
+    owner: str = ""                # user or org login that owns the Project ("@me" works too)
+    repo: str = ""                 # owner/name — where task issues live (e.g. the team repo)
+    project: int = 0               # Project number (github.com/users/<owner>/projects/<number>)
+    sync_minutes: int = 2
+    prs: bool = False              # code tasks: push the branch and open a PR as the owner; approve = merge the PR
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.owner and self.repo and self.project)
+
+
+@dataclass
 class Config:
     company: str
     timezone: str
@@ -116,6 +131,9 @@ class Config:
     path: Path | None = None
     permissions: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_PERMISSIONS))
     slack: SlackConfig = field(default_factory=SlackConfig)
+    github: GitHubConfig = field(default_factory=GitHubConfig)
+    git_name: str = ""             # the owner's git identity: every commit/PR the team makes is theirs
+    git_email: str = ""
     mirror_owner: bool = True      # show the owner's messages in every channel (console ↔ Telegram ↔ Slack)
 
     # -- helpers ---------------------------------------------------------
@@ -152,6 +170,11 @@ class Config:
 
     def llm_for(self, member: Member) -> "LLMConfig":
         return member.llm or self.llm
+
+    @property
+    def git_author(self) -> tuple[str, str]:
+        """(name, email) for every commit the team makes — the owner's, so work shows up as theirs."""
+        return (self.git_name or self.owner_name or "james-monitoring", self.git_email or "jm@localhost")
 
 
 def load_dotenv(path: Path) -> None:
@@ -312,5 +335,11 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         path=path,
         permissions={**DEFAULT_PERMISSIONS, **_levels(raw.get("permissions"), "permissions")},
         slack=slack,
+        github=GitHubConfig(owner=str(_get(raw, "github.owner", "") or ""), repo=str(_get(raw, "github.repo", "") or ""),
+                            project=int(_get(raw, "github.project", 0) or 0),
+                            sync_minutes=max(1, int(_get(raw, "github.sync_minutes", 2) or 2)),
+                            prs=bool(_get(raw, "github.prs", False))),
+        git_name=str(_get(raw, "owner.git_name", "") or ""),
+        git_email=str(_get(raw, "owner.git_email", "") or ""),
         mirror_owner=bool(_get(raw, "sync.mirror_owner", True)),
     )

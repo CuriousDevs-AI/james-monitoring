@@ -28,6 +28,7 @@ class RunResult:
     commit: str
     diffstat: str
     output_tail: str
+    pr_url: str = ""
 
 
 def _git(repo: Path, *args: str, timeout: float = 120) -> str:
@@ -53,6 +54,14 @@ class Executor:
         if not (Path(p.repo) / ".git").exists():
             raise ExecutorError(f"{p.repo} is not a git repo")
         return p
+
+    title_of = None                  # set by the runtime: task id → title (for commit/PR titles)
+
+    def _title(self, task_id: str) -> str:
+        try:
+            return (self.title_of(task_id) if self.title_of else "") or "changes by coding agent"
+        except Exception:  # noqa: BLE001
+            return "changes by coding agent"
 
     def branch_for(self, task_id: str) -> str:
         return f"jm/{task_id}"
@@ -96,8 +105,9 @@ class Executor:
         _git(wt, "add", "-A")
         commit = ""
         if _git(wt, "status", "--porcelain"):
-            _git(wt, "-c", "user.name=james-monitoring", "-c", "user.email=jm@localhost", "-c", "commit.gpgsign=false",
-                 "commit", "-q", "--no-verify", "-m", f"{task_id}: changes by coding agent")
+            name, email = self.cfg.git_author
+            _git(wt, "-c", f"user.name={name}", "-c", f"user.email={email}", "-c", "commit.gpgsign=false",
+                 "commit", "-q", "--no-verify", "-m", f"{task_id}: {self._title(task_id)}")
         try:
             commit = _git(wt, "rev-parse", "--short", "HEAD")
             diffstat = _git(repo, "diff", "--stat", f"{p.main_branch}...{branch}")
@@ -105,6 +115,43 @@ class Executor:
             diffstat = ""
         return RunResult(ok=proc.returncode == 0 and bool(diffstat), branch=branch, worktree=str(wt),
                          commit=commit, diffstat=diffstat or "(no changes)", output_tail=text[-1500:])
+
+    def open_pr(self, project_id: str, task_id: str, branch: str, body: str) -> str:
+        """Push the branch and open a pull request — through `gh`, so it is the owner's own PR."""
+        p = self.project(project_id)
+        repo = Path(p.repo).resolve()
+        from .github import GitHubError, GitHubSync
+        try:
+            _git(repo, "push", "-q", "-u", "origin", f"{branch}:{branch}", timeout=180)
+            return GitHubSync(self.cfg, None, None).open_pr(repo, branch, p.main_branch,
+                                                            f"{task_id}: {self._title(task_id)}", body)
+        except (ExecutorError, GitHubError) as e:
+            raise ExecutorError(f"couldn't open the pull request: {e}") from None
+
+    def merge_pr(self, project_id: str, url: str) -> str:
+        """Approve = merge the PR on GitHub (as the owner), then bring local main up to date if it's clean."""
+        p = self.project(project_id)
+        repo = Path(p.repo).resolve()
+        from .github import GitHubError, GitHubSync
+        try:
+            GitHubSync(self.cfg, None, None).merge_pr(repo, url)
+        except GitHubError as e:
+            raise ExecutorError(f"GitHub didn't merge {url}: {e}") from None
+        try:
+            if _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == p.main_branch and \
+                    not _git(repo, "status", "--porcelain", "--untracked-files=no"):
+                _git(repo, "pull", "-q", "--ff-only", timeout=120)
+        except ExecutorError:
+            pass                                          # merged on GitHub; local catch-up is best effort
+        return url.rstrip("/").rsplit("/", 1)[-1] and f"PR #{url.rstrip('/').rsplit('/', 1)[-1]}"
+
+    def close_pr(self, project_id: str, url: str, why: str) -> None:
+        p = self.project(project_id)
+        from .github import GitHubError, GitHubSync
+        try:
+            GitHubSync(self.cfg, None, None).close_pr(Path(p.repo).resolve(), url, why)
+        except GitHubError as e:
+            raise ExecutorError(str(e)) from None
 
     def merge(self, project_id: str, branch: str) -> str:
         p = self.project(project_id)
@@ -116,7 +163,8 @@ class Executor:
             raise ExecutorError(f"{repo} has uncommitted changes — not merging")
         before = _git(repo, "rev-parse", "HEAD")
         try:
-            _git(repo, "-c", "user.name=james-monitoring", "-c", "user.email=jm@localhost", "-c", "commit.gpgsign=false",
+            name, email = self.cfg.git_author
+            _git(repo, "-c", f"user.name={name}", "-c", f"user.email={email}", "-c", "commit.gpgsign=false",
                  "merge", "--no-ff", "--no-verify", "-m", f"Merge {branch} (approved)", branch)
         except ExecutorError as e:
             try:                                              # never leave the real repo half-merged
