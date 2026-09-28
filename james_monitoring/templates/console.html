@@ -348,8 +348,18 @@ async function boot() {
 async function togglePause() { await api("/api/pause", {who: "all", pause: !S.paused_all}); toast(S.paused_all ? "Team resumed" : "Team paused", S.paused_all ? "success" : "warning"); refresh(); }
 async function refresh() { S = await api("/api/state"); boot(); }
 function go(v) { VIEW = v; closeSheet(); document.body.classList.remove("nav-open"); boot(); scrollTo(0, 0); }
+// The page you are on lives in the URL (#people, #project/ojas/board, #chat/riya), so refresh and Back work.
+const HASH_VIEW = {people: "team", tasks: "board"}, VIEW_HASH = {team: "people", board: "tasks"};
+function hashOf() { const v = VIEW_HASH[VIEW] || VIEW;
+  return "#" + (VIEW === "project" ? `project/${PROJECT}/${PTAB}` : VIEW === "chat" && ROOM ? `chat/${ROOM}` : v); }
+function readHash() { const [v, a, b] = decodeURIComponent(location.hash.slice(1)).split("/"); if (!v) return false;
+  const view = HASH_VIEW[v] || v; if (!TITLES[view]) return false;
+  VIEW = view; if (view === "project") { PROJECT = a || ""; PTAB = ["overview", "chat", "board", "team"].includes(b) ? b : "overview"; } else if (view === "chat" && a) ROOM = a;
+  return true; }
+window.addEventListener("hashchange", () => { if (location.hash !== hashOf() && readHash() && S && !S.setup_needed) { closeSheet(); boot(); } });
 function render() {
   clearTimers();
+  if (location.hash !== hashOf()) history[location.hash ? "pushState" : "replaceState"](null, "", location.pathname + location.search + hashOf());
   const fn = {overview: vOverview, chat: vChat, board: vBoard, projects: vProjects, project: vProject, team: vTeam, approvals: vApprovals, reports: vReports, settings: vSettings}[VIEW] || vOverview;
   $("#main").put(h("div", {class: "muted"}, "Loading…"));
   fn().catch(e => $("#main").put(h("div", {class: "card card-b err"}, e.message)));
@@ -432,6 +442,7 @@ async function decide(id, decision, note = "") { try { const r = await api("/api
 async function vChat() {
   const rooms = [...S.projects.filter(p => p.status !== "done").map(p => p.room), "team", ...S.members.map(m => m.id)];
   if (!rooms.includes(ROOM)) ROOM = rooms[0] || "team";
+  history.replaceState(null, "", location.pathname + location.search + hashOf());
   const previews = {};
   await Promise.all(rooms.map(async r => { const c = await api(`/api/chat?room=${encodeURIComponent(r)}&after=-1`).catch(() => ({messages: []})); previews[r] = c.messages.at(-1); }));
   const item = r => { const info = roomInfo(r), last = previews[r];
@@ -882,6 +893,7 @@ async function vSettings() {
         card("Where things live", "projects", h("div", {class: "small"}, h("div", {class: "muted"}, "Team repo"), h("div", {class: "mono xs", style: "margin-bottom:8px;word-break:break-all"}, S.workspace), h("div", {class: "muted"}, "Model"), h("div", {class: "mono xs"}, S.model))))));
 }
 
+readHash();
 boot().catch(e => $("#app").put(h("div", {class: "setup"}, h("div", {class: "card card-b err"}, e.message))));
 </script>
 </body>
