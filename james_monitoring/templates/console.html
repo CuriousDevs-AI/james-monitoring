@@ -251,11 +251,25 @@ const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 let HIGHLIGHT = null, STAB = store.get("settings-tab", "general");
 let S = null, VIEW = "overview", ROOM = "", PROJECT = "", PTAB = "overview", timers = [], PENDING_ASKS = 0, FILTER = {project: "", owner: "", powner: ""};
 const $ = (s, r = document) => r.querySelector(s);
+let LINK_DEAD = false;
 async function api(path, body) {
+  if (LINK_DEAD) throw new Error("This link is out of date.");
   const opt = body === undefined ? {headers: {"X-JM-Key": KEY}}
     : {method: "POST", headers: {"X-JM-Key": KEY, "Content-Type": "application/json"}, body: JSON.stringify(body)};
   const r = await fetch(path, opt); const j = await r.json().catch(() => ({error: "bad response"}));
+  if (r.status === 403 && j.error === "forbidden" || r.status === 429) { linkDead(r.status === 429 ? j.error : ""); throw new Error(j.error || "forbidden"); }
   if (!r.ok) throw new Error(j.error || r.statusText); return j;
+}
+// The key in this tab no longer opens the console (jm run made a new one, or the link was replaced): stop polling
+// and say what to do — instead of a page that looks frozen.
+function linkDead(why) {
+  if (LINK_DEAD) return; LINK_DEAD = true; clearTimers();
+  try { sessionStorage.removeItem("jm-key"); } catch {}
+  document.getElementById("offline")?.remove(); document.getElementById("sheet")?.classList.remove("open"); document.getElementById("scrim")?.classList.remove("open");
+  document.getElementById("app").replaceChildren(Object.assign(document.createElement("div"), {className: "setup bg-grid", innerHTML:
+    `<div class="setup-in"><div class="card card-b"><b>This link is out of date.</b><p class="small muted" style="margin:6px 0 0">` +
+    (why ? esc(why) : "Its key doesn't open this console any more — <code class=\"mono\">jm run</code> makes a new key each time it starts (set <code class=\"mono\">JM_CONSOLE_KEY</code> to keep one), or your sign-in link was replaced. Open the link <code class=\"mono\">jm run</code> printed, or ask for a new sign-in link.") +
+    `</p></div></div>`}));
 }
 function h(tag, attrs = {}, ...kids) {
   const e = document.createElement(tag);
@@ -596,7 +610,7 @@ function paintPulse() {
 }
 const LIVE_VIEWS = ["overview", "board", "approvals", "projects", "project"];
 async function pulse() {
-  if ((document.hidden && PULSE) || !KEY || !S || S.setup_needed || S.me?.role === "client") return;   // the portal doesn't poll     // hidden tabs rest (after the first pulse)
+  if (LINK_DEAD || (document.hidden && PULSE) || !KEY || !S || S.setup_needed || S.me?.role === "client") return;   // the portal doesn't poll     // hidden tabs rest (after the first pulse)
   try { PULSE = await api("/api/pulse"); } catch (e) {
     pulse.fails = (pulse.fails || 0) + 1;       // a blip is nothing; a few in a row: say so (and keep trying)
     if (pulse.fails >= 2 && !$("#offline")) document.body.append(h("div", {class: "offline", id: "offline", role: "status"}, "Can't reach the console server — retrying… (is `jm run` still running?)"));
@@ -2125,7 +2139,7 @@ function publicCard() {
 function openSettings(tab) { STAB = tab; closeSheet(); go("settings"); }
 
 readHash();
-boot().catch(e => $("#app").put(h("div", {class: "setup"}, h("div", {class: "card card-b err"}, e.message))));
+boot().catch(e => { if (!LINK_DEAD) $("#app").put(h("div", {class: "setup"}, h("div", {class: "card card-b err"}, e.message))); });
 </script>
 </body>
 </html>

@@ -106,23 +106,28 @@ def binary() -> str:
 
 
 class FailedKeys:
-    """Too many wrong keys from one visitor → locked out for a while (a public console can be probed)."""
+    """Someone guessing keys (many *different* wrong keys from one visitor) is locked out for a while.
+
+    Only different keys count: a browser tab left open from an earlier run keeps polling with its old key, and
+    that must never lock anyone out (it did: the console then refused even the right link). Callers only use this
+    for visitors from outside — through the tunnel or the network — never for this machine."""
 
     def __init__(self, limit: int = 20, window: float = 600):
         self.limit, self.window = limit, window
-        self.hits: dict[str, list[float]] = {}
+        self.hits: dict[str, dict[str, float]] = {}      # visitor → {hash of a wrong key: when last seen}
         self._lock = threading.Lock()
 
     def blocked(self, who: str) -> bool:
         now = time.time()
         with self._lock:
-            hits = [t for t in self.hits.get(who, []) if now - t < self.window]
-            self.hits[who] = hits
-            return len(hits) >= self.limit
+            keys = {k: t for k, t in self.hits.get(who, {}).items() if now - t < self.window}
+            self.hits[who] = keys
+            return len(keys) >= self.limit
 
-    def fail(self, who: str) -> None:
+    def fail(self, who: str, key: str = "") -> None:
+        import hashlib
         with self._lock:
-            self.hits.setdefault(who, []).append(time.time())
+            self.hits.setdefault(who, {})[hashlib.sha256(key.encode()).hexdigest()[:16]] = time.time()
             if len(self.hits) > 5000:                     # never grows without bound
                 for k in list(self.hits)[:1000]:
                     self.hits.pop(k, None)

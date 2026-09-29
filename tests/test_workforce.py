@@ -634,14 +634,21 @@ def test_public_link_starts_a_tunnel_and_guards_the_key(app, http, tmp_path, mon
     assert not app.public_set(False)["on"] and app.public.proc is None
 
 
-def test_wrong_keys_lock_out_that_visitor_only(app, http):
-    for _ in range(20):
-        http("/api/state", key="guess")
-    st, body = http("/api/state", key="guess")
-    assert st == 429 and "Too many" in body["error"]
-    assert http("/api/state")[0] == 429                                  # same visitor (this test's IP), even with the key
-    app.failed_keys.hits.clear()
+def test_wrong_keys_lock_out_a_guesser_from_outside_only(app, http):
+    # this machine (no tunnel header): a stale tab repeating an old key forever never locks anyone out
+    for _ in range(50):
+        assert http("/api/pulse", key="old-key-from-yesterday")[0] == 403
     assert http("/api/state")[0] == 200
+    # through the tunnel: the same old key over and over is one wrong key — still fine
+    from james_monitoring.public import FailedKeys
+    fk = FailedKeys()
+    for _ in range(50):
+        fk.fail("203.0.113.7", "old-key")
+    assert not fk.blocked("203.0.113.7")
+    # 20 *different* guesses from one visitor lock that visitor out; others are unaffected
+    for i in range(20):
+        fk.fail("203.0.113.7", f"guess-{i}")
+    assert fk.blocked("203.0.113.7") and not fk.blocked("198.51.100.1")
 
 
 def test_board_command_hides_personal_tasks(app):

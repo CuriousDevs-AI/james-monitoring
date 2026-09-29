@@ -1932,20 +1932,26 @@ def make_handler(app: App, key: str):
             self._send(status, json.dumps(obj, default=str).encode(), "application/json")
 
         def _visitor(self) -> str:
-            # behind the tunnel every request comes from 127.0.0.1: Cloudflare says who the visitor is
-            return self.headers.get("CF-Connecting-IP") or self.client_address[0]
+            """Who is asking, for the wrong-key limit — "" for this machine itself (never limited). Behind the
+            tunnel every request comes from 127.0.0.1, and Cloudflare says who the visitor really is."""
+            cf = self.headers.get("CF-Connecting-IP", "")
+            if cf:
+                return cf
+            ip = self.client_address[0]
+            return "" if ip in ("127.0.0.1", "::1", "::ffff:127.0.0.1") else ip
 
         def _user(self) -> dict | None:
-            who = self._visitor()
-            if app.failed_keys.blocked(who):
+            who, given = self._visitor(), self.headers.get("X-JM-Key", "")
+            if who and app.failed_keys.blocked(who):
                 return None
-            u = app.user_for_key(self.headers.get("X-JM-Key", ""), key)
-            if u is None:
-                app.failed_keys.fail(who)
+            u = app.user_for_key(given, key)
+            if u is None and who and given:
+                app.failed_keys.fail(who, given)
             return u
 
         def _refuse(self):
-            if app.failed_keys.blocked(self._visitor()):
+            who = self._visitor()
+            if who and app.failed_keys.blocked(who):
                 return self._json(429, {"error": "Too many wrong keys — try again in a few minutes."})
             return self._json(403, {"error": "forbidden"})
 
@@ -2213,7 +2219,7 @@ def serve(base_dir: Path, host: str = "127.0.0.1", port: int = 8765, open_browse
           telegram: bool = True, key: str | None = None, public: bool = False) -> None:
     app = App(base_dir, telegram=telegram)
     app.load()
-    key = key or os.environ.get("JM_CONSOLE_KEY") or secrets.token_urlsafe(18)
+    key = key or os.environ.get("JM_CONSOLE_KEY") or _saved_key(app.base)
     srv = ThreadingHTTPServer((host, port), make_handler(app, key))
     app.console_key, app.port = key, srv.server_address[1]
     # A stop from Docker/systemd (SIGTERM) shuts down like Ctrl-C, so the tunnel and the team stop cleanly too.
@@ -2260,3 +2266,18 @@ def _announce_public(app: App) -> None:
               f"links from Settings for others)", flush=True)
     else:
         print(f"⚠️  Public link not started: {st.get('error')}", flush=True)
+
+
+def _saved_key(base: Path) -> str:
+    """The console key, made once and kept in .env (0600) — so the link, open tabs and bookmarks keep working after a
+    restart. (A new key on every start left old tabs knocking with a dead key.) Rotate: delete JM_CONSOLE_KEY there."""
+    from .config import load_dotenv
+    load_dotenv(base / ".env")
+    k = os.environ.get("JM_CONSOLE_KEY", "")
+    if not k:
+        k = secrets.token_urlsafe(24)
+        try:
+            set_env(base / ".env", {"JM_CONSOLE_KEY": k})
+        except OSError:                                    # a read-only folder: this run's key only
+            os.environ["JM_CONSOLE_KEY"] = k
+    return k

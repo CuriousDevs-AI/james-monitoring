@@ -404,7 +404,7 @@ flowchart LR
 
 | Who | How they sign in |
 |---|---|
-| **Founder (owner)** | the console key: `JM_CONSOLE_KEY`, or a random key printed by `jm run` |
+| **Founder (owner)** | the console key: `JM_CONSOLE_KEY`. If unset, `jm run` makes one on the first start and saves it in `.env`, so the link keeps working across restarts |
 | **Everyone else** | a personal link from **Settings → Sign-in links**. Only a SHA-256 of their key is stored, and a new link revokes the old one |
 
 The link's key is sent as the `X-JM-Key` header, and the console removes it from the address bar right away. Keys are
@@ -632,7 +632,8 @@ You can also turn it on and off in **Settings → Channels → Public link**, or
 - **Safeguards:**
   - The console key must be at least 16 characters to go public.
   - Every request still needs a key.
-  - 20 wrong keys from one visitor lock that visitor out for 10 minutes.
+  - 20 *different* wrong keys from one visitor lock that visitor out for 10 minutes (an old tab repeating a stale
+    key doesn't count, and this machine itself is never locked out).
   - Sign-in links use the public address.
   - Stopping `jm run` (Ctrl-C or SIGTERM) stops the tunnel too.
 
@@ -658,7 +659,7 @@ CI runs the suite on Python 3.10 and 3.12 for every push and pull request.
 ## 🛡 Security
 
 - **Local by default.** The server binds `127.0.0.1`. A public link goes through a Cloudflare Tunnel, never an open
-  port. It requires a key of 16+ characters and locks out a visitor after 20 wrong keys. Every API call needs a key, compared in constant time.
+  port. It requires a key of 16+ characters and locks out a visitor after 20 different wrong keys. Every API call needs a key, compared in constant time.
   Responses are sent with `no-store`, `nosniff`, `no-referrer` and `X-Frame-Options: DENY`.
 - **Secrets stay in `.env`,** written with mode 0600 and never committed. Sign-in keys are stored only as SHA-256
   hashes.
