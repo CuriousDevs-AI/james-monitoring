@@ -32,6 +32,11 @@ def clean_text(text) -> str:
     return re.sub(r"(?m)^---\s*$", "—", t).strip()
 
 
+def dependency_ids(value) -> list[str]:
+    ids = value if isinstance(value, list) else re.split(r"[\s,]+", str(value or ""))
+    return sorted({str(x).strip().upper() for x in ids if str(x).strip()})
+
+
 @dataclass
 class Task:
     path: Path
@@ -51,6 +56,8 @@ class Task:
     def project(self) -> str: return str(self.doc.meta.get("project", "") or "")
     @property
     def blocked_on(self) -> str: return str(self.doc.meta.get("blocked_on", "") or "")
+    @property
+    def depends_on(self) -> list[str]: return dependency_ids(self.doc.meta.get("depends_on"))
 
     def due(self, tz: str = "UTC") -> date | None:
         return parse_date(self.doc.meta.get("due"), tz)
@@ -129,6 +136,30 @@ class TaskStore:
     def for_owner(self, owner: str, open_only: bool = True) -> list[Task]:
         return [t for t in self.all() if t.owner == owner and (t.is_open or not open_only)]
 
+    def _validate_dependencies(self, task_id: str, value) -> list[str]:
+        ids = dependency_ids(value)
+        known = {t.id: t for t in self.all()}
+        seen, pending = set(), list(ids)
+        while pending:
+            dep = pending.pop()
+            if dep == task_id or dep not in known:
+                raise TaskError(f"{task_id} can't depend on {dep} (missing task or dependency cycle).")
+            if dep not in seen:
+                seen.add(dep)
+                pending.extend(known[dep].depends_on)
+        return ids
+
+    def unmet_dependencies(self, task: Task) -> list[str]:
+        """Missing, cut and unaccepted prerequisites are not successful completion."""
+        known = {t.id: t for t in self.all()}
+        return [dep for dep in task.depends_on if dep not in known or known[dep].status != "done"]
+
+    def require_dependencies(self, task: Task) -> None:
+        pending = self.unmet_dependencies(task)
+        if pending:
+            raise TaskError(f"{task.id} has unfinished dependencies: {', '.join(pending)}. "
+                            "Complete them or explicitly edit the dependency list first.")
+
     def _next_id(self) -> str:
         """From the file names, so a broken task file never lets its id be reused."""
         nums = [int(m.group(1)) for p in self.dir.glob("T-*.md") if (m := re.match(r"T-(\d+)", p.name))]
@@ -156,11 +187,12 @@ class TaskStore:
                                     f"ask {self.owner_id} to re-prioritise.")
             d = parse_date(due, self.tz) if due else None
             tid = self._next_id()
+            deps = self._validate_dependencies(tid, depends_on)
             t0 = today(self.tz).isoformat()
             doc = MDoc(meta={
                 "id": tid, "title": " ".join(clean_text(title).split()) or "untitled", "owner": owner, "project": project or "",
                 "priority": priority, "status": "todo", "assigned": t0,
-                "due": d.isoformat() if d else "", "depends_on": depends_on or [],
+                "due": d.isoformat() if d else "", "depends_on": deps,
                 "reviewer": reviewer or self.owner_id, "goal": goal or "",
                 "created_by": created_by, "blocked_on": "", "status_since": t0, "updated": t0,
             })
@@ -191,6 +223,8 @@ class TaskStore:
             if status == "done" and by not in (reviewer, self.owner_id):
                 status = "review"
                 msg = f"Only {reviewer} can mark done — moved to review instead."
+            if status in ("doing", "review", "done"):
+                self.require_dependencies(t)
             if status == "doing" and not is_owner:
                 if not t.doc.sections.get("Done means", "").strip():
                     raise TaskError(f"{t.id} has no 'Done means' — write 2–4 acceptance checks before starting.")
@@ -214,11 +248,15 @@ class TaskStore:
             return t, msg
 
     def unblock_dependents(self, done_id: str, by: str) -> list[Task]:
-        """Tasks blocked on `done_id` go back to todo when it is done."""
+        """Release a task only once all its declared and named task prerequisites are done."""
         out = []
         with self._lock:
-            for t in self.all():
-                if t.status == "blocked" and re.search(rf"\b{re.escape(done_id)}\b", t.blocked_on):
+            known = {t.id: t for t in self.all()}
+            for t in known.values():
+                named = set(TASK_ID.findall(t.blocked_on.upper()))
+                deps = named | set(t.depends_on)
+                if t.status == "blocked" and named and done_id in deps and all(
+                        dep in known and known[dep].status == "done" for dep in deps):
                     t2, _ = self.set_status(t.id, "todo", by=self.owner_id, note=f"unblocked: {done_id} is done")
                     out.append(t2)
         return out
@@ -283,13 +321,8 @@ class TaskStore:
                 if k not in allowed or v is None or (v == "" and k != "depends_on"):
                     continue
                 if k == "depends_on":
-                    ids = v if isinstance(v, list) else re.split(r"[\s,]+", str(v))
-                    ids = sorted({str(x).strip().upper() for x in ids if str(x).strip()})
-                    known = {x.id for x in self.all()}
-                    bad = [x for x in ids if x not in known or x == t.id]
-                    if bad:
-                        raise TaskError(f"{t.id} can't depend on {', '.join(bad)} (no such task, or itself).")
-                    if ids == sorted(str(x) for x in (t.doc.meta.get("depends_on") or [])):
+                    ids = self._validate_dependencies(t.id, v)
+                    if ids == t.depends_on:
                         continue
                     t.doc.meta[k] = ids
                     changes.append(f"depends_on={','.join(ids) or '-'}")

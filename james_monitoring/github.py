@@ -1,13 +1,13 @@
 """GitHub: the task board mirrored into a GitHub Project, and code changes opened as pull requests.
 
 Git (tasks/*.md) stays the engine: agents read the board on every turn, rules are enforced there, it works offline.
-GitHub is the window: every task is an issue on a Project board with fields, so you can run the team from
-github.com or the GitHub mobile app. Changes you make there come back through the same rules:
+GitHub is the window: shared tasks are issues on a Project board. Private-assistant tasks stay local.
+External edits become explicit human review requests before the runtime applies the same task rules:
 
-    Stage/Status → Done        = you accept it (only you can)
-    Stage → Doing (from Review) = send it back for changes
-    Stage/Priority/Due/Owner   = the same edit as in the console
-    a comment on the issue     = feedback (on work in review: request changes)
+    Stage/Status → Done        = proposal to accept
+    Stage → Doing (from Review) = proposal to send it back for changes
+    Stage/Priority/Due/Owner   = proposal for the same edit as in the console
+    a verified owner comment   = proposal to apply feedback
 
 Everything goes through the `gh` CLI, logged in as the owner — issues, comments and PRs are the owner's own.
 """
@@ -74,6 +74,8 @@ class Change:
     value: str
     source: str = ""  # for stage changes: "stage" (our field) or "status" (GitHub's built-in column)
     raw: str = ""     # the value as shown on GitHub
+    actor: str = ""   # API-verified comment login; board snapshots do not provide an editor identity
+    event_id: str = ""  # stable comment id, used to deduplicate retries after interruption
 
 
 class GitHubSync:
@@ -81,6 +83,7 @@ class GitHubSync:
         self.cfg, self.tasks, self.ws = cfg, tasks, ws
         self.gh = gh or Gh()
         self._project: dict | None = None
+        self._comments_cursor: str | None = None
 
     @property
     def g(self):
@@ -157,8 +160,9 @@ class GitHubSync:
         log_lines = sec.get("Log", "").strip().splitlines()[:12]
         if log_lines:
             parts.append("### Log\n" + "\n".join(log_lines))
-        parts.append("---\n_Synced from the team repo. Move it on the board or edit its fields; comment here to give "
-                     "feedback (on work in review, a comment sends it back for changes)._")
+        parts.append("---\n_Synced from the team repo. Board edits and comments from the connected account create "
+                     "review requests in James. Nothing is applied until an authorised human approves; "
+                     "the board shows local state while review is pending._")
         return "\n\n".join(parts)
 
     def _fp(self, t) -> str:
@@ -170,6 +174,8 @@ class GitHubSync:
             return 0
         proj, known, n = self.project(), self._state(), 0
         for t in self.tasks.all():
+            if not self.cfg.agent_can_access(t.owner):
+                continue
             entry = known.get(t.id)
             fp = self._fp(t)
             if entry and entry.get("fp") == fp:
@@ -228,7 +234,9 @@ class GitHubSync:
         if not self.g.enabled:
             return []
         known = self._state()
-        by_item = {e["item"]: tid for tid, e in known.items()}
+        visible = {t.id for t in self.tasks.all() if self.cfg.agent_can_access(t.owner)}
+        known = {tid: e for tid, e in known.items() if tid in visible}
+        by_item = {e.get("item"): tid for tid, e in known.items() if e.get("item")}
         out: list[Change] = []
         items = self.gh.json("project", "item-list", str(self.g.project), "--owner", self.g.owner, "--limit", "1000",
                              "--format", "json").get("items", [])
@@ -259,19 +267,31 @@ class GitHubSync:
         by_number = {e["number"]: tid for tid, e in known.items()}
         path = f"repos/{self.g.repo}/issues/comments?sort=created&direction=asc&per_page=100" + \
             (f"&since={since}" if since else "")
-        comments = self.gh.json("api", path) or []
+        pages = self.gh.json("api", path, "--paginate", "--slurp") or []
+        comments = [c for page in pages for c in page] if pages and isinstance(pages[0], list) else pages
+        # An organisation login is not a human identity. Trust only the authenticated account,
+        # and still require a separate in-app decision before applying its comments.
+        login = self.gh("api", "user", "--jq", ".login").strip().lower() if comments else ""
         out, last = [], since
         for c in comments:
             last = max(last, c.get("created_at", ""))
-            if since and c.get("created_at", "") <= since:
+            if since and c.get("created_at", "") < since:
                 continue
             num = int(str(c.get("issue_url", "")).rstrip("/").rsplit("/", 1)[-1] or 0)
             body = (c.get("body") or "").strip()
-            if num in by_number and body and MARK not in body:
-                out.append(Change(by_number[num], "comment", body))
-        if last != since:
-            self.ws.update_state(lambda s: s.setdefault("github", {}).__setitem__("comments_since", last))
+            user = c.get("user") or {}
+            actor = str(user.get("login") or "")
+            if c.get("id") and num in by_number and body and MARK not in body and login and actor.lower() == login \
+                    and user.get("type") == "User":
+                out.append(Change(by_number[num], "comment", body, actor=actor, event_id=str(c["id"])))
+        self._comments_cursor = last
         return out
+
+    def acknowledge_comments(self) -> None:
+        """Advance only after the runtime persisted proposals; failed application is replayed."""
+        if self._comments_cursor is not None:
+            self.ws.update_state(lambda s: s.setdefault("github", {}).__setitem__("comments_since", self._comments_cursor))
+            self._comments_cursor = None
 
     def mark_pulled(self, tid: str, field: str, value: str) -> None:
         """Record a GitHub-side value we have applied, so it isn't seen as a new change again."""

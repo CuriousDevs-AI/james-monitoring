@@ -213,6 +213,11 @@ class Config:
                 return m
         return None
 
+    def agent_can_access(self, owner: str, actor: str = "") -> bool:
+        """Personal-assistant records are accessible only to that assistant, never other agents."""
+        member = self.member(owner)
+        return not (member and member.assistant) or member.id == actor
+
     @property
     def monitor(self) -> Member:
         for m in self.team:

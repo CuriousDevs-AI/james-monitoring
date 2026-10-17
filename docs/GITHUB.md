@@ -2,7 +2,7 @@
 
 Run the team from GitHub as well as the console, Telegram and Slack. There are two parts, and you can turn on either:
 
-1. **Board mirror.** Every task becomes an issue on a GitHub Project board.
+1. **Board mirror.** Shared tasks become issues on a GitHub Project board; personal-assistant tasks are excluded.
 2. **Pull requests.** Code tasks open a real PR. Approving the request merges the PR.
 
 Everything is done with the GitHub CLI (`gh`) logged in as **you**, so the issues, comments, PRs and merges are
@@ -24,11 +24,20 @@ The task files in the team repo stay the engine, and GitHub is where you look at
 
 | You do on GitHub | The team sees |
 |---|---|
-| Drag a card to **Done** (Stage or Status) | You accepted it: done, and whatever waited on it is unblocked |
-| Drag a card from **Review** back to **Doing** | Changes requested: they're told now and rework it first |
-| Change **Priority**, **Due**, **Owner** (a teammate's name) or **Project** | The same edit as in the console, with the same rules (e.g. one P0 per person) |
-| **Comment** on the issue | Feedback, saved on the task and in their memory. On work in review, it sends it back |
-| Move to **Blocked** and fill in **Blocker** | Blocked, and that person is told |
+| Drag a card to **Done** (Stage or Status) | A review request; only a separate authorised human approval accepts it |
+| Drag a card from **Review** back to **Doing** | A proposal to request changes |
+| Change **Priority**, **Due**, **Owner** or **Project** | A proposal for the exact field change, subject to the task rules |
+| **Comment** from the authenticated `gh` account | A proposal to apply that exact feedback; other/missing author identities and bots are ignored |
+| Move to **Blocked** and fill in **Blocker** | Review requests for the changes |
+
+Board snapshots do not identify who edited a field. They are never proof of founder approval.
+Approve or reject the request in the console, Telegram or Slack using an authorised human account.
+Proposals exceeding the chat preview must be reviewed and approved in the console, which shows the full details.
+Until approval, the mirror restores the local task state. Pending identical proposals are deduplicated.
+If the relevant field, task owner/project or GitHub connection changes, approval fails closed: reject the
+stale request and submit a fresh edit. Comment IDs prevent replay, including after rejection.
+Private tasks previously exported by an older version are not deleted remotely by this upgrade; review
+and remove those issues manually. Existing shared files/history may still contain historical private data.
 
 A change the rules refuse (a second P0, an unknown owner) is logged, and the board is set back to the real value.
 
