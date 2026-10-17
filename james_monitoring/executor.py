@@ -94,7 +94,7 @@ class Executor:
                                                     start_new_session=True, env=safe_env())
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=self.cfg.executor_timeout_minutes * 60)
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, asyncio.CancelledError) as e:
             import os
             import signal
             try:                                               # the whole process group: no orphans left behind
@@ -102,6 +102,8 @@ class Executor:
             except (ProcessLookupError, PermissionError):
                 proc.kill()
             await proc.wait()
+            if isinstance(e, asyncio.CancelledError):
+                raise
             raise ExecutorError(f"coding agent timed out after {self.cfg.executor_timeout_minutes} min")
         text = (out or b"").decode(errors="replace")
 

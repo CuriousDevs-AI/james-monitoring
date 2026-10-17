@@ -73,7 +73,8 @@ class App:
         self.cfg_path = self.base / "config.yaml"
         self.telegram_enabled = telegram
         self.loop = asyncio.new_event_loop()
-        self.thread = threading.Thread(target=self.loop.run_forever, daemon=True, name="jm-loop")
+        self._closing = False
+        self.thread = threading.Thread(target=self._run_loop, daemon=True, name="jm-loop")
         self.thread.start()
         self.rt: Runtime | None = None
         self.hub: Hub | None = None
@@ -95,9 +96,50 @@ class App:
         return self.hub.pending if self.hub else {}
 
     # -- lifecycle ----------------------------------------------------------------------
+    def _run_loop(self) -> None:
+        asyncio.set_event_loop(self.loop)
+        try:
+            self.loop.run_forever()
+        finally:
+            self.loop.run_until_complete(self.loop.shutdown_asyncgens())
+            self.loop.run_until_complete(self.loop.shutdown_default_executor())
+            self.loop.close()
+
     def submit(self, coro, timeout: float | None = 600):
+        if self._closing or self.loop.is_closed():
+            coro.close()
+            raise RuntimeError("The company console is shutting down.")
         fut = asyncio.run_coroutine_threadsafe(coro, self.loop)
         return fut.result(timeout) if timeout is not None else fut
+
+    async def _shutdown(self) -> None:
+        try:
+            await self._stop_services(self.sched, self.gw, self.slack)
+        finally:
+            # This loop belongs only to this App, including work from pre-reload runtimes.
+            pending = asyncio.all_tasks() - {asyncio.current_task()}
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+    def close(self, timeout: float = 120) -> None:
+        """Stop intake, cancel/await async work, then join the loop and its worker threads.
+
+        Synchronous provider calls cannot be interrupted by asyncio cancellation; their own timeouts still
+        apply. If they outlast this wait, report it instead of claiming shutdown finished.
+        """
+        if threading.current_thread() is self.thread:
+            raise RuntimeError("Close the console from outside its event-loop thread.")
+        with self._lock:
+            if not self._closing:
+                self._closing = True
+                self._close_future = asyncio.run_coroutine_threadsafe(self._shutdown(), self.loop)
+                self._close_future.add_done_callback(lambda _: self.loop.call_soon_threadsafe(self.loop.stop))
+            self.thread.join(timeout)
+            if self.thread.is_alive():
+                raise TimeoutError("Console shutdown is still waiting for background work; no new work is accepted.")
+            self._close_future.result()
 
     @property
     def ready(self) -> bool:
@@ -111,6 +153,8 @@ class App:
         per-person locks — one person never handles two messages at once — and its messages are forwarded to the
         new hub. Nothing waits for it, so saving Settings is instant even during a 30-minute coding run."""
         with self._lock:
+            if self._closing:
+                raise RuntimeError("The company console is shutting down.")
             if not self.cfg_path.exists():
                 if self.rt:
                     self.submit(self._stop_services(self.sched, self.gw, self.slack), timeout=60)
@@ -2179,9 +2223,13 @@ def make_handler(app: App, key: str):
 def serve(base_dir: Path, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True,
           telegram: bool = True, key: str | None = None) -> None:
     app = App(base_dir, telegram=telegram)
-    app.load()
-    key = key or os.environ.get("JM_CONSOLE_KEY") or secrets.token_urlsafe(18)
-    srv = ThreadingHTTPServer((host, port), make_handler(app, key))
+    try:
+        app.load()
+        key = key or os.environ.get("JM_CONSOLE_KEY") or secrets.token_urlsafe(18)
+        srv = ThreadingHTTPServer((host, port), make_handler(app, key))
+    except BaseException:
+        app.close()
+        raise
     shown = "localhost" if host in ("127.0.0.1", "0.0.0.0") else host
     url = f"http://{shown}:{srv.server_address[1]}/?k={key}"
     status = "setup needed — finish it in the browser" if not app.ready else (
@@ -2203,8 +2251,4 @@ def serve(base_dir: Path, host: str = "127.0.0.1", port: int = 8765, open_browse
         pass
     finally:
         srv.server_close()
-        if app.ready:
-            try:
-                app.submit(app._stop_services(app.sched, app.gw, app.slack, drain=True), timeout=90)
-            except Exception:  # noqa: BLE001
-                pass
+        app.close()

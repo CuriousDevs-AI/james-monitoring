@@ -77,6 +77,10 @@ they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits
 
 ## Reliability
 
+- **Console shutdown** stops intake and scheduler/transports, cancels and awaits remaining async tasks,
+  and joins the app loop and executor threads. Coding-run cancellation kills its subprocess group.
+  Blocking model calls still depend on their provider/CLI timeouts; a close timeout is reported as still
+  shutting down, not as success. This cleanup does not make interrupted external actions replay-safe.
 - **Credential storage**: legacy `.env` or explicit opt-in macOS Keychain, selected per configuration. Native
   reads never fall back to environment values and native writes never export values into the environment.
   Model probes keep temporary credentials local to that probe; coding executors use the CLI environment

@@ -222,8 +222,7 @@ def test_settings_save_keeps_a_custom_key_and_coding_tool(tmp_path):
         app.task_action({"id": t["id"], "action": "edit", "due": ""})
         assert app.task_detail(t["id"])["due"] == ""
     finally:
-        app.submit(app._stop_services(app.sched, app.gw, app.slack), timeout=10)
-        app.loop.call_soon_threadsafe(app.loop.stop)
+        app.close()
 
 
 def test_non_text_personas_are_refused():
@@ -233,4 +232,3 @@ def test_non_text_personas_are_refused():
     with pytest.raises(SkillError, match="not a text file"):
         from_bytes("notes.md", b"%PDF-1.7 ...")
     assert from_bytes("SKILL.md", b"# Bob - Dev\nbody").suggested_role() == "Dev"
-

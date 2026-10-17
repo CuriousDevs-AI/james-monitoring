@@ -248,8 +248,7 @@ def test_fresh_setup_has_work_sessions(tmp_path):
         app.setup({"company": "Acme", "owner": "Maria", "timezone": "UTC", "provider": "fake"})
         assert app.rt.cfg.work_sessions == ["10:00", "15:00"]
     finally:
-        app.submit(app._stop_services(app.sched, app.gw, app.slack), timeout=10)
-        app.loop.call_soon_threadsafe(app.loop.stop)
+        app.close()
 
 
 async def test_manager_chases_late_work_himself(tmp_path):

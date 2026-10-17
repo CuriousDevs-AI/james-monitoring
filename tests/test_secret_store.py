@@ -150,8 +150,7 @@ def test_model_probe_does_not_mutate_environment_or_echo_secret(tmp_path, monkey
         assert os.environ["OPENAI_API_KEY"] == "original-key"
         assert not (tmp_path / ".env").exists()
     finally:
-        app.loop.call_soon_threadsafe(app.loop.stop)
-        app.thread.join(timeout=5)
+        app.close()
 
 
 @pytest.mark.parametrize("probe", [False, True])

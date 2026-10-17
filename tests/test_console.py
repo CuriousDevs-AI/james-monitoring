@@ -23,9 +23,7 @@ def app(tmp_path):
     a.base.mkdir(parents=True)
     a.load()
     yield a
-    if a.ready:
-        a.submit(a._stop_services(a.sched, a.gw, a.slack), timeout=10)
-    a.loop.call_soon_threadsafe(a.loop.stop)
+    a.close()
 
 
 def use_fake(app):

@@ -55,6 +55,8 @@ class Scheduler:
     async def stop(self) -> None:
         if self._task:
             self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+            self._task = None
 
     def _mark(self, key: str, value: str) -> None:
         self.rt.ws.update_state(lambda s: s.setdefault("sched", {}).__setitem__(key, value))

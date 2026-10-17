@@ -96,5 +96,4 @@ def test_models_module_assigns_and_reports(tmp_path, monkeypatch):
         h = app.models_health()
         assert h["ok"] is False and h["problems"][0]["who"]                    # no OpenRouter key yet
     finally:
-        app.submit(app._stop_services(app.sched, app.gw, app.slack), timeout=10)
-        app.loop.call_soon_threadsafe(app.loop.stop)
+        app.close()
