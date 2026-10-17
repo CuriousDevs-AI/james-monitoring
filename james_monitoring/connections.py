@@ -21,6 +21,7 @@ LOGIN = {"claude-code": ["auth", "login", "--claudeai"], "codex-cli": ["login", 
 LABEL = {"claude-code": "Claude subscription (claude CLI)", "codex-cli": "ChatGPT / Codex subscription (codex CLI)",
          "opencode": "OpenCode (any model, incl. free)",
          "anthropic": "Anthropic API", "openai": "OpenAI-compatible API", "gemini": "Gemini API",
+         "groq": "Groq API", "mistral": "Mistral API",
          "bedrock": "Amazon Bedrock API", "fake": "Fake (tests)"}
 INSTALL = {"claude-code": "npm install -g @anthropic-ai/claude-code", "codex-cli": "npm install -g @openai/codex",
            "opencode": "npm install -g opencode-ai"}
@@ -447,6 +448,7 @@ def opencode_info() -> dict:
 # Suggestions only — any model id the provider accepts works.
 SUGGEST = {"claude-code": ["sonnet", "opus", "haiku"], "codex-cli": [],
            "anthropic": ["claude-sonnet-5", "claude-opus-5-5", "claude-haiku-4-5-20251001"],
+           "groq": ["openai/gpt-oss-120b", "openai/gpt-oss-20b"], "mistral": ["mistral-small-latest"],
            "openai": [], "openrouter": ["anthropic/claude-sonnet-5", "openai/gpt-5", "z-ai/glm-4.6"]}
 
 
@@ -469,6 +471,10 @@ def catalog() -> list[dict]:
                 "providers": oc.get("providers", [])})
     for pid, label, env, base in (("gemini", "Gemini API — free quota or paid billing", "GEMINI_API_KEY",
                                    "https://generativelanguage.googleapis.com/v1beta/openai/"),
+                                  ("groq", "Groq API — limited Free plan or paid billing", "GROQ_API_KEY",
+                                   "https://api.groq.com/openai/v1"),
+                                  ("mistral", "Mistral API — limited Free mode or paid billing", "MISTRAL_API_KEY",
+                                   "https://api.mistral.ai/v1"),
                                   ("bedrock", "Amazon Bedrock — regional API key", "AWS_BEARER_TOKEN_BEDROCK", ""),
                                   ("anthropic", "Anthropic API (pay per use)", "ANTHROPIC_API_KEY", ""),
                                   ("openai", "OpenAI API (pay per use)", "OPENAI_API_KEY", ""),

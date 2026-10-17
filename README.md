@@ -48,7 +48,7 @@ a token or seeing a green readiness check does not prove that a model answers or
 | Telegram / Slack | Routing, DMs, group messages and approval handling; simulated integration tests | Test your actual bots/app, group membership, permissions and approved destinations |
 | GitHub | Shared-task Project mirror, reviewed inbound proposals and commit-bound merge approvals | Verify your actual board, repository permissions and sync; repository access alone is insufficient |
 | Claude and other model adapters | CLI/API adapters, per-person/project assignment and model probes | Verify the selected model's response, credentials, limits and data policy |
-| Local / free-model options | Ollama, opt-in OpenCode free models, Gemini/OpenRouter APIs, explicit bounded fallback | Verify availability and account data/billing policies; no guaranteed free capacity |
+| Local / free-model options | Ollama, opt-in OpenCode free models, Gemini/OpenRouter/Groq/Mistral APIs, explicit bounded fallback | Verify availability and account data/billing policies; no guaranteed free capacity |
 | Human approval and recovery | Execution records for approved actions, merges and GitHub proposals; scheduler receipts; owner recovery UI | Complete background-code and other side-effect receipts, plus live acceptance |
 | Secrets and persistence | Legacy `.env`, opt-in macOS Keychain, git history and private runtime snapshots | Executor-enforced connector grants, protected off-machine backups and credential recovery |
 
@@ -568,6 +568,8 @@ always require approval. Project rules apply to actions that touch that project,
 | `openai` | any OpenAI-compatible API | `OPENAI_API_KEY` (+ `base_url`) | — |
 | `openrouter` | OpenRouter | `OPENROUTER_API_KEY` | — |
 | `gemini` | Gemini's OpenAI-compatible API | `GEMINI_API_KEY` | — |
+| `groq` | Groq API (limited Free plan available) | `GROQ_API_KEY` | — |
+| `mistral` | Mistral API (limited Free mode available) | `MISTRAL_API_KEY` | — |
 | `bedrock` | Amazon Bedrock Converse (supported models/inference profiles) | `AWS_BEARER_TOKEN_BEDROCK` API key + `region` | — |
 | `ollama` | local models | none (`http://localhost:11434/v1`) | — |
 
@@ -636,6 +638,30 @@ Provider references: [Gemini compatibility](https://ai.google.dev/gemini-api/doc
 [OpenRouter price routing](https://openrouter.ai/docs/guides/routing/provider-selection).
 Automated adapter tests use mocked providers. A live **Test** is still required with your own credentials;
 creating a route or detecting a key does not prove the provider answers.
+
+### Additional free-tier options
+
+Groq and Mistral are selectable in setup, employee/project model settings, planning/work routes and explicit
+fallback slots. They reuse the existing OpenAI-compatible adapter; no extra vendor SDK is required.
+
+| Provider | Default endpoint | Example model (verify access in your account) | Free-access boundary |
+|---|---|---|---|
+| `groq` | `https://api.groq.com/openai/v1` | `openai/gpt-oss-20b` | [Free plan](https://console.groq.com/docs/rate-limits), model-specific request/token limits |
+| `mistral` | `https://api.mistral.ai/v1` | `mistral-small-latest` | [Free mode](https://docs.mistral.ai/getting-started/quickstarts/studio/activate-and-generate-api-key), limited usage/rate limits |
+
+Save `GROQ_API_KEY` or `MISTRAL_API_KEY` in **Settings → Secrets**, select the provider and exact model,
+then run **Test** before assigning real work. Keys also work through your local `.env`; never commit that file.
+These account tiers are **not an enforced zero-cost mode**: James cannot determine your billing tier from a key.
+Keep paid billing disabled if you require free use, check current model access/quotas, and review provider data
+retention/training policies before sending client context. Large project prompts may exceed a free-tier limit.
+Do not enable unverified fallbacks: each selected provider receives context when attempted. Authentication and
+invalid-model errors stop rather than silently moving data to another vendor.
+
+Existing Gemini, OpenRouter free-only, OpenCode free-model and local Ollama options remain available. Ollama
+needs your own compute; free hosted capacity is never guaranteed. Other compatible vendors can use `provider:
+openai`, an explicit `base_url` and `api_key_env` in configuration, without being advertised as free. No accounts,
+billing upgrades, keys or active routes are created automatically. Groq compatibility reference:
+[OpenAI-compatible API](https://console.groq.com/docs/openai).
 
 ## 🔌 Integrations
 

@@ -27,6 +27,56 @@ def test_provider_defaults_and_nested_secret_store(tmp_path):
     assert 'secret_store' not in json.dumps(model_settings(cfg.llm))
 
 
+@pytest.mark.parametrize('provider,env,url,model', [
+    ('groq', 'GROQ_API_KEY', 'https://api.groq.com/openai/v1', 'openai/gpt-oss-20b'),
+    ('mistral', 'MISTRAL_API_KEY', 'https://api.mistral.ai/v1', 'mistral-small-latest'),
+])
+def test_free_tier_provider_http_contract_and_settings(tmp_path, monkeypatch, provider, env, url, model):
+    import httpx
+    import openai
+    from james_monitoring import connections
+    real_client, requests = openai.OpenAI, []
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={'id': 'test', 'object': 'chat.completion', 'created': 0,
+            'model': model, 'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '{"reply":"ok"}'},
+                                      'finish_reason': 'stop'}],
+            'usage': {'prompt_tokens': 7, 'completion_tokens': 3, 'total_tokens': 10}})
+    with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+        monkeypatch.setattr(openai, 'OpenAI', lambda **kw: real_client(**kw, http_client=transport))
+        monkeypatch.setenv(env, 'synthetic-key')
+        cfg = parse_llm({'provider': provider, 'model': model},
+                        {'provider': 'anthropic', 'model': 'old', 'api_key_env': 'WRONG_KEY', 'base_url': 'https://wrong.invalid'})
+        assert cfg.base_url == url and cfg.api_key_env == env and not cfg.free_only
+        result = make_llm(cfg).complete('Return JSON', [{'role': 'user', 'content': 'ping'}])
+        assert result.total_tokens == 10 and result.text == '{"reply":"ok"}'
+        assert str(requests[0].url) == url + '/chat/completions'
+        assert requests[0].headers['authorization'] == 'Bearer synthetic-key'
+        body = json.loads(requests[0].content)
+        assert body['model'] == model and body['response_format'] == {'type': 'json_object'}
+        assert 'provider' not in body  # no misleading account-level free-only price claim
+    with pytest.raises(ConfigError):
+        parse_llm({'provider': provider, 'model': model, 'free_only': True})
+    monkeypatch.setattr(connections, 'check', lambda c: {'ok': False, 'installed': False, 'detail': '', 'fix': ''})
+    monkeypatch.setattr(connections, 'opencode_info', lambda: {})
+    monkeypatch.setattr(connections, 'ollama_models', lambda: (False, []))
+    entry = next(p for p in connections.catalog() if p['id'] == provider)
+    assert entry['base_url'] == url and entry['key_env'] == env and model in entry['models']
+    app = App(tmp_path, telegram=False)
+    try:
+        app.setup({'company': 'Test', 'owner': 'Owner', 'provider': 'fake'})
+        app.models_assign({'provider': provider, 'model': model, 'who': 'work',
+                           'fallbacks': [{'provider': provider, 'model': model}]})
+        saved = app.models_routes()['work']
+        assert saved['base_url'] == url and saved['api_key_env'] == env
+        assert saved['fallbacks'][0]['base_url'] == url
+        assert app.rt.cfg.model_routes['work'].fallbacks[0].secret_store is app.rt.cfg.secret_store
+        assert app.rt.cfg.llm.provider == 'fake' and env in app.credential_names()
+        assert 'synthetic-key' not in (tmp_path / 'config.yaml').read_text()
+    finally:
+        app.close()
+
+
 @pytest.mark.parametrize('raw', [
     {'provider': 'gemini', 'free_only': True},
     {'provider': 'openrouter', 'model': 'paid', 'free_only': True},

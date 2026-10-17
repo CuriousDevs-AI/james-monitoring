@@ -367,7 +367,7 @@ function toast(text, tone = "success") {
 }
 const PROVIDERS = [["claude-code", "Claude subscription — claude CLI, no API key"], ["codex-cli", "ChatGPT / Codex subscription — codex CLI, no API key"],
   ["opencode", "OpenCode — any model: GLM, Claude, GPT, Gemini, free models"],
-  ["ollama", "Ollama — models on this machine (free, private)"], ["openrouter", "OpenRouter — many models, one API key"], ["gemini", "Gemini API"], ["bedrock", "Amazon Bedrock API key"], ["anthropic", "Anthropic API key"], ["openai", "OpenAI API key (or any OpenAI-compatible server)"]];
+  ["ollama", "Ollama — models on this machine (free, private)"], ["openrouter", "OpenRouter — many models, one API key"], ["gemini", "Gemini API"], ["groq", "Groq API — limited Free plan available"], ["mistral", "Mistral API — limited Free mode available"], ["bedrock", "Amazon Bedrock API key"], ["anthropic", "Anthropic API key"], ["openai", "OpenAI API key (or any OpenAI-compatible server)"]];
 const LEVEL_TXT = {green: "Just do it", yellow: "Do it, tell me", red: "Ask me first"};
 const ACTION_TXT = {create_task: "Create tasks", update_task: "Update tasks (status, dates)", write_file: "Save documents (docs/)", message_agent: "Message a teammate", post_group: "Post in All hands", post_room: "Post in a project room", run_code: "Run the coding agent (branch only)"};
 // Model ids for OpenCode (free models first) — suggestions in every model box.
@@ -667,7 +667,7 @@ function setupStatus(f) {
   // "allow free" for OpenCode
   const showFields = () => { const v = f.provider.value;
     f.base_url.closest("div").style.display = ["ollama", "openrouter", "openai"].includes(v) ? "" : "none";
-    f.api_key.closest(".keyrow").style.display = ["anthropic", "openai", "openrouter", "gemini", "bedrock"].includes(v) ? "" : "none";
+    f.api_key.closest(".keyrow").style.display = ["anthropic", "openai", "openrouter", "gemini", "groq", "mistral", "bedrock"].includes(v) ? "" : "none";
     f.allow_free.closest("label").style.display = v === "opencode" ? "" : "none";
     f.model.placeholder = {opencode: "provider/model — e.g. opencode/big-pickle (free), zai/glm-4.6", ollama: "e.g. llama3.1", openrouter: "e.g. z-ai/glm-4.6", "claude-code": "blank = default · e.g. sonnet", "codex-cli": "blank = default · e.g. gpt-5-codex"}[v] || "blank = the provider's default"; };
   ["change", "blur"].forEach(ev => { f.provider.addEventListener(ev, check); f.model.addEventListener(ev, check); });
@@ -1928,7 +1928,7 @@ function modelRoutingCard() {
       regionRow.style.display = provider.value === 'bedrock' ? '' : 'none';
       freeRow.style.display = provider.value === 'openrouter' ? '' : 'none';
       ocRow.style.display = provider.value === 'opencode' ? '' : 'none';
-      baseRow.style.display = ['openai', 'openrouter', 'gemini', 'ollama'].includes(provider.value) ? '' : 'none';
+      baseRow.style.display = ['openai', 'openrouter', 'gemini', 'groq', 'mistral', 'ollama'].includes(provider.value) ? '' : 'none';
       model.disabled = !provider.value;
     }
     provider.onchange = () => { model.value = ''; base.value = ''; keyRef = ''; free.checked = false; oc.checked = false; show(); };
@@ -1958,7 +1958,7 @@ function modelRoutingCard() {
       h('label', {class: 'f'}, 'Use case', scope),
       h('p', {class: 'small'}, scope.value === 'company' || saved[scope.value] ? 'Saved route: ' + c.provider + '/' + (c.model || 'default') : 'No separate route — follows the existing model assignment.'),
       primary.element, first.element, second.element,
-      h('p', {class: 'small muted'}, 'Fallback is opt-in, on quota/rate-limit or temporary service failures only. Login, permission and invalid-model errors stop. With fallback enabled, CLI calls use fresh sessions with James context. Free models have limits; Gemini billing and data usage depend on your account. Save keys in Settings → Secrets. Bedrock uses an API key, not IAM/SSO credentials.'),
+      h('p', {class: 'small muted'}, 'Fallback is opt-in, on quota/rate-limit or temporary service failures only. Login, permission and invalid-model errors stop. With fallback enabled, CLI calls use fresh sessions with James context. Gemini, Groq and Mistral have limited free access, not enforced free-only routing: billing, model availability and data usage depend on your account. Keep paid billing disabled for free usage and review each provider’s data policy before sharing project context. Save keys in Settings → Secrets. Bedrock uses an API key, not IAM/SSO credentials.'),
       h('label', {class: 'row small', style: 'margin:12px 0'}, consent, 'I approve these model destinations and understand that provider charges/data policies apply.'),
       h('div', {class: 'row'}, save, scope.value !== 'company' ? h('button', {class: 'btn outline', onclick: async () => {
         try { await api('/api/models/assign', {who: scope.value, reset: true}); await load(); } catch (e) { status.textContent = e.message; }

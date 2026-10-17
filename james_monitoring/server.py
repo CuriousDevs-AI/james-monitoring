@@ -43,7 +43,7 @@ from .util import normalize_tz, today
 
 log = logging.getLogger("jm.server")
 
-PROVIDERS = ("claude-code", "codex-cli", "opencode", "anthropic", "openai", "openrouter", "gemini", "bedrock", "ollama", "fake")
+PROVIDERS = ("claude-code", "codex-cli", "opencode", "anthropic", "openai", "openrouter", "gemini", "groq", "mistral", "bedrock", "ollama", "fake")
 
 
 class _BrokenLLM:
