@@ -29,8 +29,7 @@ def app(tmp_path):
     a.project_save({"name": "Site", "lead": "riya", "members": ["riya", "sam"]})
     a.rt.llm = FakeLLM()
     yield a
-    a.submit(a._stop_services(a.sched, a.gw, a.slack), timeout=10)
-    a.loop.call_soon_threadsafe(a.loop.stop)
+    a.close()
 
 
 @pytest.fixture

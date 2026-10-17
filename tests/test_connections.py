@@ -74,8 +74,7 @@ def test_console_groups_models_by_who_uses_them(tmp_path):
         assert app.connection_test({"member": "riya"})["ok"]
         assert app.rt.ws.state()["heartbeat"]["riya"]["error"] == ""          # a passing test clears the alarm
     finally:
-        app.submit(app._stop_services(app.sched, app.gw, app.slack), timeout=10)
-        app.loop.call_soon_threadsafe(app.loop.stop)
+        app.close()
 
 
 FAKE_OPENCODE = r'''
@@ -234,4 +233,4 @@ def test_api_key_box_saves_to_env_over_http(tmp_path, monkeypatch):
                                          "base_url": "https://openrouter.ai/api/v1"})["key_env"] == "OPENAI_API_KEY"
     finally:
         srv.shutdown()
-        app.loop.call_soon_threadsafe(app.loop.stop)
+        app.close()
