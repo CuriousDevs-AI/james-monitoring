@@ -14,7 +14,8 @@ live account, a free provider, or a production deployment works.
 - [ ] Owner-facing Secrets Settings screen; no reveal, explicit status checks, restart guidance.
 - [ ] Durable approval execution attempts and human reconciliation after uncertain outcomes; no blind replay.
 - [ ] Recovery drill from another directory/machine with configuration, tasks, private runtime state and
-      separately re-provisioned credentials. GitHub Projects alone is not a full backup.
+      separately re-provisioned credentials. GitHub Projects alone is not a full backup. Private atomic
+      runtime snapshots and validated offline extraction now exist; see [RECOVERY.md](RECOVERY.md).
 - [x] Scheduler-owned run receipts distinguish scheduled, running, completed, interrupted, failed and
       skipped work; interrupted/failed families require owner acknowledgment. See [SCHEDULER.md](SCHEDULER.md)
       for local-filesystem and handler-return limits. Owner UI and provider delivery receipts remain separate.

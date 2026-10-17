@@ -1790,19 +1790,8 @@ class Runtime:
 
     def backup_runtime(self, keep: int = 14) -> str:
         """.jm/ (chats, conversation memory, state) isn't in git: snapshot it daily (last `keep` days)."""
-        import zipfile
-        root = self.ws.root / ".jm"
-        dest = root / "backups"
-        dest.mkdir(parents=True, exist_ok=True)
-        path = dest / f"{today(self.cfg.timezone).isoformat()}.zip"
-        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-            for f in root.rglob("*"):
-                parts = f.relative_to(root).parts
-                if f.is_file() and "backups" not in parts and "sandbox" not in parts and not f.name.endswith(".lock"):
-                    z.write(f, f.relative_to(root))
-        for old in sorted(dest.glob("*.zip"))[:-keep]:
-            old.unlink()
-        return str(path)
+        from .backups import snapshot
+        return str(snapshot(self.ws.root / ".jm", today(self.cfg.timezone).isoformat(), keep))
 
     async def run_reminders(self, at=None) -> int:
         """Send every reminder whose time has come (the scheduler calls this each tick)."""

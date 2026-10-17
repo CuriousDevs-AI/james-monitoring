@@ -120,7 +120,10 @@ they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits
   private issues and historical shared artifacts require separate review; this upgrade does not delete them.
 - **Telegram**: edits never re-trigger work, messages are handled once, 429s are waited out, supergroup upgrades are
   followed (and saved), and a bot that fails to start never leaves others polling.
-- `.jm/` (chats, conversation memory, state) is zipped daily into `.jm/backups/` (last 14).
+- `.jm/` (chats, conversation memory, state, scheduler receipts) is zipped daily into `.jm/backups/` (last 14).
+  New snapshots are private (0600), atomically replaced, and exclude symlinks/sandbox/locks/env files.
+  Offline extraction only targets a new directory and starts no services; see [RECOVERY.md](RECOVERY.md).
+  ZIP is not encryption, and live daily snapshots are not cross-file transactional checkpoints.
 - **Model CLIs are sandboxed.** Each call runs in an empty folder with a minimal environment: no API keys, bot
   tokens or other secrets. Timeouts kill the whole process tree.
   - `claude`: no tools, no MCP servers, no user settings or hooks.

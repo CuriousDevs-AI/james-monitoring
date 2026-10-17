@@ -305,6 +305,31 @@ def cmd_doctor(args) -> None:
     sys.exit(0 if ok else 1)
 
 
+def cmd_backup_runtime(args) -> None:
+    from .backups import snapshot
+    from .util import today
+    if not args.confirm_stopped:
+        sys.exit("Stop all James writers for this company first, then use --confirm-stopped. This is not a live checkpoint.")
+    cfg = _cfg(args)
+    try:
+        path = snapshot(cfg.workspace_path / ".jm", today(cfg.timezone).isoformat(), keep=args.keep)
+    except (ValueError, OSError) as error:
+        sys.exit(f"Backup failed ({type(error).__name__}); inspect the destination before retrying.")
+    print(f"Private runtime snapshot: {path}\nNot encrypted. Config, shared files/history and credentials need separate recovery.")
+
+
+def cmd_restore_runtime(args) -> None:
+    import zipfile
+    from .backups import restore
+    if not args.acknowledge_private_data:
+        sys.exit("Restore contains private chats/state. Use --acknowledge-private-data after choosing a private location.")
+    try:
+        count = restore(Path(args.archive).expanduser(), Path(args.destination).expanduser())
+    except (ValueError, OSError, zipfile.BadZipFile) as error:
+        sys.exit(f"Restore failed ({type(error).__name__}). No existing destination was overwritten; inspect any partial output.")
+    print(f"Restored {count} runtime files into {args.destination}. No services started. Follow docs/RECOVERY.md before use.")
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="jm", description="james-monitoring — run an AI team like a real team")
     p.add_argument("--version", action="version", version=__version__)
@@ -368,6 +393,17 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("doctor", help="check the setup")
     s.add_argument("--ping", action="store_true", help="also call the model and Telegram")
     s.set_defaults(fn=cmd_doctor)
+
+    s = sub.add_parser("backup-runtime", help="snapshot private runtime state after stopping every James writer")
+    s.add_argument("--confirm-stopped", action="store_true")
+    s.add_argument("--keep", type=int, default=14)
+    s.set_defaults(fn=cmd_backup_runtime)
+
+    s = sub.add_parser("restore-runtime", help="restore a private runtime ZIP into a NEW directory, without starting services")
+    s.add_argument("archive")
+    s.add_argument("destination")
+    s.add_argument("--acknowledge-private-data", action="store_true")
+    s.set_defaults(fn=cmd_restore_runtime)
 
     args = p.parse_args(argv)
     args.fn(args)

@@ -56,6 +56,8 @@ class Workspace:
 
     # -- layout ------------------------------------------------------------
     def ensure(self) -> None:
+        if (self.root / ".jm" / "RESTORE-INCOMPLETE").exists():
+            raise ValueError("Runtime restore is incomplete. Recover into a new directory before starting James.")
         for sub in ["team", "tasks", "asks", "decisions", "reports", ".jm"]:
             (self.root / sub).mkdir(parents=True, exist_ok=True)
         gi = self.root / ".gitignore"
