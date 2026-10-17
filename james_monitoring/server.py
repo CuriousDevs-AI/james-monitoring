@@ -927,6 +927,7 @@ class App:
         return {"id": a.id, "from": a.requester, "summary": a.summary, "level": a.level, "status": a.status,
                 "decided_by": m.get("decided_by", ""), "decided_at": m.get("decided_at", ""),
                 "outcome": a.doc.sections.get("Outcome", ""),
+                "execution": a.execution,
                 "task": m.get("task", ""), "deadline": m.get("deadline", ""), "kind": a.kind,
                 "recommendation": m.get("recommendation", ""), "details": a.doc.sections.get("Details", ""),
                 "created": m.get("created", "")}
@@ -1090,6 +1091,10 @@ class App:
                         title=f"{t.id} is ready for review", detail=f"{t.title} · {rt.name_of(t.owner)}",
                         ts=self._ts(t.doc.meta.get("status_since")), link={"task": t.id})
         if user["role"] == "owner":
+            for a in rt.asks.unresolved_executions():
+                add(id=f"execution:{a.id}", kind="execution", tone="danger",
+                    title=f"{a.id} needs execution reconciliation", detail=a.summary,
+                    ts=self._ts(a.execution.get("started_at")), link={"view": "approvals"})
             for t in self._blocked_on_owner():
                 add(id=f"blocked:{t.id}:{t.doc.meta.get('status_since', '')}", kind="blocked", tone="danger",
                     title=f"{rt.name_of(t.owner)} is blocked on you", detail=f"{t.id} · {t.blocked_on}",
@@ -1613,6 +1618,12 @@ class App:
         by = (user or self.owner_user())["name"]
         return {"result": self.submit(self.rt.decide_ask(ask_id, decision, by=by, note=note, via="console"))}
 
+    def reconcile_ask(self, b: dict, user: dict) -> dict:
+        if user.get("role") != "owner":
+            raise PermissionError("Only the owner can reconcile uncertain execution.")
+        return {"result": self.submit(self.rt.reconcile_ask(str(b.get("id", "")), str(b.get("outcome", "")),
+                                                          user["name"], str(b.get("evidence", ""))))}
+
     # -- projects, members, decisions, settings --------------------------------------------
     @config_txn
     def project_save(self, b: dict) -> dict:
@@ -1920,6 +1931,7 @@ class App:
 # Every route and the permission it needs (see users.py). Anything not listed is refused.
 GET_PERMS = {
     "/api/schedule/runs": "owner",
+    "/api/executions": "owner",
     "/api/secrets": "owner",
     "/api/state": "any", "/api/dashboard": "read", "/api/tasks": "read", "/api/task": "read", "/api/asks": "read",
     "/api/chat": "read", "/api/rooms": "read", "/api/pulse": "read", "/api/thread": "read", "/api/member": "read",
@@ -1934,6 +1946,7 @@ GET_PERMS = {
 }
 POST_PERMS = {
     "/api/schedule/acknowledge": "owner",
+    "/api/ask/reconcile": "owner",
     "/api/secrets": "owner",
     "/api/chat": "chat", "/api/tasks": "task", "/api/task": "task", "/api/ask": "approve", "/api/project/settings": "admin",
     "/api/project/pause": "admin",
@@ -1955,7 +1968,7 @@ POST_PERMS = {
 }
 # Console actions that are recorded in the audit log by the generic hook (decisions are recorded by the runtime,
 # chat is its own record; probes and codes that change nothing — or carry secrets — are not recorded).
-NO_AUDIT = {"/api/chat", "/api/ask", "/api/token", "/api/links", "/api/member_status", "/api/model_check",
+NO_AUDIT = {"/api/chat", "/api/ask", "/api/ask/reconcile", "/api/token", "/api/links", "/api/member_status", "/api/model_check",
             "/api/test_model", "/api/connections/test", "/api/model_login/input", "/api/slack/code",
             "/api/telegram/code", "/api/notifications/read", "/api/studio/try", "/api/upload", "/api/upload_folder",
             "/api/telegram/detect", "/api/slack/detect"}
@@ -2052,6 +2065,7 @@ def make_handler(app: App, key: str):
                                       {"Content-Disposition": f'attachment; filename="audit-{today(app.rt.cfg.timezone)}.csv"'})
                 routes = {
                     "/api/schedule/runs": lambda: app.schedule_runs(),
+                    "/api/executions": lambda: [app._ask_json(a) for a in app.rt.asks.unresolved_executions()],
                     "/api/secrets": lambda: app.secrets_status(),
                     "/api/dashboard": lambda: app.dashboard(user),
                     "/api/tasks": lambda: [app._task_json(t) for t in app.rt.tasks.all() if app.can_see_task(user, t)],
@@ -2193,6 +2207,7 @@ def make_handler(app: App, key: str):
                 raise PermissionError("That task is private.")
             routes = {
                 "/api/schedule/acknowledge": lambda: app.schedule_acknowledge(b, user),
+                "/api/ask/reconcile": lambda: app.reconcile_ask(b, user),
                 "/api/chat": lambda: app.chat_send(str(b.get("room", TEAM_ROOM)), str(b.get("text", "")), user,
                                                    b.get("reply_to")),
                 "/api/tasks": lambda: app.task_create(b, user),

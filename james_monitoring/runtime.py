@@ -16,7 +16,7 @@ from typing import Protocol
 from .asks import Ask, AskError, AskStore
 from .assistant import REMIND_SPEC
 from .chat import BACKCHANNEL, PROJECT_ROOM, TEAM_ROOM, ChatStore
-from .config import Config, Member
+from .config import ACTION_TYPES, Config, Member
 from .executor import Executor, ExecutorError
 from .fileio import atomic_write
 from .llm import LLM, LLMError, is_transient, make_llm
@@ -810,6 +810,8 @@ class Runtime:
         if not m:
             return f"Unknown team member `{member_id}`."
         if ev.task:
+            if ev.task in self.asks.execution_tasks():
+                return "This task has an unresolved execution attempt. The owner must reconcile it before work resumes."
             try:
                 if not self.cfg.agent_can_access(self.tasks.get(ev.task).owner, m.id):
                     return "That task is private to its personal assistant."
@@ -1059,7 +1061,8 @@ class Runtime:
         return t
 
     async def _apply(self, m: Member, a: dict, ev: Event) -> str:
-        self._check_action_access(m, a)
+        self._check_action_access(m, a, ev.task)
+        self._check_execution_hold(a, ev.task, ev.meta.get("approved", ""))
         t = a["type"]
         level = ("green" if t in NO_GATE or ev.meta.get("approved")
                  else self.cfg.permission(m, t, self.action_project(a, ev)))
@@ -1071,9 +1074,11 @@ class Runtime:
             level = "red"
         if level == "red":
             ask = self.asks.create(requester=m.id, summary=f"{m.name} wants to {self.describe(m, a)}",
-                                   details=str(a.get("why") or a.get("description") or ""), level="red",
+                                   details="Review this exact action, including its destination and content:\n\n"
+                                           + json.dumps(a, ensure_ascii=False, indent=2), level="red",
                                    task=str(a.get("task") or a.get("id") or ev.task or ""), kind="action",
-                                   payload={"action": a, "project": ev.project, "room": ev.room})
+                                   payload={"action": a, "project": ev.project, "room": ev.room,
+                                            "event_task": ev.task})
             post = getattr(self.bus, "post", None)
             if post and ev.room and ev.room.startswith(PROJECT_ROOM):   # asked in a project room → the card is there
                 await post(ev.room, m.id, ask.card(self.cfg.monitor.name), kind="ask", ask=ask)
@@ -1105,10 +1110,17 @@ class Runtime:
                 pid = ""
         return PROJECT_ROOM + pid if pid and pid in self.cfg.projects else BACKCHANNEL
 
-    def _check_action_access(self, m: Member, a: dict) -> None:
+    def _check_action_access(self, m: Member, a: dict, event_task: str = "") -> None:
         tid = a.get("id") if a.get("type") == "update_task" else a.get("task")
-        if tid and not self.cfg.agent_can_access(self.tasks.get(str(tid)).owner, m.id):
-            raise TaskError("That task is private to its personal assistant.")
+        for task_id in (tid, event_task):
+            if task_id and not self.cfg.agent_can_access(self.tasks.get(str(task_id)).owner, m.id):
+                raise TaskError("That task is private to its personal assistant.")
+
+    def _check_execution_hold(self, a: dict, event_task: str = "", approved: str = "") -> None:
+        tids = {str(t) for t in (a.get("task"), a.get("id") if a.get("type") == "update_task" else "",
+                                event_task) if t}
+        if a.get("type") in ACTION_TYPES and tids & self.asks.execution_tasks(exclude=approved):
+            raise TaskError("This task has an unresolved execution attempt; the owner must reconcile it first.")
 
     def _check_action_dependencies(self, a: dict, event_task: str = "") -> None:
         tid = a.get("task") or event_task
@@ -1116,7 +1128,8 @@ class Runtime:
             self.tasks.require_dependencies(self.tasks.get(tid))
 
     async def _do(self, m: Member, a: dict, ev: Event) -> str:
-        self._check_action_access(m, a)
+        self._check_action_access(m, a, ev.task)
+        self._check_execution_hold(a, ev.task, ev.meta.get("approved", ""))
         self._check_action_dependencies(a, ev.task)
         t = a["type"]
         if t == "remind":
@@ -1445,13 +1458,25 @@ class Runtime:
     async def decide_ask(self, ask_id: str, decision: str, by: str, note: str = "", via: str = "") -> str:
         """One decision per request, even when Approve is tapped twice or in two channels at once."""
         async with self._ask_locks[ask_id.upper()]:
-            out = await self._decide_ask(ask_id, decision, by, note, via)
+            with self.asks.decision_guard(ask_id):
+                out = await self._decide_ask(ask_id, decision, by, note, via)
             try:
                 summary = self.asks.get(ask_id).summary
             except Exception:  # noqa: BLE001
                 summary = ""
             self._audit("decision", by, decision, ask_id.upper(), {"summary": summary, "note": note}, via=via)
             return out
+
+    async def reconcile_ask(self, ask_id: str, outcome: str, by: str, evidence: str) -> str:
+        async with self._ask_locks[ask_id.upper()]:
+            with self.asks.decision_guard(ask_id):
+                ask = self.asks.reconcile(ask_id, outcome, by, evidence)
+                self._release_task_for(ask)
+                self._audit("decision", by, "reconcile", ask.id, {"outcome": outcome, "evidence": evidence},
+                            via="console")
+                await asyncio.to_thread(self.ws.commit, f"{ask.id}: reconciled {outcome}", self.cfg.owner_name)
+                # No agent follow-up here: reconciliation must not become an implicit retry.
+                return f"{ask.id} reconciled as {outcome}; no action was executed or retried."
 
     def _audit(self, kind: str, who: str, action: str, target: str = "", detail="", via: str = "") -> None:
         """Never lets a full disk or a bad value break the work being recorded."""
@@ -1462,17 +1487,30 @@ class Runtime:
 
     async def _decide_ask(self, ask_id: str, decision: str, by: str, note: str = "", via: str = "") -> str:
         pre = self.asks.get(ask_id)
+        if pre.execution:
+            raise AskError(f"{pre.id} already has an execution record; inspect it and reconcile if needed. No retry.")
         if pre.status != "pending":
             raise AskError(f"{pre.id} is already {pre.status}")
         merged = ""
         github_result = ""
         if pre.kind == "action" and decision == "approved":
-            action = (pre.doc.meta.get("payload") or {}).get("action")
-            if isinstance(action, dict):
-                try:
-                    self._check_action_dependencies(action, pre.doc.meta.get("task", ""))
-                except TaskError as e:
-                    raise AskError(f"{pre.id} is still open — {e}") from None
+            payload = pre.doc.meta.get("payload") or {}
+            action = payload.get("action") if isinstance(payload, dict) else None
+            m = self.cfg.member(pre.requester)
+            if not m:
+                raise AskError(f"{pre.id} is still open — the requesting agent no longer exists. Reject this request.")
+            if not isinstance(action, dict) or action.get("type") not in ACTION_TYPES:
+                raise AskError(f"{pre.id} is still open — its action is missing or unsupported. Reject this request.")
+            if via != "console" and len(pre.doc.sections.get("Details", "")) > 1500:
+                raise AskError("This action exceeds the chat preview. Review the full details in the console.")
+            event_task = payload.get("event_task", pre.doc.meta.get("task", ""))
+            try:
+                self._check_action_access(m, action, event_task)
+                self._check_execution_hold(action, event_task)
+                self._check_action_dependencies(action, event_task)
+            except TaskError as e:
+                raise AskError(f"{pre.id} is still open — {e}") from None
+            self.asks.start_execution(pre, by)
         if pre.kind == "github_change" and decision == "approved":
             from .github import Change
             if via != "console" and len(pre.doc.sections.get("Details", "")) > 1500:
@@ -1520,20 +1558,26 @@ class Runtime:
                 result += " — pull request closed"
             except (ExecutorError, KeyError) as e:
                 result += f" — couldn't close the PR: {e}"
-        if not merged:
-            self._release_task_for(ask)
         if ask.kind == "action" and decision == "approved":
             p = ask.doc.meta.get("payload") or {}
             m = self.cfg.member(ask.requester)
             if m and isinstance(p.get("action"), dict):
                 try:
                     done = await self._do(m, p["action"], Event("system", f"approved {ask.id}", sender="system",
-                                                                  task=ask.doc.meta.get("task", ""),
+                                                                  task=p.get("event_task", ask.doc.meta.get("task", "")),
                                                                   project=p.get("project", ""), room=p.get("room", ""),
                                                                   meta={"approved": ask.id}))
                     result += f" — done{': ' + done if done else ''}"
-                except (TaskError, AskError, ExecutorError, ValueError, KeyError) as e:
-                    result += f" — but it failed: {e}"
+                except BaseException as e:
+                    ask = self.asks.finish_execution(ask.id, "uncertain", type(e).__name__)
+                    await self._hold_task_for(ask)
+                    if not isinstance(e, Exception):
+                        raise
+                    result += " — execution outcome is uncertain; inspect the destination and reconcile. Do not retry."
+                else:
+                    ask = self.asks.finish_execution(ask.id, "succeeded")
+        if not merged and ask.execution.get("status") != "uncertain":
+            self._release_task_for(ask)
         await asyncio.to_thread(self.ws.commit, f"{ask.id}: {decision} by {by}", self.cfg.owner_name)
         decided = getattr(self.bus, "ask_decided", None)
         if decided:
@@ -1543,14 +1587,16 @@ class Runtime:
             icon = "✅" if decision == "approved" else "❌"
             await post(ask.requester, ask.requester, f"{icon} {result} by {by}" + (f" — {note}" if note else ""),
                        kind="system", via=via)
-        if ask.requester and self.cfg.member(ask.requester):
+        if ask.requester and self.cfg.member(ask.requester) and ask.execution.get("status") != "uncertain":
             self._spawn(self._notify_requester(ask, decision, note))
         return result
 
     async def _notify_requester(self, ask: Ask, decision: str, note: str) -> None:
+        execution_note = (" The approved action was already executed by the runtime. Do not repeat it."
+                          if ask.execution.get("status") == "succeeded" else "")
         reply = await self.dispatch(ask.requester, Event(
             "system", f"{ask.id} ('{ask.summary}') was {decision} by {self.cfg.owner_name}"
-                      + (f" with note: {note}" if note else "") + ". Continue accordingly and tell the owner "
+                      + (f" with note: {note}" if note else "") + execution_note + ". Continue accordingly and tell the owner "
                       "in one line what you will do next.", sender="system", task=ask.doc.meta.get("task", "")))
         await self.bus.send_owner(ask.requester, reply)
 
@@ -1852,11 +1898,12 @@ class Runtime:
 
     def next_work(self, m: Member) -> tuple[str, object] | None:
         """What a person does first: unblock others → rework asked for by the owner → their top task."""
-        waiting = self.blocked_on_member(m)
+        held = self.asks.execution_tasks()
+        waiting = [t for t in self.blocked_on_member(m) if t.id not in held]
         if waiting:
             return "unblock", waiting[0]
         mine = [t for t in self.tasks.for_owner(m.id) if t.status in ("todo", "doing")
-                and self.project_schedulable(t.project) and not self.tasks.unmet_dependencies(t)]
+                and t.id not in held and self.project_schedulable(t.project) and not self.tasks.unmet_dependencies(t)]
         rework = [t for t in mine if t.doc.meta.get("rework")]
         if rework:
             return "rework", rework[0]

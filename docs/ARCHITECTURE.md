@@ -68,6 +68,12 @@ History is kept per person **per room**: approval follow-ups, work-session notes
 Before an action runs, its permission level is checked (`permissions` in config, overridable per person):
 🟢 runs; 🟡 runs and the owner gets an FYI; 🔴 becomes an ask of kind `action` holding the action itself. When the
 owner approves (console, Telegram or Slack), the runtime runs that action for the agent. Rejected actions never run.
+Before recording an action approval, the runtime checks that the requesting agent still exists, the action
+type is supported, and the agent can still access both the action's task and the originating event's task.
+New requests retain the event task separately; older requests use their existing stored task reference.
+These checks and the dependency preflight leave invalid requests pending, so they can be rejected or repaired.
+Action requests now persist a single execution attempt and hold uncertain task-linked work for owner
+reconciliation. See [EXECUTION.md](EXECUTION.md) for the recovery API and remaining coverage gaps.
 
 `message_agent` hand-offs (and the reply) are recorded in the project's room, or in the backchannel when no
 project is involved, as `internal` messages. The owner can see how the team coordinates.
@@ -124,8 +130,9 @@ they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits
   New snapshots are private (0600), atomically replaced, and exclude symlinks/sandbox/locks/env files.
   Offline extraction only targets a new directory and starts no services; see [RECOVERY.md](RECOVERY.md).
   ZIP is not encryption, and live daily snapshots are not cross-file transactional checkpoints.
-- **Model CLIs are sandboxed.** Each call runs in an empty folder with a minimal environment: no API keys, bot
-  tokens or other secrets. Timeouts kill the whole process tree.
+- **Model CLIs use restricted working directories and environments.** Each call starts in a scratch folder
+  with the configured environment allowlist; timeouts kill its process tree. This is not an OS sandbox:
+  same-user files, CLI logins and native credentials can remain accessible. See [SECRETS.md](SECRETS.md).
   - `claude`: no tools, no MCP servers, no user settings or hooks.
   - `codex`: shell, browser, apps, MCP and user config are off, so it can't read files.
   - `opencode`: empty isolated config (no global MCP servers or plugins); paid models get all tools off and every
