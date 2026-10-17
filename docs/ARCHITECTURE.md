@@ -3,6 +3,10 @@
 Nothing is specific to one company: names, roles, personas, projects, the manager's name, timezone and
 model all come from `config.yaml` and the workspace.
 
+This describes the implemented runtime and its boundaries, not a production-readiness guarantee. Start with
+the [README workflow](../README.md#how-work-flows) and [delivery checklist](DELIVERY.md). No diagram below
+implies automatic paid-to-free fallback, a complete credential sandbox or exactly-once external delivery.
+
 ## Principles
 
 1. **Git holds shared work, not all runtime state.** Tasks, shared memory, decisions and reports are files in
@@ -15,7 +19,8 @@ model all come from `config.yaml` and the workspace.
    Feedback and to that person's memory.
 5. **The team never waits silently.** Every ask has a deadline and a default. 🔴 asks wait for you, and the
    daily report shows them.
-6. **Reports come from code, not from a model.** Monitoring can't hallucinate.
+6. **Reports come from recorded state, not generated prose.** They summarize the board; they do not independently
+   verify agent claims, external delivery or code quality.
 7. **Shared context.** An agent's prompt includes the recent messages of the room it's answering in (everyone's,
    from every channel) and a glance at its other rooms, so a project's people know what was said there.
 
@@ -28,12 +33,14 @@ model all come from `config.yaml` and the workspace.
 | `workspace.py` | Git repo layout, commits, memory, logs, runtime state (`.jm/state.json`, not committed) |
 | `mdoc.py` | Markdown with YAML front matter + `## Sections` |
 | `tasks.py` | Task board and the rules (P0, WIP, done-means, reviewer, blocked-on) |
-| `asks.py` | Permission requests with level, deadline, default, outcome |
+| `asks.py` | Permission requests, durable execution attempts, decision locks and owner reconciliation |
 | `prompts.py` | System prompt = charter + persona + memory + roster + context + action protocol |
 | `chat.py` | Rooms (`team`, `p-<project>`, `<member>`, `backchannel`): one JSONL record per room in `.jm/chat/` |
 | `hub.py` | Every message goes through here: records it, mirrors it to every channel, routes it to the right people. Also the runtime's Bus |
 | `runtime.py` | Dispatch, model call, action application, agent inbox with hop limit, budget, heartbeat, decisions |
 | `scheduler.py`, `schedule_history.py` | Scheduled-job receipts, local cross-process exclusion and owner acknowledgment after interruption/failure |
+| `secret_store.py` | Explicit legacy environment/native-store selection; credential status and save without reveal |
+| `backups.py` | Private atomic snapshots and validated offline extraction into a new directory |
 | `executor.py` | Coding CLI in a git worktree on `jm/<task>`, merge after approval |
 | `runtime.run_work_session` | Scheduled work: each member with todo/doing tasks moves the top one; digest to the owner |
 | `monitor.py` | Deterministic report and checks (overdue, blocked too long, asks past deadline, failures) |
@@ -42,7 +49,7 @@ model all come from `config.yaml` and the workspace.
 | `github.py` | Shared tasks mirrored into GitHub; inbound edits become human review requests, verified account comments are deduplicated, private tasks excluded; PRs via `gh` |
 | `slack.py` | Slack transport: one app (Socket Mode), everyone posts as themselves, channel ↔ room mapping, approval buttons |
 | `commands.py` | Owner commands, shared by Telegram and `jm chat` |
-| `llm/` | `claude-code` and `codex-cli` (subscriptions, via their CLIs), `anthropic`, `openai` (any OpenAI-compatible API), `fake`. Per person: `team[].llm` |
+| `llm/` | `claude-code`, `codex-cli`, `opencode`, `anthropic`, `openai` (OpenAI-compatible endpoints) and `fake`; model selection per company/person/project, not automatic failover |
 | `setup.py` | `jm init` wizard, `jm add-member`, persona import |
 | `users.py` | Sign-in links and roles (owner, admin, member, viewer, client); only SHA-256 hashes of the keys are stored |
 | `audit.py` | The audit log in the team repo (`audit/YYYY-MM.jsonl`): console actions per person, decisions from every channel, agent actions, model failures, stuck turns. Secrets never written |
@@ -58,8 +65,9 @@ each action:
 `create_task` · `update_task` · `write_file` (docs/ only) · `read_file` (docs, tasks, reports, team, asks, decisions; up to 2 read rounds) · `ask_permission` · `remember` · `message_agent` · `notify_owner` · `post_group` · `post_room` · `run_code` · `remind` (the personal assistant only)
 
 Each action is normalised (wrong types fixed where possible) and applied on its own: one bad action is reported
-(⚠️) and the rest still run. If any failed, the agent gets **one repair round** with the exact results. Results are
-kept in its history, so it never believes something happened that didn't. A reply that isn't JSON, or was cut off at
+(⚠️) and the rest still run. If any failed, the agent can receive **one repair round** with the exact results,
+subject to budget/time limits. Results are kept in history as evidence, not as a guarantee that the model will
+interpret them correctly. A reply that isn't JSON, or was cut off at
 the output limit, gets one retry that says what went wrong. Long documents go *after* the JSON in
 `<<<FILE docs/…>>> … <<<END>>>` blocks, so they can't break it.
 
@@ -149,7 +157,9 @@ they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits
   turn stopped by the budget is not queued for replay. This is not a hard spending cap or automatic provider
   fallback; see [BUDGETS.md](BUDGETS.md).
 - **Failed coding commands are not merge-ready.** Their working branch remains available for inspection,
-  their task is blocked, and no PR/merge approval is created. A command's successful exit is not proof of tests.
+  their task is blocked, and no PR/merge approval is created when the executor returns an unsuccessful result.
+  Exceptions/timeouts and cancellation do not yet apply that same task hold; see [EXECUTION.md](EXECUTION.md).
+  A command's successful exit is not proof of tests.
 - **A hung turn is stopped** by the hub's watchdog (turn limit + 2 minutes). The person says so in the room, the
   lock is released, and it shows in Activity & health.
 - **Activity & health** (console) checks the engine, scheduler, git, disk, models, channels, replies in progress,
@@ -218,12 +228,79 @@ Slack ────┘   hub.handle → route ───►└── Slack
 
 `sync.mirror_owner` (default on) also shows the owner's own messages in the other channels ("🗨 Pankaj (via console): …").
 
-## Data flow: "Riya, add rate limiting to the API"
+## Execution and recovery flow
 
-1. Riya's bot receives your DM → `runtime.dispatch("riya", Event("dm", ...))`.
-2. The prompt is built from the charter, Riya's persona and memory, her tasks and the projects → model call.
-3. The model returns `create_task` + `run_code` → a task file is written and committed. The executor starts in the background.
-4. The executor runs the coding CLI in `../.jm-worktrees/api-T-012` on branch `jm/T-012` and commits there.
-5. A merge ask (🔴) is created → you get a card with the diffstat and ✅/❌ buttons.
-6. You tap ✅ → `git merge --no-ff jm/T-012` on main (only if main is clean) → the task is done → Riya is told
-   and replies to you.
+### Approved actions, merges and GitHub proposals
+
+```mermaid
+flowchart TD
+    REQUEST["Pending request: action, merge or GitHub proposal"] --> HUMAN["Human reviews details"]
+    HUMAN -->|Approve| CHECK["Decision lock and current-state preflight"]
+    HUMAN -->|Reject| REJECT["Reject requested operation"]
+    CHECK -->|"Preflight rejects"| PENDING["No execution; request remains pending"]
+    CHECK -->|Valid| START["Persist started attempt and request hash"]
+    START --> HANDLER["Run the approved handler"]
+    HANDLER -->|Returns| SUCCESS["Record succeeded"]
+    HANDLER -->|Raises or cancels| UNCERTAIN["Record uncertain; hold linked task"]
+    START -.->|"Crash before completion record"| INTERRUPTED["Started record remains unresolved"]
+    INTERRUPTED --> HOLD["Hold linked work; inspect destination"]
+    UNCERTAIN --> HOLD
+    HOLD --> OWNER["Owner records verified outcome and evidence"]
+    OWNER --> RECONCILED["Reconciled; no execution or retry"]
+```
+
+The diagram covers the approval handler, not every child operation. `run_code` handler success means the
+background task was started. Rejection-triggered PR closure and green/yellow effects do not yet have equivalent
+execution receipts. A held request cannot be approved again; reconciliation records evidence, not a retry.
+Checks inside a started handler, such as the executor rejecting a changed merge head, take the conservative
+uncertain-outcome path even if no merge happened. Do not confuse these with preflight rejection before a receipt.
+Detailed boundaries and endpoints: [EXECUTION.md](EXECUTION.md).
+
+### Scheduled work
+
+```mermaid
+flowchart LR
+    DUE["Due occurrence"] --> GUARD["Family lock and unresolved-run check"]
+    GUARD -->|Eligible| RUN["Persist run; invoke handler"]
+    GUARD -->|Held or overlapping| SKIP["Skip; do not duplicate work"]
+    RUN -->|Returns| COMPLETE["Completed handler receipt"]
+    RUN -->|Fails or interrupted| HOLD["Hold future family runs"]
+    HOLD --> ACK["Owner checks evidence and acknowledges"]
+    ACK --> FUTURE["Future occurrences may run; old one not replayed"]
+```
+
+A completed work-session handler may still have background coding in flight. Scheduler receipts do not replace
+code-run or provider-delivery receipts. Locks coordinate local POSIX processes, not multiple hosts. See
+[SCHEDULER.md](SCHEDULER.md).
+
+### Coding example: "Riya, add rate limiting to the API"
+
+1. Route the DM to Riya. Check access, project state and recorded usage; build context from her persona,
+   memory, board and relevant project settings.
+2. The model can propose a task and `run_code`. The default `run_code: red` creates an approval request;
+   it does **not** immediately start the executor. Task scope, dependencies and execution holds are rechecked.
+3. After approval, record the attempt and start the configured coding CLI in a task worktree on `jm/<task>`.
+   The approval receipt confirms startup only. There is one company-wide coding command today.
+4. On a returned failure result, retain the branch, block the task and create no PR/merge ask. On successful
+   exit with no changes, report that result. On successful exit with changes, optionally open a PR and create
+   a separate red merge request containing the full reviewed commit SHA. The task moves to `review`.
+5. The human inspects the diff and actual test evidence. Merge approval rechecks dependencies and the reviewed
+   commit. A local merge uses that exact commit; a GitHub merge uses the expected head SHA and requires a
+   completed-merge receipt. A changed head is refused, not silently approved.
+6. A successful merge can mark the task done. Failed/interrupted merge attempts need owner reconciliation,
+   not a second click. Neither a code-command exit nor a merge means production deployment or acceptance
+   testing happened automatically.
+
+**Open gap:** executor exceptions/timeouts and coding cancellation can leave the task available for later work
+sessions, unlike the returned-failure path in step 4. Pause and inspect interrupted work; final code-run
+receipts and consistent holds are still required.
+
+### GitHub persistence and review
+
+Shared task files remain the engine. Sync exports them to the configured issue repository and Project;
+inbound edits become human-reviewed proposals, not direct instructions. A separate GitHub Project is not
+automatically created for each James project. Private-assistant tasks are excluded from the mirror.
+
+Preserve three things independently: workspace history, private runtime/configuration backups, and credentials
+provisioned through the chosen store. A Project board cannot reconstruct the company after local data loss.
+See [GITHUB.md](GITHUB.md), [RECOVERY.md](RECOVERY.md) and [SECRETS.md](SECRETS.md).

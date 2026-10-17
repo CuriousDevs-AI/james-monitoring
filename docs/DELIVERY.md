@@ -16,6 +16,8 @@ live account, a free provider, or a production deployment works.
       with no blind replay; rejection-triggered PR closure, ungated actions and final background-code results
       still need equivalent receipts. New merge approvals bind an immutable reviewed head and require a
       completed GitHub merge receipt; older unbound requests fail closed.
+      Executor exceptions/timeouts and cancellations can leave code tasks scheduler-eligible; durable
+      code-run outcomes and consistent interruption holds are required before unattended operation.
       See [EXECUTION.md](EXECUTION.md) for the exact boundary.
 - [ ] Recovery drill from another directory/machine with configuration, tasks, private runtime state and
       separately re-provisioned credentials. GitHub Projects alone is not a full backup. Private atomic
