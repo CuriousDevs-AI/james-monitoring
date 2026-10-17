@@ -76,6 +76,60 @@ async def test_agents_cannot_mutate_private_tasks(rt):
     assert "intrusion" not in rt.tasks.get(task.id).path.read_text()
 
 
+@pytest.mark.parametrize("entry", ["_apply", "_do"])
+async def test_event_task_privacy_is_checked_even_with_another_explicit_task(rt, entry):
+    private, _ = private_work(rt)
+    public = rt.tasks.create(title="Public", owner="sofia", created_by=rt.owner_id)
+    with pytest.raises(TaskError, match="private"):
+        await getattr(rt, entry)(rt.cfg.member("sofia"),
+                                {"type": "write_file", "task": public.id,
+                                 "path": "docs/no.md", "content": "private context"},
+                                Event("system", "work", sender="system", task=private.id))
+    assert not (rt.ws.root / "docs/no.md").exists()
+
+
+@pytest.mark.parametrize("invalid", ["removed_requester", "missing_action", "unknown_action", "private_task"])
+async def test_invalid_action_approval_stays_pending_without_side_effects(rt, invalid):
+    task = rt.tasks.create(title="Work", owner="sofia", created_by=rt.owner_id)
+    payload = {"action": {"type": "write_file", "path": "docs/no.md", "content": "not authorised"}}
+    if invalid == "removed_requester":
+        rt.cfg.team = [m for m in rt.cfg.team if m.id != "sofia"]
+    elif invalid == "missing_action":
+        payload = {}
+    elif invalid == "unknown_action":
+        payload["action"]["type"] = "unrecognised"
+    elif invalid == "private_task":
+        private_work(rt)
+        rt.tasks.update_fields(task.id, rt.owner_id, owner="ada")
+    ask = rt.asks.create(requester="sofia", summary="Write output", kind="action", task=task.id,
+                         payload=payload)
+    with pytest.raises(AskError, match="still open"):
+        await rt.decide_ask(ask.id, "approved", rt.owner_id)
+    assert rt.asks.get(ask.id).status == "pending"
+    assert not (rt.ws.root / "docs/no.md").exists()
+    # A stale request must remain dismissible without executing its action.
+    await rt.decide_ask(ask.id, "rejected", rt.owner_id)
+    await rt.drain()
+    assert rt.asks.get(ask.id).status == "rejected"
+
+
+async def test_approval_preserves_origin_when_action_names_a_different_task(rt):
+    origin = rt.tasks.create(title="Original context", owner="sofia", created_by=rt.owner_id)
+    target = rt.tasks.create(title="Output task", owner="sofia", created_by=rt.owner_id)
+    sofia = rt.cfg.member("sofia")
+    sofia.permissions["write_file"] = "red"
+    await rt._apply(sofia, {"type": "write_file", "task": target.id,
+                            "path": "docs/no.md", "content": "original context"},
+                    Event("system", "work", sender="system", task=origin.id))
+    ask = rt.asks.pending()[0]
+    private_work(rt)
+    rt.tasks.update_fields(origin.id, rt.owner_id, owner="ada")
+    with pytest.raises(AskError, match="private"):
+        await rt.decide_ask(ask.id, "approved", rt.owner_id)
+    assert rt.asks.get(ask.id).status == "pending"
+    assert not (rt.ws.root / "docs/no.md").exists()
+
+
 async def test_private_tasks_never_enter_github_mirror(tmp_path, monkeypatch):
     gh = fake_gh(tmp_path, monkeypatch)
     rt = runtime(tmp_path)

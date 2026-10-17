@@ -16,7 +16,7 @@ from typing import Protocol
 from .asks import Ask, AskError, AskStore
 from .assistant import REMIND_SPEC
 from .chat import BACKCHANNEL, PROJECT_ROOM, TEAM_ROOM, ChatStore
-from .config import Config, Member
+from .config import ACTION_TYPES, Config, Member
 from .executor import Executor, ExecutorError
 from .fileio import atomic_write
 from .llm import LLM, LLMError, is_transient, make_llm
@@ -1059,7 +1059,7 @@ class Runtime:
         return t
 
     async def _apply(self, m: Member, a: dict, ev: Event) -> str:
-        self._check_action_access(m, a)
+        self._check_action_access(m, a, ev.task)
         t = a["type"]
         level = ("green" if t in NO_GATE or ev.meta.get("approved")
                  else self.cfg.permission(m, t, self.action_project(a, ev)))
@@ -1073,7 +1073,8 @@ class Runtime:
             ask = self.asks.create(requester=m.id, summary=f"{m.name} wants to {self.describe(m, a)}",
                                    details=str(a.get("why") or a.get("description") or ""), level="red",
                                    task=str(a.get("task") or a.get("id") or ev.task or ""), kind="action",
-                                   payload={"action": a, "project": ev.project, "room": ev.room})
+                                   payload={"action": a, "project": ev.project, "room": ev.room,
+                                            "event_task": ev.task})
             post = getattr(self.bus, "post", None)
             if post and ev.room and ev.room.startswith(PROJECT_ROOM):   # asked in a project room → the card is there
                 await post(ev.room, m.id, ask.card(self.cfg.monitor.name), kind="ask", ask=ask)
@@ -1105,10 +1106,11 @@ class Runtime:
                 pid = ""
         return PROJECT_ROOM + pid if pid and pid in self.cfg.projects else BACKCHANNEL
 
-    def _check_action_access(self, m: Member, a: dict) -> None:
+    def _check_action_access(self, m: Member, a: dict, event_task: str = "") -> None:
         tid = a.get("id") if a.get("type") == "update_task" else a.get("task")
-        if tid and not self.cfg.agent_can_access(self.tasks.get(str(tid)).owner, m.id):
-            raise TaskError("That task is private to its personal assistant.")
+        for task_id in (tid, event_task):
+            if task_id and not self.cfg.agent_can_access(self.tasks.get(str(task_id)).owner, m.id):
+                raise TaskError("That task is private to its personal assistant.")
 
     def _check_action_dependencies(self, a: dict, event_task: str = "") -> None:
         tid = a.get("task") or event_task
@@ -1116,7 +1118,7 @@ class Runtime:
             self.tasks.require_dependencies(self.tasks.get(tid))
 
     async def _do(self, m: Member, a: dict, ev: Event) -> str:
-        self._check_action_access(m, a)
+        self._check_action_access(m, a, ev.task)
         self._check_action_dependencies(a, ev.task)
         t = a["type"]
         if t == "remind":
@@ -1467,12 +1469,19 @@ class Runtime:
         merged = ""
         github_result = ""
         if pre.kind == "action" and decision == "approved":
-            action = (pre.doc.meta.get("payload") or {}).get("action")
-            if isinstance(action, dict):
-                try:
-                    self._check_action_dependencies(action, pre.doc.meta.get("task", ""))
-                except TaskError as e:
-                    raise AskError(f"{pre.id} is still open — {e}") from None
+            payload = pre.doc.meta.get("payload") or {}
+            action = payload.get("action") if isinstance(payload, dict) else None
+            m = self.cfg.member(pre.requester)
+            if not m:
+                raise AskError(f"{pre.id} is still open — the requesting agent no longer exists. Reject this request.")
+            if not isinstance(action, dict) or action.get("type") not in ACTION_TYPES:
+                raise AskError(f"{pre.id} is still open — its action is missing or unsupported. Reject this request.")
+            event_task = payload.get("event_task", pre.doc.meta.get("task", ""))
+            try:
+                self._check_action_access(m, action, event_task)
+                self._check_action_dependencies(action, event_task)
+            except TaskError as e:
+                raise AskError(f"{pre.id} is still open — {e}") from None
         if pre.kind == "github_change" and decision == "approved":
             from .github import Change
             if via != "console" and len(pre.doc.sections.get("Details", "")) > 1500:
@@ -1528,7 +1537,7 @@ class Runtime:
             if m and isinstance(p.get("action"), dict):
                 try:
                     done = await self._do(m, p["action"], Event("system", f"approved {ask.id}", sender="system",
-                                                                  task=ask.doc.meta.get("task", ""),
+                                                                  task=p.get("event_task", ask.doc.meta.get("task", "")),
                                                                   project=p.get("project", ""), room=p.get("room", ""),
                                                                   meta={"approved": ask.id}))
                     result += f" — done{': ' + done if done else ''}"
