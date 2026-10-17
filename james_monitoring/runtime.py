@@ -1447,9 +1447,9 @@ class Runtime:
             except ExecutorError as e:
                 self.tasks.add_log(task_id, m.id, f"no pull request: {e}")
         ask = self.asks.create(requester=m.id, summary=f"Merge {pr or r.branch} into {project_id} main ({task_id})",
-                               details=f"{r.diffstat}\n\n" + (f"Pull request: {pr}" if pr else f"Worktree: {r.worktree}"),
+                               details=f"Reviewed commit: {r.commit}\n\n{r.diffstat}\n\n" + (f"Pull request: {pr}" if pr else f"Worktree: {r.worktree}"),
                                level="red", task=task_id, kind="merge",
-                               payload={"project": project_id, "branch": r.branch, "pr": pr})
+                               payload={"project": project_id, "branch": r.branch, "pr": pr, "expected_head": r.commit})
         self.tasks.set_status(task_id, "review", by=m.id, note=f"code ready on {r.branch}")
         await asyncio.to_thread(self.ws.commit, f"{task_id}: code ready on {r.branch}", m.name)
         await self.bus.send_owner(m.id, ask.summary, ask=ask, urgent=True)
@@ -1496,14 +1496,14 @@ class Runtime:
         except Exception:  # noqa: BLE001
             log.exception("audit record failed")
 
-    async def _merge_with_guard(self, project: str, target: str, is_pr: bool) -> str:
+    async def _merge_with_guard(self, project: str, target: str, is_pr: bool, expected_head: str) -> str:
         """Keep the caller's decision lock until the non-cancellable git thread really stops.
 
         Cancellation of to_thread does not stop its side effect. Never allow another process to
         reconcile while that worker can still merge. Executor commands have their own timeouts.
         """
         worker = asyncio.create_task(asyncio.to_thread(
-            self.executor.merge_pr if is_pr else self.executor.merge, project, target))
+            self.executor.merge_pr if is_pr else self.executor.merge, project, target, expected_head))
         try:
             return await asyncio.shield(worker)
         except asyncio.CancelledError:
@@ -1570,8 +1570,13 @@ class Runtime:
                     self._check_execution_hold({"type": "run_code", "task": pre.doc.meta["task"]})
             except TaskError as e:
                 raise AskError(f"{pre.id} is still open — {e}") from None
+            if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", str(p.get("expected_head") or "")):
+                raise AskError("This merge request has no full reviewed commit. Reject it and review a fresh request.")
+            if via != "console" and len(pre.doc.sections.get("Details", "")) > 1500:
+                raise AskError("This merge exceeds the chat preview. Review the full details in the console.")
             self.asks.start_execution(pre, by)
-            sha = await self._merge_with_guard(p["project"], p.get("pr") or p["branch"], bool(p.get("pr")))
+            sha = await self._merge_with_guard(p["project"], p.get("pr") or p["branch"], bool(p.get("pr")),
+                                               p["expected_head"])
             merged = f" — merged {p['branch']} into {p['project']} ({sha})"
             if pre.doc.meta.get("task"):
                 try:

@@ -63,9 +63,18 @@ Approved actions, merges and inbound GitHub proposals are journaled. Rejection-t
 green/yellow actions and background coding results are not yet covered by this execution record. Scheduled
 runs have their own receipts (see SCHEDULER.md). A successful approval handler does not prove completion of
 any follow-up tasks it spawned. Do not treat their request IDs or runtime state as a transactional ledger.
-Merge requests still identify a branch/PR, not an immutable reviewed commit; head-change validation remains
-a release requirement. The execution hash detects request-file changes during preflight, not a changed remote
-PR head or a stale approval page opened before another edit.
+New merge requests include a full reviewed commit id in their details and payload. Local merges verify the
+branch head and merge that exact commit even if the branch subsequently moves. GitHub merges send the expected
+head SHA to the immediate merge API and require a completed-merge receipt. A missing full commit in a legacy
+request fails closed: reject it and review a newly generated request. The execution hash detects request-file
+changes during preflight, not a stale approval page opened before another edit.
+
+The GitHub path validates the PR repository against the configured repository, and checks its head, base
+branch and open/non-draft state. It does not enable auto-merge/queues, bypass checks, delete branches or merge
+other PRs in a stack. Repositories requiring those workflows need manual handling. Remote base retargeting
+between validation and merge, configuration changes, and concurrent human git commands are not an atomic
+transaction with this approval. Local James merge/catch-up operations share a repository lock; other git
+clients do not participate. If automatic conflict abort fails, no destructive hard reset is attempted.
 
 There is no automatic retry, external provider reconciliation, outbox delivery, or cross-machine idempotency.
 The same operation intentionally created under another approval ID is a separate request, not automatically

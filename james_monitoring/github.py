@@ -320,8 +320,32 @@ class GitHubSync:
                       input=body + f"\n\n{MARK}", cwd=repo_dir, timeout=120)
         return out.strip().splitlines()[-1]
 
-    def merge_pr(self, repo_dir, url: str) -> None:
-        self.gh("pr", "merge", url, "--merge", "--delete-branch", cwd=repo_dir, timeout=120)
+    def merge_pr(self, repo_dir, url: str, expected_head: str, base: str) -> str:
+        """Immediate exact-head merge only: no auto-merge, merge queue, bypass or branch deletion."""
+        from urllib.parse import urlsplit
+        if not re.fullmatch(r"[0-9a-f]{40}", expected_head or ""):
+            raise GitHubError("A full reviewed GitHub commit id is required.")
+        parsed = urlsplit(url)
+        match = re.fullmatch(r"/([\w.-]+)/([\w.-]+)/pull/([1-9][0-9]*)", parsed.path)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.netloc != parsed.hostname \
+                or parsed.query or parsed.fragment or not match:
+            raise GitHubError("Invalid reviewed pull request URL.")
+        owner, repo, number = match.groups()
+        configured = self.gh.json("repo", "view", "--json", "url", cwd=repo_dir)
+        if configured.get("url", "").rstrip("/") != f"https://{parsed.hostname}/{owner}/{repo}":
+            raise GitHubError("The pull request does not belong to the configured project repository.")
+        endpoint = f"repos/{owner}/{repo}/pulls/{number}"
+        proposal = self.gh.json("api", endpoint, "--hostname", parsed.hostname, cwd=repo_dir)
+        if proposal.get("state") != "open" or proposal.get("draft") \
+                or (proposal.get("head") or {}).get("sha") != expected_head \
+                or (proposal.get("base") or {}).get("ref") != base:
+            raise GitHubError("The pull request head, base or state changed; review a fresh request.")
+        result = self.gh.json("api", endpoint + "/merge", "--method", "PUT", "--hostname", parsed.hostname,
+                              "--input", "-", input=json.dumps({"sha": expected_head, "merge_method": "merge"}),
+                              cwd=repo_dir, timeout=120)
+        if result.get("merged") is not True or not re.fullmatch(r"[0-9a-f]{40}", result.get("sha") or ""):
+            raise GitHubError("GitHub did not confirm a completed merge. Inspect the destination before any retry.")
+        return result["sha"]
 
     def close_pr(self, repo_dir, url: str, comment: str) -> None:
         self.gh("pr", "close", url, "--comment", comment + f"\n\n{MARK}", cwd=repo_dir, timeout=60)

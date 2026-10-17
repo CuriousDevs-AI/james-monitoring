@@ -194,7 +194,7 @@ def effect_ask(rt, kind):
     task = rt.tasks.create(title="Reviewed work", owner="sofia", created_by=rt.owner_id,
                            project="site", done_means=["Owner verification"])
     if kind == "merge":
-        payload = {"project": "site", "branch": "jm/" + task.id, "pr": ""}
+        payload = {"project": "site", "branch": "jm/" + task.id, "pr": "", "expected_head": "a" * 40}
     else:
         payload = {"change": asdict(Change(task.id, "priority", "P2")),
                    "expected": rt.github.values(task)["priority"], "task_owner": task.owner,

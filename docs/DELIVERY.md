@@ -14,7 +14,8 @@ live account, a free provider, or a production deployment works.
 - [x] Owner-facing Secrets Settings screen; no reveal, explicit status checks, restart guidance.
 - [ ] Full execution coverage. Action, merge and GitHub-proposal approval attempts now have owner reconciliation
       with no blind replay; rejection-triggered PR closure, ungated actions and final background-code results
-      still need equivalent receipts. Merge approval must also bind an immutable reviewed head.
+      still need equivalent receipts. New merge approvals bind an immutable reviewed head and require a
+      completed GitHub merge receipt; older unbound requests fail closed.
       See [EXECUTION.md](EXECUTION.md) for the exact boundary.
 - [ ] Recovery drill from another directory/machine with configuration, tasks, private runtime state and
       separately re-provisioned credentials. GitHub Projects alone is not a full backup. Private atomic
