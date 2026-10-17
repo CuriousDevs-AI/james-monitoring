@@ -70,8 +70,8 @@ Before recording an action approval, the runtime checks that the requesting agen
 type is supported, and the agent can still access both the action's task and the originating event's task.
 New requests retain the event task separately; older requests use their existing stored task reference.
 These checks and the dependency preflight leave invalid requests pending, so they can be rejected or repaired.
-This is not a transactional execution record: later execution failures are still reported after approval,
-and concurrent configuration changes or external effects need the durable execution layer.
+Action requests now persist a single execution attempt and hold uncertain task-linked work for owner
+reconciliation. See [EXECUTION.md](EXECUTION.md) for the recovery API and remaining coverage gaps.
 
 `message_agent` hand-offs (and the reply) are recorded in the project's room, or in the backchannel when no
 project is involved, as `internal` messages. The owner can see how the team coordinates.
