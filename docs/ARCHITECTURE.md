@@ -66,6 +66,12 @@ History is kept per person **per room**: approval follow-ups, work-session notes
 Before an action runs, its permission level is checked (`permissions` in config, overridable per person):
 🟢 runs; 🟡 runs and the owner gets an FYI; 🔴 becomes an ask of kind `action` holding the action itself. When the
 owner approves (console, Telegram or Slack), the runtime runs that action for the agent. Rejected actions never run.
+Before recording an action approval, the runtime checks that the requesting agent still exists, the action
+type is supported, and the agent can still access both the action's task and the originating event's task.
+New requests retain the event task separately; older requests use their existing stored task reference.
+These checks and the dependency preflight leave invalid requests pending, so they can be rejected or repaired.
+Action requests now persist a single execution attempt and hold uncertain task-linked work for owner
+reconciliation. See [EXECUTION.md](EXECUTION.md) for the recovery API and remaining coverage gaps.
 
 `message_agent` hand-offs (and the reply) are recorded in the project's room, or in the backchannel when no
 project is involved, as `internal` messages. The owner can see how the team coordinates.
