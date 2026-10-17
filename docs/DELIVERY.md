@@ -12,8 +12,9 @@ live account, a free provider, or a production deployment works.
 - [x] Dependencies block work until accepted completion; one-off requests can remain separate from daily work.
 - [x] Opt-in native credential storage, owner-only metadata/save API and unavailable-store handling.
 - [x] Owner-facing Secrets Settings screen; no reveal, explicit status checks, restart guidance.
-- [ ] Full execution coverage. Action-approval attempts and owner reconciliation now exist with no blind replay;
-      merge approvals, GitHub proposals and final background-code results still need equivalent receipts.
+- [ ] Full execution coverage. Action, merge and GitHub-proposal approval attempts now have owner reconciliation
+      with no blind replay; rejection-triggered PR closure, ungated actions and final background-code results
+      still need equivalent receipts. Merge approval must also bind an immutable reviewed head.
       See [EXECUTION.md](EXECUTION.md) for the exact boundary.
 - [ ] Recovery drill from another directory/machine with configuration, tasks, private runtime state and
       separately re-provisioned credentials. GitHub Projects alone is not a full backup. Private atomic

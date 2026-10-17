@@ -45,7 +45,7 @@ async def test_code_on_branch_then_owner_approves_merge(tmp_path):
     assert rt.tasks.get(t.id).status == "done"
 
 
-async def test_failed_merge_is_rolled_back_and_the_request_stays_open(tmp_path):
+async def test_failed_merge_is_rolled_back_and_requires_reconciliation(tmp_path):
     import pytest
     from james_monitoring.asks import AskError
     repo = tmp_path / "site"
@@ -66,9 +66,12 @@ async def test_failed_merge_is_rolled_back_and_the_request_stays_open(tmp_path):
     (repo / "index.html").write_text("<h1>human</h1>\n")
     git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "human edit")
     ask = rt.asks.pending()[0]
-    with pytest.raises(AskError, match="still open"):
+    with pytest.raises(AskError, match="uncertain"):
         await rt.decide_ask(ask.id, "approved", by="Pankaj")
     assert rt.asks.get(ask.id).status == "pending"
+    assert rt.asks.get(ask.id).execution["status"] == "uncertain"
+    with pytest.raises(AskError, match="No retry"):
+        await rt.decide_ask(ask.id, "approved", by="Pankaj")
     assert git(repo, "status", "--porcelain") == "" and (repo / "index.html").read_text() == "<h1>human</h1>\n"
     assert not (repo / ".git/MERGE_HEAD").exists()
 
