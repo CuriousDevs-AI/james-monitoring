@@ -44,19 +44,20 @@ a token or seeing a green readiness check does not prove that a model answers or
 | Area | Implemented | Still required before live sign-off |
 |---|---|---|
 | Team workspace | Configurable people, projects, personas, tasks, dependencies, rooms and scheduled work | Validate your team's workflow and recovery procedure |
+| Project context and planning | Versioned resource attachments/references; manual tasks and human-reviewed AI task drafts | Cloud links need separate access; PDF/Office/image extraction and live connector grants are not implemented |
 | Telegram / Slack | Routing, DMs, group messages and approval handling; simulated integration tests | Test your actual bots/app, group membership, permissions and approved destinations |
 | GitHub | Shared-task Project mirror, reviewed inbound proposals and commit-bound merge approvals | Verify your actual board, repository permissions and sync; repository access alone is insufficient |
 | Claude and other model adapters | CLI/API adapters, per-person/project assignment and model probes | Verify the selected model's response, credentials, limits and data policy |
-| Local / free-model options | Ollama endpoint support and explicit opt-in OpenCode free-model path | Verify available models and responses; no guaranteed free capacity or automatic paid-to-free fallback |
+| Local / free-model options | Ollama, opt-in OpenCode free models, Gemini/OpenRouter APIs, explicit bounded fallback | Verify availability and account data/billing policies; no guaranteed free capacity |
 | Human approval and recovery | Execution records for approved actions, merges and GitHub proposals; scheduler receipts; owner recovery UI | Complete background-code and other side-effect receipts, plus live acceptance |
 | Secrets and persistence | Legacy `.env`, opt-in macOS Keychain, git history and private runtime snapshots | Executor-enforced connector grants, protected off-machine backups and credential recovery |
 
-**Known safety gap:** a nonzero coding-command result blocks its task, but an executor exception (including a
-timeout) or cancellation does not yet reliably put that task on hold. It can remain eligible for a later work
-session. Inspect interrupted code work before resuming automation. See [execution limits](docs/EXECUTION.md).
+**Known safety boundary:** returned coding failures block the task; caught exceptions/timeouts and cancellation
+now create a durable owner-recovery hold. A hard process crash before that record is written still needs a
+pre-start/final code-run ledger. Inspect interrupted work before resuming. See [execution limits](docs/EXECUTION.md).
 
 The release checklist is maintained in [DELIVERY.md](docs/DELIVERY.md). Local test evidence at the October 17,
-2026 checkpoint: **338 pytest tests passed**, with 14 Telegram deprecation warnings. The suite includes a Node
+2026 checkpoint: **369 pytest tests passed**, with 14 Telegram deprecation warnings. The suite includes a Node
 form-test wrapper; those checks use DOM stubs, not a full browser or real provider accounts. See
 [console QA](docs/CONSOLE-QA.md) for remaining browser verification.
 
@@ -65,7 +66,12 @@ form-test wrapper; those checks use DOM stubs, not a full browser or real provid
 ```mermaid
 flowchart TD
     OWNER["Founder configures company, people, models and permissions"] --> PROJECT["Create a project and assign teammates"]
-    PROJECT --> TASK["Tasks: owner, scope, Done means and dependencies"]
+    PROJECT --> RESOURCE["Attach briefs, files and reference links"]
+    RESOURCE --> MANUAL["Add task manually"]
+    RESOURCE --> DRAFT["Consent to selected model → generate task drafts"]
+    DRAFT --> HUMAN["Human edits and reviews each draft"]
+    HUMAN --> TASK["Tasks: owner, scope, Done means and dependencies"]
+    MANUAL --> TASK
     TASK --> SELECT["Scheduled session selects eligible work"]
     DM["One-off DM or room request"] --> ROUTE["Route to the teammate"]
     SELECT --> ROUTE
@@ -130,6 +136,8 @@ It runs as **one Python process** with no database. Everything lives in files an
 - **Threads**: reply to any message, and the person you replied to answers inside the thread
 - **@mentions** with a picker: `@name`, `@all` and `@department`
 - Task board with enforced rules, reassignment, a reviewer, dependencies, and history from git
+- **Project resources**: briefs, notes, files and reference links; assigned agents receive included text excerpts
+- **AI task drafts**: consent to the project model, review/edit each proposal, then create ordinary board tasks
 - **Work sessions** on a schedule: everyone moves their top task forward and saves the real output to `docs/`
 - **Daily report** plus hourly checks: blocked, overdue, stale, waiting on you, failing models
 - **⌘K search** across every message, task, document and memory note
@@ -342,6 +350,19 @@ flowchart LR
 This applies to the **model** and to each **permission**. Project **instructions** and the person's **project role**
 are added to the prompt only while they work on that project: in its room, on its tasks, and in work sessions.
 
+### Project resources and task planning
+
+Open a project → **Resources** to add briefs, documents, datasets, designs, artifacts or tool references.
+Upload a supported file (up to 2 MB), add notes, and choose whether its readable context goes to assigned agents.
+Sheets, Claude and repository links are references, not credentials or automatic integrations. PDF/Office/image
+attachments are stored for download, not parsed by AI; include notes or a text export. Keep secrets in Settings → Secrets.
+
+Use **Task** for manual entry or **AI task drafts** for up to 12 proposals based on the project context.
+Confirm the selected model, then edit/review each draft before creating it. Tasks become normal scheduled work
+only after creation; dependencies still require accepted completion. Planning itself executes no James actions.
+Resources are workspace-git files; uncreated drafts live in private runtime snapshots, not GitHub Projects.
+See [resource limits, permissions and API](docs/PROJECT-RESOURCES.md).
+
 ---
 
 ## 🏗 Architecture
@@ -546,6 +567,8 @@ always require approval. Project rules apply to actions that touch that project,
 | `anthropic` | Anthropic API | `ANTHROPIC_API_KEY` | — |
 | `openai` | any OpenAI-compatible API | `OPENAI_API_KEY` (+ `base_url`) | — |
 | `openrouter` | OpenRouter | `OPENROUTER_API_KEY` | — |
+| `gemini` | Gemini's OpenAI-compatible API | `GEMINI_API_KEY` | — |
+| `bedrock` | Amazon Bedrock Converse (supported models/inference profiles) | `AWS_BEARER_TOKEN_BEDROCK` API key + `region` | — |
 | `ollama` | local models | none (`http://localhost:11434/v1`) | — |
 
 - **Per person, per project.** Set a model in `team[].llm`, in `projects.<id>.llm`, or in
@@ -560,10 +583,59 @@ always require approval. Project rules apply to actions that touch that project,
   - `claude`: no tools and no MCP servers.
   - `codex`: shell, browser, apps and user config are off.
   - `opencode`: an isolated config; paid models have every tool off and every permission denied.
-- **Budget, not automatic fallback.** Reported usage is checked before each attempt. A budget-stopped partial
-  turn is not automatically replayed, but this is not a hard spending cap. No paid-to-free switch is implemented;
-  see [BUDGETS.md](docs/BUDGETS.md). OpenCode free mode is opt-in and does not share the paid path's tool denial.
+- **Budget and opt-in fallback.** Reported usage guards remain in place across providers. A budget-stopped
+  partial turn is not replayed. At most two explicitly configured backups can answer on quota/rate-limit or
+  transient service failures; login, permission, invalid-model and policy errors stop. No fallback is enabled
+  by default. This is not a currency cap; see [BUDGETS.md](docs/BUDGETS.md).
 - **Check a model:** use **Settings → AI models** or run `jm connection check`.
+
+### Mix CLI subscriptions and APIs
+
+In **Settings → AI models → Planning, task work & fallback**, choose the company/chat default, AI task
+planning, or task work. Enter the exact primary and optional backup model IDs; approve the destinations before
+saving. Save API credentials in **Settings → Secrets**; configuration contains references, not key values.
+Changing a route invalidates an existing task-draft consent signature. Drafts still require human review.
+
+Precedence is **person-on-project → project → person → purpose route → company default**. Planning routes
+serve AI task drafts; work routes serve task-linked agent turns (including scheduled work). Ordinary chat
+keeps its assigned model. The separate coding executor is unchanged: these routes do not switch a shell
+executor's CLI or replay a partially completed external action.
+
+```yaml
+llm:
+  provider: opencode
+  model: your-provider/your-model  # use the exact ID from your existing OpenCode login
+  fallbacks:                     # optional; context may be sent to each listed destination
+    - provider: openrouter
+      model: openrouter/free
+      free_only: true
+model_routes:
+  planning:
+    provider: claude-code         # retain CLI subscription for planning
+  work:
+    provider: openrouter
+    model: openrouter/free
+    free_only: true
+```
+
+Gemini can be used in any slot with `provider: gemini` and an available model ID. It has **no enforced
+free-only switch** here: quota, billing and data usage depend on the Google project/account. Bedrock uses
+`provider: bedrock`, `region: us-east-1` (or your region), and a Converse-compatible model/inference-profile
+ID. This adapter supports scoped Bedrock bearer API keys, **not IAM/SSO credential discovery or Mantle-only
+models**. Region/model access must be configured in AWS. No SDK dependency is added for Bedrock.
+
+OpenRouter `free_only: true` requires `openrouter/free` or an explicit `:free` ID on the official endpoint,
+and sends zero prompt/completion price ceilings. All backups of a free-only primary must also be free-only.
+Free capacity is limited and never guaranteed. When fallback is configured, CLI calls are stateless with
+James's conversation context, avoiding stale vendor sessions after another model answers; CLI assignments
+without fallback retain their existing sessions. Usage records identify the answering route/model; fallback
+successes are logged. For router IDs, the label identifies the configured router, not its underlying vendor.
+
+Provider references: [Gemini compatibility](https://ai.google.dev/gemini-api/docs/openai),
+[Bedrock API keys](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-use.html),
+[OpenRouter price routing](https://openrouter.ai/docs/guides/routing/provider-selection).
+Automated adapter tests use mocked providers. A live **Test** is still required with your own credentials;
+creating a route or detecting a key does not prove the provider answers.
 
 ## 🔌 Integrations
 
@@ -615,12 +687,14 @@ isn't versioned yet; use it at your own risk.
 | `/api/search?q=` · `/api/doc?path=` [read] | full-text search · a team document with history |
 | `/api/notifications` [read] | the bell: items with read state |
 | `/api/member?id=` · `/api/team` · `/api/project?id=` [read] | profile · people · project detail |
+| `/api/project/resources?id=&resource_id=` [read] | project resource metadata; optional single record includes its downloadable file |
+| `/api/project/plan?id=` [admin] | saved drafts, planner, selected model and context signature |
 | `/api/reports` · `/api/report?name=` · `/api/decisions` · `/api/budget` [read] | reports and decisions · token use |
 | `/api/clients` · `/api/client_report?id=` [read] | clients · the client-safe report |
 | `/api/models/health` [read] | the setup check shown when the console opens |
 | `/api/memory?id=` [admin] | memory entries |
 | `/api/settings` · `/api/project/settings?id=` [admin] | company settings · project settings with the effective value per person |
-| `/api/models/catalog` · `/api/models/team` · `/api/connections` · `/api/opencode/models` [admin] | every model option · per person · connections |
+| `/api/models/catalog` · `/api/models/team` · `/api/models/routes` · `/api/connections` · `/api/opencode/models` [admin] | model options · assignments · purpose routes · connections |
 | `/api/audit` · `/api/audit.csv` · `/api/health` [admin] | the audit log (filters: `kind`, `who`, `q`, `before`) · CSV · system checks |
 | `/api/studio/templates` · `/api/github/status` [admin] | Studio templates and skills · `gh` status |
 | `/api/model_login` [admin] | the state of a running CLI login |
@@ -644,6 +718,8 @@ isn't versioned yet; use it at your own risk.
 | `/api/secrets` [owner] | save a supported credential in the configured store; no reveal |
 | `/api/notifications/read` [read] | `{ids}` or `{all: true}` |
 | `/api/projects` · `/api/project/members` · `/api/project/settings` · `/api/project/pause` [admin] | project details · team · settings · pause/resume |
+| `/api/project/resources` [admin] | create/edit/archive/restore a resource; existing entries require their revision |
+| `/api/project/plan/generate` · `/api/project/plan/accept` [admin] | explicit model consent + context signature → drafts; human-reviewed draft → task |
 | `/api/member` · `/api/add` · `/api/remove` · `/api/memory` [admin] | profiles · people (removal hands open tasks to the manager) · memory edits |
 | `/api/studio/try` · `/api/studio/hire` [admin] | a trial chat (nothing saved) · hire |
 | `/api/departments` · `/api/clients` [admin] | save or delete |
@@ -769,7 +845,8 @@ Release blockers and acceptance evidence live in [DELIVERY.md](docs/DELIVERY.md)
 
 - [ ] Durable background-code outcomes and task holds after executor errors/timeouts/cancellation
 - [ ] Complete side-effect receipts, including ungated actions and rejection-triggered PR closure
-- [ ] Explicit model fallback policy with approved data destinations and spending boundaries
+- [x] Opt-in bounded inference fallback with configured destinations and OpenRouter free-only guard
+- [ ] Currency-denominated reservations and provider billing reconciliation
 - [ ] Executor-enforced per-agent/project connector grants
 - [ ] Source validation and exact-recipient/content approval with outbound delivery reconciliation
 - [ ] Cross-machine recovery and real-account integration acceptance

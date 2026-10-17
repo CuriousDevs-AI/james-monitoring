@@ -173,9 +173,14 @@ class TaskStore:
 
     def create(self, *, title: str, owner: str, created_by: str, priority: str = "P1",
                due: str | None = None, project: str = "", goal: str = "", done_means: list[str] | None = None,
-               description: str = "", depends_on: list[str] | None = None, reviewer: str | None = None) -> Task:
+               description: str = "", depends_on: list[str] | None = None, reviewer: str | None = None,
+               source_key: str = "") -> Task:
         from .fileio import path_lock
         with self._lock, path_lock(self.dir / ".ids"):     # ids stay unique across processes (jm chat + jm run)
+            if source_key:
+                existing = next((t for t in self.all() if t.doc.meta.get("source_key") == source_key), None)
+                if existing:
+                    return existing
             priority = (priority or "P1").upper()
             if priority not in PRIORITIES:
                 raise TaskError(f"priority must be one of {PRIORITIES}")
@@ -197,6 +202,8 @@ class TaskStore:
                 "created_by": created_by, "blocked_on": "", "status_since": t0, "updated": t0,
             })
             doc.sections = {s: "" for s in SECTIONS}
+            if source_key:
+                doc.meta["source_key"] = source_key
             doc.sections["Goal"] = clean_text(description) or clean_text(title)
             doc.sections["Done means"] = "\n".join(f"- [ ] {clean_text(x)}" for x in (done_means or []) if clean_text(x))
             doc.add_line("Log", f"- {t0} — created by {created_by}, assigned to {owner}")

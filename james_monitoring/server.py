@@ -43,7 +43,7 @@ from .util import normalize_tz, today
 
 log = logging.getLogger("jm.server")
 
-PROVIDERS = ("claude-code", "codex-cli", "opencode", "anthropic", "openai", "openrouter", "ollama", "fake")
+PROVIDERS = ("claude-code", "codex-cli", "opencode", "anthropic", "openai", "openrouter", "gemini", "bedrock", "ollama", "fake")
 
 
 class _BrokenLLM:
@@ -473,6 +473,45 @@ class App:
                 "last": (self.chat.since(PROJECT_ROOM + pid, -1) or [])[-3:]}
 
     # -- project settings: this project's own model, rules and instructions — for everyone, or per person --------
+    def project_resources(self, pid: str, rid: str = "") -> dict:
+        from .project_resources import ProjectResources
+        if pid not in self.rt.cfg.projects:
+            raise ValueError("Unknown project.")
+        store = ProjectResources(self.rt.ws.root, pid)
+        return store.get(rid) if rid else {"resources": [store.view(r) for r in store.all()]}
+
+    def project_resource_save(self, b: dict, user: dict) -> dict:
+        from .project_resources import ProjectResources
+        pid = str(b.get("id", ""))
+        if pid not in self.rt.cfg.projects:
+            raise ValueError("Unknown project.")
+        result = ProjectResources(self.rt.ws.root, pid).save(b, user["name"])
+        self.rt.ws.commit(f"project {pid}: resource updated", user["name"])
+        return result
+
+    def project_plan(self, pid: str) -> dict:
+        from .project_plans import ProjectPlan
+        planner = ProjectPlan(self.rt, pid)
+        members = planner.members()
+        m = next((m for m in members if m.id == planner.project.lead), members[0] if members else None)
+        from .config import model_chain
+        conf = self.rt.cfg.llm_for(m, pid, "planning") if m else None
+        return {"plan": planner.read(), "planner": m.id if m else "", "signature": planner.signature(),
+                "model": " → ".join(c.provider + "/" + c.model for c in model_chain(conf)) if conf
+                else "Assign a project teammate first"}
+
+    def project_plan_generate(self, b: dict) -> dict:
+        from .project_plans import ProjectPlan
+        if b.get("consent") is not True:
+            raise ValueError("Confirm the selected model may read the included project context.")
+        return self.submit(ProjectPlan(self.rt, str(b.get("id", ""))).generate(
+            str(b.get("instructions", "")), str(b.get("signature", ""))), timeout=120)
+
+    def project_plan_accept(self, b: dict, user: dict) -> dict:
+        from .project_plans import ProjectPlan
+        task = ProjectPlan(self.rt, str(b.get("id", ""))).accept(b, self.rt.owner_id)
+        return self._task_json(task)
+
     def project_settings(self, pid: str) -> dict:
         cfg = self.rt.cfg
         p = cfg.projects.get(pid)
@@ -773,7 +812,21 @@ class App:
         from . import connections as cx
         if refresh:
             cx._cache.clear()
-        return cx._cached("catalog", 20 if not refresh else 0, cx.catalog)
+        catalog = cx._cached("catalog", 20 if not refresh else 0, cx.catalog)
+        # Read from the configured store, not the process environment (Keychain may intentionally be locked).
+        out = []
+        for item in catalog:
+            item = dict(item)
+            if item.get("kind") == "api":
+                status = self.rt.cfg.secret_store.status(item["key_env"])
+                item.update(ok=status == "configured", detail=f"{item['key_env']}: {status}")
+            out.append(item)
+        return out
+
+    def models_routes(self) -> dict:
+        from .config import model_settings
+        return {"company": model_settings(self.rt.cfg.llm),
+                **{k: model_settings(v) for k, v in self.rt.cfg.model_routes.items()}}
 
     def models_team(self) -> list[dict]:
         """Each person: their model, whether it's ready, the last error, and their saved sessions."""
@@ -797,26 +850,43 @@ class App:
     @config_txn
     def models_assign(self, b: dict) -> dict:
         """Use a model for the whole company (default) or for chosen people."""
-        from .config import parse_llm
+        from .config import parse_llm, model_settings
+        if b.get("reset") is True and b.get("who") in ("planning", "work"):
+            raw = self.raw()
+            (raw.get("model_routes") or {}).pop(b["who"], None)
+            self.save_raw(raw)
+            self.load()
+            return {"ok": True}
         provider = str(b.get("provider") or "").strip()
         if provider not in PROVIDERS + ("openrouter", "ollama"):
             raise ValueError(f"Unknown provider {provider!r}.")
         llm = {"provider": provider}
-        for k in ("model", "base_url", "api_key_env"):
+        for k in ("model", "base_url", "api_key_env", "region"):
             if str(b.get(k) or "").strip():
                 llm[k] = str(b[k]).strip()
         if b.get("allow_free"):
             llm["allow_free"] = True
+        llm["free_only"] = b.get("free_only") is True
+        llm["fallbacks"] = b.get("fallbacks", [])
+        for k in ("max_tokens", "temperature"):
+            if k in b:
+                llm[k] = b[k]
         if provider == "opencode" and "/" not in llm.get("model", ""):
             raise ValueError("Pick an OpenCode model (provider/model).")
-        parse_llm(llm)                                          # validates
+        parsed = parse_llm(llm, {"max_tokens": self.rt.cfg.llm.max_tokens,
+                                 "temperature": self.rt.cfg.llm.temperature})
+        if any(c.provider not in PROVIDERS for c in parsed.fallbacks):
+            raise ValueError("Unknown fallback provider.")
+        llm = model_settings(parsed)                            # allowlisted fields, no inline secrets
         who = b.get("who") if b.get("who") is not None else b.get("members")
-        if isinstance(who, str) and who != "company":
+        if isinstance(who, str) and who not in ("company", "planning", "work"):
             who = [who]
         if not who:
             raise ValueError("Choose who uses it — the company default or some people.")
         raw = self.raw()
-        if who == "company":
+        if isinstance(who, str) and who in ("planning", "work"):
+            raw.setdefault("model_routes", {})[who] = llm
+        elif who == "company":
             keep = {k: v for k, v in (raw.get("llm") or {}).items() if k in ("max_tokens", "temperature")}
             raw["llm"] = {**keep, **llm}
         else:
@@ -862,6 +932,19 @@ class App:
                 if not chk["ok"]:
                     k = (chk.get("label", c.provider), c.model, chk["detail"], chk.get("fix", ""))
                     problems.setdefault(k, []).append(f"{m.name} on {p.name or pid}")
+        from .config import model_chain
+        candidates = [("company", cfg.llm), *cfg.model_routes.items()]
+        candidates += [(m.name, m.llm) for m in cfg.team if m.llm]
+        for pid, p in cfg.projects.items():
+            if p.llm:
+                candidates.append((pid, p.llm))
+            candidates.extend((f"{mid}@{pid}", a.llm) for mid, a in p.agents.items() if a.llm)
+        for scope, conf in candidates:
+            for i, c in enumerate(model_chain(conf)):
+                chk = cx.check(c)
+                if not chk["ok"]:
+                    k = (chk.get("label", c.provider), c.model, chk["detail"], chk.get("fix", ""))
+                    problems.setdefault(k, []).append(f"{scope}" + (f" fallback {i}" if i else " route"))
         oc = cx._cached("opencode-info", 60, cx.opencode_info)
         return {"ok": not problems, "problems": [{"label": k[0], "model": k[1], "detail": k[2], "fix": k[3],
                                                   "who": v} for k, v in problems.items()],
@@ -870,7 +953,8 @@ class App:
     def test_model(self, b: dict) -> dict:
         """Setup/Settings: does this provider answer? (One tiny call.)"""
         from .config import parse_llm
-        conf = parse_llm({k: v for k, v in b.items() if k in ("provider", "model", "base_url", "allow_free") and v})
+        conf = parse_llm({k: v for k, v in b.items() if k in
+                         ("provider", "model", "base_url", "allow_free", "region", "free_only", "api_key_env") and v})
         conf.secret_store = store_for(self.base)
         if b.get("api_key") and conf.api_key_env:
             conf.api_key_override = str(b["api_key"])  # isolated probe, never process-global or persisted
@@ -890,11 +974,12 @@ class App:
         names = set(KEY_ENV.values())
         if self.rt:
             cfg = self.rt.cfg
-            models = [cfg.llm, *(m.llm for m in cfg.team)]
+            from .config import model_chain
+            models = [cfg.llm, *cfg.model_routes.values(), *(m.llm for m in cfg.team)]
             for project in cfg.projects.values():
                 models.append(project.llm)
                 models.extend(a.llm for a in project.agents.values())
-            names.update(m.api_key_env for m in models if m and m.api_key_env)
+            names.update(c.api_key_env for m in models if m for c in model_chain(m) if c.api_key_env)
             if not models_only:
                 names.update(m.bot_token_env for m in cfg.team if m.bot_token_env)
                 names.update((cfg.slack.bot_token_env, cfg.slack.app_token_env))
@@ -1930,6 +2015,9 @@ class App:
 # -- HTTP -----------------------------------------------------------------------------------
 # Every route and the permission it needs (see users.py). Anything not listed is refused.
 GET_PERMS = {
+    "/api/models/routes": "admin",
+    "/api/project/resources": "read",
+    "/api/project/plan": "admin",
     "/api/schedule/runs": "owner",
     "/api/executions": "owner",
     "/api/secrets": "owner",
@@ -1945,6 +2033,9 @@ GET_PERMS = {
     "/api/model_login": "admin", "/api/connections/login": "admin",
 }
 POST_PERMS = {
+    "/api/project/resources": "admin",
+    "/api/project/plan/generate": "admin",
+    "/api/project/plan/accept": "admin",
     "/api/schedule/acknowledge": "owner",
     "/api/ask/reconcile": "owner",
     "/api/secrets": "owner",
@@ -2064,6 +2155,8 @@ def make_handler(app: App, key: str):
                     return self._send(200, body, "text/csv; charset=utf-8",
                                       {"Content-Disposition": f'attachment; filename="audit-{today(app.rt.cfg.timezone)}.csv"'})
                 routes = {
+                    "/api/project/resources": lambda: app.project_resources(q.get("id", ""), q.get("resource_id", "")),
+                    "/api/project/plan": lambda: app.project_plan(q.get("id", "")),
                     "/api/schedule/runs": lambda: app.schedule_runs(),
                     "/api/executions": lambda: [app._ask_json(a) for a in app.rt.asks.unresolved_executions()],
                     "/api/secrets": lambda: app.secrets_status(),
@@ -2077,6 +2170,7 @@ def make_handler(app: App, key: str):
                     "/api/pulse": lambda: app.pulse(user),
                     "/api/github/status": lambda: app.github_status(),
                     "/api/models/catalog": lambda: app.models_catalog(q.get("refresh") == "1"),
+                    "/api/models/routes": app.models_routes,
                     "/api/models/team": lambda: app.models_team(),
                     "/api/models/health": lambda: app.models_health(),
                     "/api/connections": lambda: app.connections(),
@@ -2144,7 +2238,9 @@ def make_handler(app: App, key: str):
                     label = AUDIT_LABEL.get(path, path)
                     if path == "/api/task":
                         label = f"task {b.get('action', '')}".strip()
-                    detail = {"name": b.get("name", "")} if path == "/api/secrets" else b
+                    detail = {"name": b.get("name", "")} if path == "/api/secrets" else (
+                        {k: b.get(k) for k in ("id", "resource_id", "plan_id", "draft_id")}
+                        if path.startswith(("/api/project/resources", "/api/project/plan/")) else b)
                     app.rt._audit("console", user["name"], label, target, detail, via="console")
                 return self._json(200, out)
             except PermissionError as e:
@@ -2206,6 +2302,9 @@ def make_handler(app: App, key: str):
             if path in ("/api/task",) and not app.can_see_task(user, app.rt.tasks.get(str(b.get("id", "")))):
                 raise PermissionError("That task is private.")
             routes = {
+                "/api/project/resources": lambda: app.project_resource_save(b, user),
+                "/api/project/plan/generate": lambda: app.project_plan_generate(b),
+                "/api/project/plan/accept": lambda: app.project_plan_accept(b, user),
                 "/api/schedule/acknowledge": lambda: app.schedule_acknowledge(b, user),
                 "/api/ask/reconcile": lambda: app.reconcile_ask(b, user),
                 "/api/chat": lambda: app.chat_send(str(b.get("room", TEAM_ROOM)), str(b.get("text", "")), user,

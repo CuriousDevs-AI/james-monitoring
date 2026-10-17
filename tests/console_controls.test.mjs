@@ -13,7 +13,11 @@ class Element {
   constructor(tag, attrs, children) {
     this.tag = tag; this.attrs = {...attrs}; this.children = children.flat(9).filter(x => x != null && x !== false);
     Object.assign(this, attrs); this.value = attrs.value || ''; this.disabled = !!attrs.disabled;
+    this.style = {};
+    if (tag === 'textarea') this.value = this.textContent; // HTML ignores a textarea value attribute.
   }
+  focus() {}
+  addEventListener() {}
   put(...children) { this.children = children.flat(9).filter(x => x != null && x !== false); return this; }
   setAttribute(name, value) { this.attrs[name] = value; }
   removeAttribute(name) { delete this.attrs[name]; }
@@ -39,6 +43,89 @@ const metadata = {backend: 'env', namespace: '', encrypted_at_rest: false,
   entries: [{name: 'OPENAI_API_KEY', status: 'missing'}]};
 
 test('entire console JavaScript parses', () => { new vm.Script(script); });
+
+test('model routing needs consent, retains fallback settings and changes only the selected purpose', async () => {
+  const calls = [], saved = {company: {provider: 'claude-code', model: 'sonnet'},
+    planning: {provider: 'gemini', model: 'planner', fallbacks: [{provider: 'openrouter', model: 'openrouter/free', free_only: true}]}};
+  const context = vm.createContext({h, S: {}, AI_HEALTH: null,
+    PROVIDERS: [['claude-code', 'Claude CLI'], ['gemini', 'Gemini'], ['openrouter', 'OpenRouter'], ['bedrock', 'Bedrock']],
+    api: async (path, body) => { calls.push({path, body}); return path === '/api/models/routes' ? saved : {}; }});
+  new vm.Script(section('function modelRoutingCard(', 'function modelsCard(')).runInContext(context);
+  const card = context.modelRoutingCard(); await new Promise(setImmediate);
+  const field = label => find(card, x => x.attrs['aria-label'] === label);
+  field('Model routing scope').value = 'planning'; field('Model routing scope').onchange();
+  assert.equal(field('Primary provider').value, 'gemini');
+  assert.equal(field('Fallback 1 model').value, 'openrouter/free');
+  const save = find(card, x => x.tag === 'button' && x.textContent === 'Save routing');
+  await save.onclick(); assert.equal(calls.filter(x => x.body).length, 0);
+  field('Approve model routing').checked = true;
+  await save.onclick();
+  const posted = calls.find(x => x.body)?.body;
+  assert.equal(posted.who, 'planning'); assert.equal(posted.fallbacks[0].free_only, true);
+  field('Primary provider').value = 'bedrock'; field('Primary provider').onchange();
+  assert.equal(field('Primary model').value, '');
+  assert.match(card.textContent, /not IAM\/SSO/);
+});
+
+function projectFixture(respond = async () => ({})) {
+  const calls = [], p = {id: 'site', name: 'Site', members: ['riya'], lead: 'riya'};
+  const context = vm.createContext({h, icon: () => '', badge: text => h('span', {}, text),
+    can: () => true, nameOf: x => x, VIEW: 'project', PROJECT: 'site', FILTER: {},
+    S: {projects: [p], priorities: ['P0','P1','P2'], members: [{id: 'riya', name: 'Riya'}]},
+    projOf: () => p, closeSheet: () => {}, render: () => {}, boot: () => {}, toast: () => {},
+    api: async (path, body) => { calls.push({path, body}); return respond(path, body); }});
+  context.openSheet = (title, ...kids) => { context.sheet = h('div', {}, ...kids); };
+  new vm.Script(section('function newTaskSheet(', 'function changesSheet(')
+    + section('function projectResourceSheet(', '// Project settings:')).runInContext(context);
+  return {context, calls, p};
+}
+
+test('draft fields retain description and checks; creation needs explicit human review', async () => {
+  const f = projectFixture(async () => ({id: 'T-001', owner: 'riya'}));
+  f.context.newTaskSheet({project: 'site', plan_id: 'plan', draft_id: 'D1', title: 'Draft',
+    owner: 'riya', description: 'Reviewed scope', done_means: ['Evidence checked']});
+  const sheet = f.context.sheet, field = label => find(sheet, x => x.attrs['aria-label'] === label);
+  assert.equal(field('Task description').value, 'Reviewed scope');
+  assert.equal(field('Acceptance checks').value, 'Evidence checked');
+  const create = find(sheet, x => x.tag === 'button' && x.textContent === 'Create reviewed task');
+  await create.onclick(); assert.equal(f.calls.length, 0);
+  find(sheet, x => x.type === 'checkbox').checked = true;
+  field('Task owner').value = 'riya'; field('Task priority').value = 'P1';
+  await create.onclick();
+  assert.equal(f.calls[0].path, '/api/project/plan/accept');
+  assert.equal(f.calls[0].body.reviewed, true);
+  assert.deepEqual(Array.from(f.calls[0].body.task.done_means), ['Evidence checked']);
+  assert.equal(f.calls.filter(x => x.path === '/api/tasks').length, 0);
+});
+
+test('resource editing retains notes and explains external links do not grant access', () => {
+  const f = projectFixture();
+  f.context.projectResourceSheet(f.p, {id: 'resource', title: 'Scope', notes: 'Preserve existing context'});
+  assert.equal(find(f.context.sheet, x => x.attrs['aria-label'] === 'Resource notes').value, 'Preserve existing context');
+  assert.match(f.context.sheet.textContent, /link does not grant access/);
+});
+
+test('AI drafting needs consent and sends the reviewed context signature without creating tasks', async () => {
+  const f = projectFixture(async () => ({plan: null, planner: 'riya', model: 'fake', signature: 'context-v1'}));
+  const body = h('div');
+  await f.context.projectTaskDrafts(f.p, body);
+  const generate = find(body, x => x.tag === 'button' && x.textContent === 'Draft tasks with AI');
+  await generate.onclick(); assert.equal(f.calls.length, 1); // metadata GET only
+  find(body, x => x.type === 'checkbox').checked = true;
+  await generate.onclick();
+  assert.equal(f.calls[1].path, '/api/project/plan/generate');
+  assert.equal(f.calls[1].body.consent, true);
+  assert.equal(f.calls[1].body.signature, 'context-v1');
+  assert.equal(f.calls.filter(x => x.body).length, 1);
+});
+
+test('uncertain chat approval footers never show approve or reject buttons', () => {
+  const context = vm.createContext({h, ASKS: {a: {execution: {status: 'uncertain'}}}, PULSE: null, can: () => true});
+  new vm.Script(section('function askFooter(', '// A conversation:')).runInContext(context);
+  const footer = context.askFooter('a');
+  assert.match(footer.textContent, /Do not retry/);
+  assert.equal(find(footer, x => x.tag === 'button'), undefined);
+});
 
 test('secret status is manual; saving clears the password and does not claim connection success', async () => {
   const f = fixture(async (path, body) => body ? {restart_required: true} : metadata);

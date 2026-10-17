@@ -108,6 +108,9 @@ class LLMConfig:
     max_tokens: int = 8000
     temperature: float = 0.3
     allow_free: bool = False       # OpenCode free models (opencode/…): opt-in, they run OpenCode's own agent
+    region: str = "us-east-1"       # Bedrock API region; model access must be enabled there
+    free_only: bool = False        # enforce an OpenRouter free model id, never upgrade to paid
+    fallbacks: list["LLMConfig"] = field(default_factory=list)
     secret_store: SecretStore | None = field(default=None, repr=False, compare=False)
     api_key_override: str | None = field(default=None, repr=False, compare=False)
 
@@ -123,7 +126,19 @@ class LLMConfig:
 CLI_PROVIDERS = ("claude-code", "claude_code", "claude-cli", "subscription", "codex-cli", "codex_cli", "opencode",
                  "open-code", "fake")
 KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
-           "codex": "OPENAI_API_KEY", "openrouter": "OPENROUTER_API_KEY"}
+           "codex": "OPENAI_API_KEY", "openrouter": "OPENROUTER_API_KEY", "gemini": "GEMINI_API_KEY",
+           "bedrock": "AWS_BEARER_TOKEN_BEDROCK"}
+
+
+def model_settings(c: LLMConfig) -> dict:
+    """Public model configuration, never credentials or the secret-store object."""
+    return {**{k: getattr(c, k) for k in ("provider", "model", "base_url", "api_key_env", "max_tokens",
+               "temperature", "allow_free", "region", "free_only")},
+            "fallbacks": [model_settings(f) for f in c.fallbacks]}
+
+
+def model_chain(c: LLMConfig):
+    return [c, *c.fallbacks]
 
 # What an agent may do on its own. green = just do it · yellow = do it and tell the owner · red = ask first
 # (the action waits as an Approve/Reject card and runs only after the owner approves).
@@ -220,6 +235,7 @@ class Config:
     clients: dict[str, Client] = field(default_factory=dict)
     users: list[User] = field(default_factory=list)
     daily_brief: str = "08:30"     # the personal assistant's morning brief (if there is an assistant)
+    model_routes: dict[str, LLMConfig] = field(default_factory=dict)
     secret_store: SecretStore | None = field(default=None, repr=False, compare=False)
 
     @property
@@ -272,11 +288,12 @@ class Config:
         return ((pa.permissions.get(action) if pa else None) or (p.permissions.get(action) if p else None)
                 or member.permissions.get(action) or self.permissions.get(action) or "green")
 
-    def llm_for(self, member: Member, project: str = "") -> "LLMConfig":
+    def llm_for(self, member: Member, project: str = "", purpose: str = "") -> "LLMConfig":
         """The model for this person — on a project: their project model → the project's → theirs → the company's."""
         p = self.projects.get(project) if project else None
         pa = p.agents.get(member.id) if p else None
-        return (pa.llm if pa and pa.llm else None) or (p.llm if p and p.llm else None) or member.llm or self.llm
+        return ((pa.llm if pa and pa.llm else None) or (p.llm if p and p.llm else None)
+                or member.llm or self.model_routes.get(purpose) or self.llm)
 
     def llm_source(self, member: Member, project: str = "") -> str:
         """Where this person's model comes from: person_project | project | person | company."""
@@ -347,7 +364,7 @@ def _levels(d: Any, where: str) -> dict[str, str]:
     return out
 
 
-def parse_llm(llm: dict, base: dict | None = None) -> LLMConfig:
+def parse_llm(llm: dict, base: dict | None = None, *, nested: bool = False) -> LLMConfig:
     """`llm` is merged over `base` (the company default). Changing the provider resets model/url/key."""
     merged = dict(base or {})
     if llm.get("provider") and str(llm["provider"]) != str(merged.get("provider") or ""):
@@ -356,6 +373,20 @@ def parse_llm(llm: dict, base: dict | None = None) -> LLMConfig:
     provider = str(merged.get("provider") or "anthropic")
     if provider == "openrouter" and not merged.get("base_url"):
         merged["base_url"] = "https://openrouter.ai/api/v1"
+    if provider == "gemini" and not merged.get("base_url"):
+        merged["base_url"] = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    fallbacks = merged.get("fallbacks", [])
+    if not isinstance(fallbacks, list) or len(fallbacks) > 2 or (nested and fallbacks):
+        raise ConfigError("Choose at most two fallback models; nested fallback chains are not allowed.")
+    if any(not isinstance(f, dict) or not f.get("provider") for f in fallbacks):
+        raise ConfigError("Each fallback needs an explicit provider.")
+    if merged.get("free_only") and (provider != "openrouter" or not (
+            str(merged.get("model", "")).endswith(":free") or merged.get("model") == "openrouter/free")):
+        raise ConfigError("Free-only routing requires OpenRouter openrouter/free or a model ending in :free.")
+    if merged.get("free_only") and merged.get("base_url", "").rstrip("/") != "https://openrouter.ai/api/v1":
+        raise ConfigError("Free-only routing requires the official OpenRouter endpoint.")
+    if merged.get("free_only") and any(f.get("free_only") is not True for f in fallbacks):
+        raise ConfigError("Every fallback in a free-only chain must also be free-only.")
     if provider == "ollama":
         merged.setdefault("base_url", "http://localhost:11434/v1")
         merged.setdefault("api_key_env", "")                 # local: no key
@@ -373,6 +404,9 @@ def parse_llm(llm: dict, base: dict | None = None) -> LLMConfig:
         max_tokens=max(int(merged.get("max_tokens") or 8000), 4000),   # below ~4k, documents get cut off
         temperature=float(merged.get("temperature", 0.3)),
         allow_free=bool(merged.get("allow_free", False)),
+        region=str(merged.get("region") or "us-east-1"),
+        free_only=bool(merged.get("free_only", False)),
+        fallbacks=[parse_llm(f, nested=True) for f in fallbacks],
     )
 
 
@@ -383,6 +417,11 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
     except SecretStoreError as e:
         raise ConfigError(str(e)) from None
     llm_raw = raw.get("llm") or {}
+    routes = raw.get("model_routes") or {}
+    if not isinstance(routes, dict) or set(routes) - {"planning", "work"}:
+        raise ConfigError("model_routes supports only planning and work.")
+    if any(not isinstance(v, dict) or not v.get("provider") for v in routes.values()):
+        raise ConfigError("Each model route needs an explicit provider.")
     team_raw = raw.get("team") or []
     if not team_raw:
         raise ConfigError("config: `team` must list at least one member")
@@ -514,6 +553,7 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         owner_user_id=int(_get(raw, "owner.telegram_user_id", 0) or 0),
         extra_user_ids=[int(x) for x in (_get(raw, "owner.extra_user_ids", []) or [])],
         llm=parse_llm(llm_raw),
+        model_routes={k: parse_llm(v) for k, v in routes.items()},
         workspace_path=ws,
         workspace_push=bool(_get(raw, "workspace.push", False)),
         group_chat_id=int(_get(raw, "telegram.group_chat_id", 0) or 0),
@@ -549,7 +589,7 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         secret_store=secret_store,
     )
     cfg.slack.secret_store = secret_store
-    models = [cfg.llm]
+    models = [cfg.llm, *cfg.model_routes.values()]
     for member in cfg.team:
         member.secret_store = secret_store
         models.append(member.llm)
@@ -558,5 +598,6 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         models.extend(agent.llm for agent in project.agents.values())
     for model in models:
         if model is not None:
-            model.secret_store = secret_store
+            for candidate in model_chain(model):
+                candidate.secret_store = secret_store
     return cfg
