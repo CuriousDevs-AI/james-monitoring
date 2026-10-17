@@ -38,9 +38,11 @@ After inspecting destinations and any task/approval records, the owner can submi
 {"id":"<64-character receipt id>","evidence":"Checked the destination, corrected partial effects; future occurrences are safe."}
 ```
 
-to `POST /api/schedule/acknowledge`. Evidence is required. This records who checked what, does not change
+to `POST /api/schedule/acknowledge`, or use Approvals → Execution recovery in the owner console. Evidence
+and explicit verification are required by the form. This records who checked what, does not change
 the original failure into success, does not call an agent and does not retry that occurrence. The next due
-occurrence may start. Never include secrets in evidence. UI controls are not part of this backend increment.
+occurrence may start. Never include secrets in evidence. The console also shows recent scheduled outcomes
+without labelling handler completion as verified delivery.
 
 ## Deployment and limits
 

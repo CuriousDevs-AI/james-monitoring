@@ -52,7 +52,10 @@ trigger native permission prompts. It is not polled automatically.
 saved. The audit entry retains only the reference name. There is no reveal or deletion endpoint. The response
 flags when a restart is required: already-created SDK clients or transports may retain their old credential.
 The existing model-key route retains its admin permission but can write only model credential references.
-The dedicated Settings management screen and per-agent credential grants are follow-up work.
+The owner's Settings → Secrets screen provides an explicit status check and a password-only replacement
+form. It clears the value after either save outcome and when leaving the Secrets tab, and displays restart
+guidance without claiming the connector is live. There is no automatic status polling, reveal, deletion or
+backend migration. Per-agent credential grants remain follow-up work.
 
 ## Migration, revocation and recovery
 

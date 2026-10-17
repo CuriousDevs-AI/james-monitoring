@@ -30,6 +30,10 @@ Unrelated one-off work remains available. Do not create a replacement request me
 
 ## Owner recovery API
 
+The owner console exposes this flow under Approvals → Execution recovery. It shows interrupted/uncertain
+attempts separately from normal approval buttons, requires a verified outcome, evidence and an explicit
+verification checkbox, and never offers a retry button. Unsaved evidence is protected from automatic refresh.
+
 `GET /api/executions` lists all unresolved attempts (not just the latest 50 approvals). The normal asks API
 includes execution metadata; the owner's notifications flag unresolved attempts. Neither endpoint executes
 anything. Both recovery endpoints require the authenticated owner, not an admin or an agent.
