@@ -127,12 +127,19 @@ def _check(conf: LLMConfig) -> dict:
     if not conf.model:
         return {**out, "detail": "no model id set", "fix": "Set a model id (e.g. from your provider's model list)."}
     local = bool(re.match(r"https?://(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:|/|$)", conf.base_url or ""))
-    if kind == "openai" and local and not conf.api_key:
+    from .secret_store import SecretStoreError
+    try:
+        key = conf.api_key
+    except SecretStoreError as e:
+        return {**out, "logged_in": False, "credential_status": "unavailable", "detail": str(e),
+                "fix": "Unlock or restore access to the configured credential store, then retry."}
+    out["credential_status"] = "configured" if key else "missing"
+    if kind == "openai" and local and not key:
         return {**out, "ok": True, "logged_in": True, "detail": f"local endpoint {conf.base_url}"}
     if not conf.api_key_env:
         return {**out, "logged_in": False, "detail": "no API key variable set",
                 "fix": "Set the API key in AI model settings (e.g. OPENROUTER_API_KEY for OpenRouter)."}
-    if not conf.api_key:
+    if not key:
         return {**out, "logged_in": False, "detail": f"{conf.api_key_env or 'API key'} is not set",
                 "fix": "Paste the API key in AI model settings and save."}
     return {**out, "ok": True, "logged_in": True, "detail": f"key set ({conf.api_key_env})"}

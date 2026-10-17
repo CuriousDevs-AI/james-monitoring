@@ -16,6 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+keychain = ["keyring>=25,<26; sys_platform == 'darwin'"]
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.40"]
 slack = ["slack_sdk>=3.27"]

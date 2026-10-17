@@ -1894,7 +1894,7 @@ function loginSheet(provider, target, label, done, force = false) {
       render_(await api("/api/model_login?provider=" + encodeURIComponent(provider)).catch(() => null)); }, 1200);
   })();
 }
-// An API key, pasted once, saved to .env (never shown again).
+// An API key, pasted once, saved to the selected credential store (never shown again).
 function keyBox(env, done) {
   const input = h("input", {type: "password", autocomplete: "off", placeholder: `Paste ${env}`, style: "max-width:320px"}), out = h("span", {class: "xs"});
   return h("div", {class: "row", style: "margin-top:6px;flex-wrap:nowrap"}, input, h("button", {class: "btn primary sm", onclick: async () => {

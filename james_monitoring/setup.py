@@ -18,7 +18,8 @@ from typing import Protocol
 import yaml
 
 from .config import Config, load_config, parse_config
-from .fileio import path_lock, set_env, update_config, write_config
+from .fileio import path_lock, update_config, write_config
+from .secret_store import save_secrets
 from .workspace import Workspace
 
 
@@ -130,11 +131,6 @@ def default_persona(member: dict, owner: str) -> str:
             .replace("{owns}", owns).replace("{owner}", owner))
 
 
-def _append_env(env_path: Path, pairs: dict[str, str]) -> None:
-    """Add or replace keys in .env (a new token must win over the old one)."""
-    set_env(env_path, pairs)
-
-
 def scaffold(raw: dict, *, personas: dict[str, str] | None = None, goals: list[str] | None = None,
              tokens: dict[str, str] | None = None, api_key: str = "", base_dir: Path = Path.cwd(),
              clone_url: str = "", skills: dict[str, ImportedSkill] | None = None) -> Config:
@@ -154,7 +150,7 @@ def scaffold(raw: dict, *, personas: dict[str, str] | None = None, goals: list[s
         m = cfg.member(mid)
         if m and tok:
             env[m.bot_token_env] = tok
-    _append_env(base_dir / ".env", env)
+    save_secrets(base_dir, env)
 
     ws_path = cfg.workspace_path
     if clone_url and not (ws_path / ".git").exists():

@@ -188,6 +188,10 @@ The console edits both for you. Every change is validated and written atomically
 as `config.yaml.bak`. A fully commented example is [`examples/config.yaml`](examples/config.yaml), and every
 variable is in [`.env.example`](.env.example).
 
+macOS installations can opt into native Keychain storage instead of `.env` for connector credentials.
+See [Credential storage](docs/SECRETS.md) for configuration, the owner-only management API and migration limits.
+Legacy storage remains the default; nothing is automatically migrated.
+
 <details>
 <summary><b>config.yaml at a glance</b></summary>
 
@@ -608,8 +612,8 @@ CI runs the suite on Python 3.10 and 3.12 for every push and pull request.
 
 - **Local by default.** The server binds `127.0.0.1`. Every API call needs a key, compared in constant time.
   Responses are sent with `no-store`, `nosniff`, `no-referrer` and `X-Frame-Options: DENY`.
-- **Secrets stay in `.env`,** written with mode 0600 and never committed. Sign-in keys are stored only as SHA-256
-  hashes.
+- **Credential storage:** legacy `.env` (plaintext, mode 0600) or opt-in macOS Keychain with no environment
+  fallback. See [storage boundaries and recovery](docs/SECRETS.md). Sign-in keys are stored only as SHA-256 hashes.
 - **Least privilege by role,** enforced on the server for every route (see the table above).
 - **Agents are fenced:**
   - They can read only `docs/`, `tasks/`, `reports/`, `team/`, `asks/` and `decisions/`, checked on the resolved

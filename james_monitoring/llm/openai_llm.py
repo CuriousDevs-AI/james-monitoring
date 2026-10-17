@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from ..config import LLMConfig
+from ..secret_store import SecretStoreError
 from . import LLMError, LLMResult
 
 # Reasoning models (o1, o3, o4-mini, gpt-5…) take max_completion_tokens and only their default temperature.
@@ -20,7 +21,13 @@ class OpenAILLM:
             raise LLMError("pip install 'james-monitoring[openai]'") from e
         if not cfg.model:
             raise LLMError("llm.model is empty — set a model id in config.yaml")
-        self.client = openai.OpenAI(api_key=cfg.api_key or "not-needed", base_url=cfg.base_url or None)
+        try:
+            key = cfg.api_key
+        except SecretStoreError as e:
+            raise LLMError(str(e)) from None
+        if cfg.secret_store and cfg.secret_store.backend == "keychain" and cfg.api_key_env and not key:
+            raise LLMError("API credential is missing from Keychain; environment fallback is disabled.")
+        self.client = openai.OpenAI(api_key=key or "not-needed", base_url=cfg.base_url or None)
         self.cfg = cfg
         self.reasoning = bool(_REASONING.match(cfg.model.split("/")[-1]))
         self.json_mode = True                    # switched off if the endpoint doesn't support it
