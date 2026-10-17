@@ -80,6 +80,22 @@ test('duplicate credential submits cannot start a second request while saving', 
   finish({restart_required: true}); await pending;
 });
 
+test('status refresh cannot race a credential save or another refresh', async () => {
+  let finish, reads = 0;
+  const f = fixture(() => ++reads === 1 ? metadata : new Promise(resolve => { finish = resolve; }));
+  const card = f.context.secretsCard();
+  const check = find(card, x => x.tag === 'button' && x.textContent === 'Check status');
+  await check.onclick();
+  byId(card, 'secret-reference').value = 'OPENAI_API_KEY';
+  byId(card, 'secret-value').value = 'synthetic';
+  const pending = check.onclick();
+  await find(card, x => x.tag === 'form').onsubmit(event);
+  await check.onclick();
+  assert.equal(f.calls.length, 2); // GET + GET, no concurrent write or third read
+  finish(metadata); await pending;
+  assert.equal(byId(card, 'secret-value').disabled, false);
+});
+
 test('action reconciliation requires evidence, outcome and explicit verification; calls only reconcile endpoint', async () => {
   const f = fixture(), form = f.context.recoveryForm('action', {id: 'ASK-001'});
   await form.onsubmit(event);

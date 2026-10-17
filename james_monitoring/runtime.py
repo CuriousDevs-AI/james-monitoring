@@ -910,16 +910,20 @@ class Runtime:
         messages = [*hist, {"role": "user", "content": user_msg}]
 
         last_error = ""
+        budget_exhausted = False
         deadline = time.monotonic() + TURN_SECONDS           # one turn never holds this person's lock for long
 
         sess = self.session_for(m, room, ev.project) if getattr(llm, "sessions", False) else None
 
         async def call(msgs):
-            nonlocal last_error
+            nonlocal last_error, budget_exhausted
             if time.monotonic() > deadline:
                 last_error = f"the turn took longer than {TURN_SECONDS // 60} minutes"
                 return None
             for attempt in range(len(RETRY_BACKOFF) + 1):
+                if cap and self._usage_today(m.id) >= cap:
+                    budget_exhausted = True
+                    return None
                 try:
                     if sess is not None:
                         res = await asyncio.to_thread(llm.complete, system, msgs, sess)
@@ -948,6 +952,10 @@ class Runtime:
         for _round in range(MAX_READ_ROUNDS + 2):
             res = await call(messages)
             if res is None:
+                if budget_exhausted:
+                    return ("💸 Today's token budget was reached during this turn. No further model calls or "
+                            "actions from the incomplete response were run. Review the task before continuing "
+                            "after the budget resets; this partial turn was not queued for replay.")
                 # Said in the first person: this message appears in the chat *as* this teammate.
                 told = "I've flagged it" if m.monitor else f"{self.cfg.monitor.name} has been told"
                 return (f"⚠️ I couldn't think right now (model error{': ' + last_error if last_error else ''}). "
@@ -980,6 +988,9 @@ class Runtime:
                          "\n\nSome actions FAILED. Return corrected actions for the failed ones only (or none), and a "
                          "reply that tells the truth about what happened."}]
             res = await call(fix_msgs)
+            if res is None and budget_exhausted:
+                notes.append("💸 Repair stopped at today's token budget. Earlier action results still apply; "
+                             "no repair or original request was queued for replay.")
             if res is not None:
                 fixed = parse_reply(res.text)
                 if fixed.ok:
@@ -1432,6 +1443,15 @@ class Runtime:
             await self.bus.send_owner(m.id, f"⚠️ Coding run for {task_id} failed: {e}")
             return
         self.tasks.set_output(task_id, m.id, f"branch {r.branch} @ {r.commit} ({project_id})")
+        if not r.ok:
+            self.tasks.add_log(task_id, m.id, "coding command failed; working branch retained for owner inspection")
+            self.tasks.set_status(task_id, "blocked", by=self.owner_id,
+                                  blocked_on=f"{self.cfg.owner_name} — inspect unsuccessful coding run",
+                                  note="Partial changes are not ready for merge approval")
+            await asyncio.to_thread(self.ws.commit, f"{task_id}: unsuccessful coding run needs review", m.name)
+            await self.bus.send_owner(m.id, f"⚠️ Coding command for {task_id} failed. The working branch is "
+                                      f"{r.branch}; no pull request or merge approval was created. Inspect them first.")
+            return
         if r.diffstat == "(no changes)":
             self.tasks.add_log(task_id, m.id, "coding run produced no changes")
             await asyncio.to_thread(self.ws.commit, f"{task_id}: coding run, no changes", m.name)

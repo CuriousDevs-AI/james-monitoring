@@ -2022,7 +2022,10 @@ function secretsCard() {
     result = h("div", {class: "small", role: "status", "aria-live": "polite", style: "margin-top:10px"});
   const save = h("button", {type: "submit", class: "btn primary", disabled: true, style: "margin-top:12px"}, icon("lock"), "Save credential");
   const check = btn("Check status", async () => {
-    check.disabled = true; status.textContent = "Checking credential storage… Native Keychain may ask for permission.";
+    if (check.disabled) return;
+    const couldSave = !reference.disabled;
+    check.disabled = reference.disabled = secret.disabled = save.disabled = true;
+    status.textContent = "Checking credential storage… Native Keychain may ask for permission.";
     try {
       const data = await api("/api/secrets");
       status.put(h("div", {class: "row"}, badge(data.backend === "keychain" ? "macOS Keychain" : "Environment / .env", data.encrypted_at_rest ? "info" : "warning"),
@@ -2038,7 +2041,10 @@ function secretsCard() {
       reference.put(h("option", {value: ""}, "Choose a credential reference…"), data.entries.map(entry => h("option", {value: entry.name}, entry.name)));
       if (data.entries.some(entry => entry.name === previous)) reference.value = previous;
       reference.disabled = secret.disabled = save.disabled = !data.entries.length;
-    } catch (error) { status.textContent = "Status could not be checked. Verify your owner access and unlock the selected store, then try again."; }
+    } catch (error) {
+      reference.disabled = secret.disabled = save.disabled = !couldSave;
+      status.textContent = "Status could not be checked. Verify your owner access and unlock the selected store, then try again.";
+    }
     finally { check.disabled = false; }
   }, "outline sm", "refresh");
   const form = h("form", {onsubmit: async event => {
