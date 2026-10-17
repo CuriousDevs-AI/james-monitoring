@@ -5,8 +5,8 @@ message reached its destination or a background coding run finished.
 
 ## Covered in this increment
 
-For requests of kind `action`, James persists an execution attempt before recording approval and running
-the action. The attempt includes the approver, timestamp and hash of the reviewed request. Changes between
+For approved requests of kind `action`, `merge` and `github_change`, James persists an execution attempt
+before running the side effect. The attempt includes the approver, timestamp and hash of the request. Changes between
 preflight and the durable write are refused. Action requests show the proposed action, destination and full
 content in Details; requests exceeding the chat preview require console approval.
 
@@ -27,6 +27,14 @@ on a shared/network filesystem or claim distributed exactly-once delivery.
 Any recorded attempt prevents re-approving/rejecting that same request through the normal decision route.
 Interrupted and uncertain task-linked work is held in scheduling, dispatch and action checks until reconciled.
 Unrelated one-off work remains available. Do not create a replacement request merely to bypass this hold.
+
+GitHub proposals are checked against the current connection and task before the attempt is recorded.
+Merge dependency checks also run first. Once a merge/proposal handler starts, an exception is conservatively
+uncertain even if it may have failed before changing anything. There is no longer an instruction to blindly
+approve the same failed merge again. Inspect the local repository/remote PR or task state and reconcile.
+Cancelling a merge waits for its bounded git worker to exit before releasing the decision lock; cancelling
+an asyncio task cannot stop an already-running thread. This may delay shutdown until command timeouts expire.
+Reconciliation records evidence only: it does not repair task state, merge code or replay follow-up messages.
 
 ## Owner recovery API
 
@@ -51,9 +59,13 @@ Do not paste credentials or private provider diagnostics into the evidence field
 
 ## Limits still requiring work
 
-This increment journals `action` requests only. Merge requests, inbound GitHub proposals, scheduled-run
-attempts, green/yellow actions and background coding results are not yet covered by this execution record.
-Do not treat their existing request IDs or runtime state as a transactional ledger.
+Approved actions, merges and inbound GitHub proposals are journaled. Rejection-triggered PR closure,
+green/yellow actions and background coding results are not yet covered by this execution record. Scheduled
+runs have their own receipts (see SCHEDULER.md). A successful approval handler does not prove completion of
+any follow-up tasks it spawned. Do not treat their request IDs or runtime state as a transactional ledger.
+Merge requests still identify a branch/PR, not an immutable reviewed commit; head-change validation remains
+a release requirement. The execution hash detects request-file changes during preflight, not a changed remote
+PR head or a stale approval page opened before another edit.
 
 There is no automatic retry, external provider reconciliation, outbox delivery, or cross-machine idempotency.
 The same operation intentionally created under another approval ID is a separate request, not automatically

@@ -85,4 +85,8 @@ With `prs: true`, and a project that has a code repo pushed to GitHub (`origin`)
    - **Approve**: the PR is merged on GitHub, the task is done, and your local `main` is fast-forwarded if it's clean.
    - **Reject**: the PR is closed with your reason.
 
-If the merge fails (a conflict, a required check), the request stays open, so you can fix it and approve again.
+Approved merges and GitHub proposals persist an execution attempt before applying their side effects.
+If a handler fails, its outcome is marked uncertain and that request cannot be approved again, even when a
+local merge conflict was rolled back. The owner checks the actual repository/PR/task state and records
+reconciliation under Approvals → Execution recovery. This does not retry the operation. See
+[EXECUTION.md](EXECUTION.md) for the boundaries and remaining immutable-head requirement.

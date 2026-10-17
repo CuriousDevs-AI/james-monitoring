@@ -72,7 +72,7 @@ Before recording an action approval, the runtime checks that the requesting agen
 type is supported, and the agent can still access both the action's task and the originating event's task.
 New requests retain the event task separately; older requests use their existing stored task reference.
 These checks and the dependency preflight leave invalid requests pending, so they can be rejected or repaired.
-Action requests now persist a single execution attempt and hold uncertain task-linked work for owner
+Approved action, merge and GitHub-proposal requests persist a single execution attempt and hold uncertain task-linked work for owner
 reconciliation. See [EXECUTION.md](EXECUTION.md) for the recovery API and remaining coverage gaps.
 
 `message_agent` hand-offs (and the reply) are recorded in the project's room, or in the backchannel when no
@@ -110,7 +110,9 @@ they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits
   runtime first and swaps it in one step. The old one's work in flight continues, sharing the per-person locks.
 - **git**: one lock per repo (threads and processes), no prompts (`GIT_TERMINAL_PROMPT=0`, SSH BatchMode), no
   signing, timeouts, and pushes in the background. A failed commit is recorded and alerted; it never breaks a reply.
-- **Merges** run before an approval counts. A failed merge is rolled back (`merge --abort`) and the request stays open.
+- **Merges** have an execution attempt before git runs. Failed/interrupted attempts require owner
+  reconciliation, not another approval click, even if local conflict rollback succeeded. Cancellation keeps
+  the decision lock until the git worker has stopped. See [EXECUTION.md](EXECUTION.md).
 - **Agents read files** only under docs/tasks/reports/team/asks/decisions, checked on the resolved path. Nothing under
   `.git`, `.jm` or any `.env` is readable.
   Personal-assistant team files, tasks and asks additionally require the owning assistant's identity. Private
@@ -122,7 +124,7 @@ they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits
   Raw GitHub proposal files are not exposed to agent file reads; approved feedback is delivered through the task.
   Review rejects changes when the relevant field, task owner/project or connection scope no longer matches.
   Comment cursors advance after proposals are persisted; comment IDs prevent replays after decisions.
-  This is not yet a transactional execution ledger or full cross-project data isolation. Previously exported
+  Approved proposals now have execution receipts; this is not full cross-project data isolation. Previously exported
   private issues and historical shared artifacts require separate review; this upgrade does not delete them.
 - **Telegram**: edits never re-trigger work, messages are handled once, 429s are waited out, supergroup upgrades are
   followed (and saved), and a bot that fails to start never leaves others polling.
