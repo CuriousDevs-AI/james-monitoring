@@ -15,7 +15,9 @@ live account, a free provider, or a production deployment works.
 - [ ] Durable approval execution attempts and human reconciliation after uncertain outcomes; no blind replay.
 - [ ] Recovery drill from another directory/machine with configuration, tasks, private runtime state and
       separately re-provisioned credentials. GitHub Projects alone is not a full backup.
-- [ ] Scheduled-run history distinguishes scheduled, running, completed, interrupted and failed work.
+- [x] Scheduler-owned run receipts distinguish scheduled, running, completed, interrupted, failed and
+      skipped work; interrupted/failed families require owner acknowledgment. See [SCHEDULER.md](SCHEDULER.md)
+      for local-filesystem and handler-return limits. Owner UI and provider delivery receipts remain separate.
 - [ ] Explicit, opt-in model fallback policy with budget/privacy boundaries; never silently send private
       context to a different provider or treat a free tier as guaranteed capacity.
 - [ ] Per-agent/project connector grants enforced by the executor, not merely by a persona prompt.

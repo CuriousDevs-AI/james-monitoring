@@ -78,6 +78,14 @@ def atomic_write(path: Path | str, text: str, mode: int | None = None) -> None:
         elif path.exists():
             os.chmod(tmp, path.stat().st_mode & 0o777)
         os.replace(tmp, path)
+        if os.name == "posix":
+            # Persist the replacement directory entry as well as the file contents (approval intent must
+            # survive a host crash before any side effect starts). Errors deliberately fail the write.
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     except BaseException:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp)

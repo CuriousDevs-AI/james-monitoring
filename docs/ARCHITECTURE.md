@@ -5,8 +5,9 @@ model all come from `config.yaml` and the workspace.
 
 ## Principles
 
-1. **Git is the truth.** Tasks, memory, decisions and reports are markdown files in a git repo. Telegram is
-   only the interface. If something isn't in git, it didn't happen.
+1. **Git holds shared work, not all runtime state.** Tasks, shared memory, decisions and reports are files in
+   the workspace repo. Private chats, scheduler receipts and other runtime state live under `.jm/` and need
+   separate protected backups. A GitHub Project is a view of shared tasks, not a complete company backup.
 2. **Models are replaceable workers.** Every prompt is built from the files, so a new model gets the same team.
 3. **Rooms, not channels.** All hands = everyone, a project room = its team, a 1:1 = one person. A room is the
    same in the console, Telegram and Slack; the transport is only how you reach it.
@@ -32,6 +33,7 @@ model all come from `config.yaml` and the workspace.
 | `chat.py` | Rooms (`team`, `p-<project>`, `<member>`, `backchannel`): one JSONL record per room in `.jm/chat/` |
 | `hub.py` | Every message goes through here: records it, mirrors it to every channel, routes it to the right people. Also the runtime's Bus |
 | `runtime.py` | Dispatch, model call, action application, agent inbox with hop limit, budget, heartbeat, decisions |
+| `scheduler.py`, `schedule_history.py` | Scheduled-job receipts, local cross-process exclusion and owner acknowledgment after interruption/failure |
 | `executor.py` | Coding CLI in a git worktree on `jm/<task>`, merge after approval |
 | `runtime.run_work_session` | Scheduled work: each member with todo/doing tasks moves the top one; digest to the owner |
 | `monitor.py` | Deterministic report and checks (overdue, blocked too long, asks past deadline, failures) |
@@ -77,6 +79,9 @@ they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits
 
 ## Reliability
 
+- **Scheduled outcomes** are recorded before and after each scheduler-owned handler. Failed/interrupted
+  families wait for owner acknowledgment; a handled occurrence is never automatically replayed. See
+  [SCHEDULER.md](SCHEDULER.md) for recovery endpoints, retained private receipts and deployment limits.
 - **Console shutdown** stops intake and scheduler/transports, cancels and awaits remaining async tasks,
   and joins the app loop and executor threads. Coding-run cancellation kills its subprocess group.
   Blocking model calls still depend on their provider/CLI timeouts; a close timeout is reported as still
