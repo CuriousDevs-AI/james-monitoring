@@ -140,7 +140,7 @@ textarea{min-height:84px;resize:vertical} input[type=checkbox]{width:auto}
 @media(max-width:620px){.two,.three{grid-template-columns:1fr}}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--border-strong);display:inline-block;flex:none}
 .dot.on-track{background:var(--success)}.dot.at-risk{background:var(--warning)}.dot.blocked{background:var(--danger)}.dot.not-started{background:var(--border-strong)}
-.err{color:var(--danger);font-size:12px} pre{white-space:pre-wrap;background:var(--surface-2);border:1px solid var(--border);padding:10px;font:12px/1.5 var(--mono);margin:0}
+.err{color:var(--danger);font-size:12px} pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface-2);border:1px solid var(--border);padding:10px;font:12px/1.5 var(--mono);margin:0}
 .md{font-size:13px} .md h2,.md h3,.md h4{margin:14px 0 6px;font-size:13px} .md h2{font-size:15px} .md p{margin:4px 0} .md ul{margin:4px 0 6px 18px;padding:0} .md code{font-family:var(--mono);background:var(--surface-2);padding:0 4px}
 .dots span{animation:blink 1.2s infinite both;display:inline-block} .dots span:nth-child(2){animation-delay:.2s} .dots span:nth-child(3){animation-delay:.4s}
 
@@ -607,10 +607,10 @@ async function pulse() {
   }
   const changed = PULSE_VERSION && PULSE.version !== PULSE_VERSION; PULSE_VERSION = PULSE.version;
   const busy = $("#sheet").classList.contains("open") || $("#palette").classList.contains("open") ||
-    document.activeElement?.matches?.("input,textarea,select") || (VIEW === "project" && PTAB === "chat");
+    document.activeElement?.matches?.("input,textarea,select") || $("#main [data-recovery-dirty]") || (VIEW === "project" && PTAB === "chat");
   if (changed && !busy && LIVE_VIEWS.includes(VIEW)) { const y = scrollY; await render(); scrollTo(0, y); }
   if (PULSE.paused_all !== S.paused_all) {
-    const typing = document.activeElement?.matches?.("input,textarea,select") || $(".dirty")?.textContent || $("#sheet").classList.contains("open");
+    const typing = document.activeElement?.matches?.("input,textarea,select") || $(".dirty")?.textContent || $("#main [data-recovery-dirty]") || $("#sheet").classList.contains("open");
     if (typing) S.paused_all = PULSE.paused_all; else refresh();
   }
 }
@@ -1499,18 +1499,72 @@ function remindersBox(member) {
 }
 
 // ------------------------------------------------------------------ approvals, reports
+function recoveryForm(kind, record) {
+  const action = kind === "action", key = `recover-${kind}-${record.id}`;
+  const evidence = h("textarea", {id: key + "-evidence", required: true, maxlength: 4000,
+    placeholder: "What did you verify at the destination? Do not include credentials."});
+  const outcome = action ? h("select", {id: key + "-outcome", required: true},
+    h("option", {value: ""}, "Choose a verified outcome…"), h("option", {value: "completed"}, "Confirmed completed"),
+    h("option", {value: "not_completed"}, "Confirmed not completed")) : null;
+  const feedback = h("div", {class: "small", role: "status", "aria-live": "polite", style: "margin-top:8px"});
+  const verified = h("input", {id: key + "-verified", type: "checkbox", required: true});
+  const submit = h("button", {type: "submit", class: "btn outline", style: "margin-top:10px"},
+    icon("check"), action ? "Record verified outcome" : "Allow future scheduled runs");
+  const form = h("form", {style: "margin-top:10px", onsubmit: async e => {
+    e.preventDefault();
+    if (submit.disabled || !verified.checked || !evidence.value.trim() || (action && !outcome.value)) return;
+    submit.disabled = true; form.setAttribute("data-recovery-dirty", "1"); feedback.textContent = "Recording verification…";
+    try {
+      await api(action ? "/api/ask/reconcile" : "/api/schedule/acknowledge",
+        {id: record.id, evidence: evidence.value.trim(), ...(action ? {outcome: outcome.value} : {})});
+      toast(action ? "Outcome recorded — no action retried" : "Acknowledged — only future scheduled runs may proceed", "success");
+      await render();
+    } catch (error) { feedback.textContent = "Could not record verification. The run may still be active or have changed. Inspect it before trying again."; }
+    finally { submit.disabled = false; }
+  }}, action ? [h("label", {class: "f", for: key + "-outcome"}, "Verified outcome"), outcome] : null,
+    h("label", {class: "f", for: key + "-evidence"}, "Evidence checked (required)"), evidence,
+    h("label", {class: "row small", style: "flex-wrap:nowrap;align-items:flex-start;margin-top:10px"}, verified,
+      h("span", {}, action ? "I checked the destination. Recording this outcome will not execute or retry the action."
+        : "I checked the destination. Only future scheduled runs may proceed; this occurrence will not be retried.")), submit, feedback);
+  evidence.oninput = () => evidence.value.trim() ? form.setAttribute("data-recovery-dirty", "1") : form.removeAttribute("data-recovery-dirty");
+  return form;
+}
+function recoveryCard(actions, schedules) {
+  const records = [...actions.map(r => ({kind: "action", r})), ...schedules.needs_review.map(r => ({kind: "schedule", r}))];
+  return h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon("alert"),
+    h("h3", {}, "Execution recovery"), badge("Owner only"), records.length ? badge(records.length + " need review", "danger") : null),
+    h("div", {class: "card-b small muted"}, "Approval is not proof of delivery. Check the destination before resolving an uncertain outcome. These controls never resend or replay a run."),
+    records.length ? h("div", {class: "list"}, records.map(({kind, r}) => h("div", {class: "card-b"},
+      h("div", {class: "row"}, h("b", {}, kind === "action" ? r.summary : "Scheduled: " + r.job),
+        badge(kind === "action" ? r.execution.status : r.status, "warning")),
+      h("div", {class: "mono xs muted", style: "overflow-wrap:anywhere;margin-top:4px"}, r.id),
+      h("div", {class: "xs muted", style: "margin-top:4px"}, kind === "action"
+        ? "Started: " + (r.execution.started_at || "unknown") + (r.task ? " · " + r.task : "")
+        : "Scheduled: " + r.scheduled_at + " · future occurrences held until acknowledged"),
+      kind === "action" && r.details ? h("pre", {style: "margin-top:8px"}, r.details) : null, recoveryForm(kind, r))))
+      : h("div", {class: "card-b small muted"}, "No unresolved execution attempts recorded."),
+    schedules.recent.length ? h("details", {class: "card-b"}, h("summary", {class: "small", style: "cursor:pointer"}, "Recent scheduled outcomes"),
+      h("p", {class: "xs muted"}, "Completed means the handler returned, not that every subtask or external delivery succeeded."),
+      schedules.recent.slice(0, 20).map(r => h("div", {class: "row small", style: "margin-top:6px"}, h("span", {}, r.job),
+        badge(r.status, r.status === "completed" ? "success" : r.status === "skipped" ? "" : "warning"),
+        r.acknowledgment ? badge("Owner acknowledged", "info") : null, h("span", {class: "xs muted"}, r.scheduled_at)))) : null);
+}
 async function vApprovals() {
   $("#main").style.padding = "";
-  const a = await api("/api/asks"); const pend = a.filter(x => x.status === "pending").sort((x, y) => (x.level === "red" ? 0 : 1) - (y.level === "red" ? 0 : 1) || String(x.deadline).localeCompare(String(y.deadline))), done = a.filter(x => x.status !== "pending");
+  const [a, executions, schedules] = await Promise.all([api("/api/asks"), can("owner") ? api("/api/executions") : [],
+    can("owner") ? api("/api/schedule/runs") : {recent: [], needs_review: []}]);
+  const pend = a.filter(x => x.status === "pending" && !x.execution?.status).sort((x, y) => (x.level === "red" ? 0 : 1) - (y.level === "red" ? 0 : 1) || String(x.deadline).localeCompare(String(y.deadline))), done = a.filter(x => x.status !== "pending" || x.execution?.status);
   const item = x => h("div", {class: "li"}, h("span", {class: "ico " + (x.status === "pending" ? (x.level === "red" ? "danger" : "warning") : x.status === "approved" ? "success" : "")}, icon("approvals")),
     h("div", {class: "grow"}, h("div", {class: "row"}, h("span", {class: "t"}, humanIds(x.summary)), x.status === "pending" ? badge(x.level === "red" ? "Needs you" : "FYI", x.level === "red" ? "danger" : "warning") : badge(x.status, x.status === "approved" ? "success" : "danger")),
       h("div", {class: "xs muted row", style: "gap:4px"}, h("span", {class: "mono"}, x.id), ` · from ${nameOf(x.from)}`, x.task ? " · " + x.task : "", x.created ? h("span", {class: "mono"}, " · " + x.created.slice(0, 16).replace("T", " ")) : null,
         x.status === "pending" && x.deadline ? h("span", {style: new Date(x.deadline) < new Date() ? "color:var(--danger)" : ""}, " · answer by " + new Date(x.deadline).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"})) : null,
         x.status !== "pending" && x.decided_by ? " · " + x.status + " by " + x.decided_by : null,
-        x.kind === "action" ? badge("Runs when approved", "accent") : x.kind === "merge" ? badge("Merge to main", "accent") : null),
+        x.execution?.status ? badge(({started: "Started · owner review needed", uncertain: "Uncertain · owner review needed", succeeded: "Handler returned", reconciled: "Owner reconciled"})[x.execution.status] || x.execution.status, "info")
+          : x.kind === "action" ? badge("Runs when approved", "accent") : x.kind === "merge" ? badge("Merge to main", "accent") : null),
       x.details ? h("pre", {style: "margin-top:6px"}, x.details) : null, x.recommendation ? h("div", {class: "xs muted", style: "margin-top:4px"}, `${nameOf(x.from)} suggests: ${x.recommendation}`) : null),
-    x.status === "pending" && can("approve") ? h("div", {class: "row"}, h("button", {class: "btn success sm", onclick: async () => { if (await decide(x.id, "approved", "", x.summary)) render(); }}, icon("check"), "Approve"), h("button", {class: "btn danger sm", onclick: async () => { if (await decide(x.id, "rejected")) render(); }}, "Reject")) : null);
+    x.status === "pending" && !x.execution?.status && can("approve") ? h("div", {class: "row"}, h("button", {class: "btn success sm", onclick: async () => { if (await decide(x.id, "approved", "", x.summary)) render(); }}, icon("check"), "Approve"), h("button", {class: "btn danger sm", onclick: async () => { if (await decide(x.id, "rejected")) render(); }}, "Reject")) : null);
   $("#main").put(pageHeader("Approvals", "🔴 requests — money, anything public, production, deleting, legal, merges, and whatever you set to “Ask me first” (Settings → Permissions, a project's Settings, or someone's profile) — never decide themselves. Approve here, in chat, on Telegram or in Slack."),
+    can("owner") ? recoveryCard(executions, schedules) : null,
     h("div", {class: "card", style: "margin-bottom:16px"}, h("div", {class: "card-h"}, icon("inbox"), h("h3", {}, "Waiting"), pend.length ? badge(pend.length, "danger") : null),
       pend.length ? h("div", {class: "list"}, pend.map(item)) : h("div", {class: "card-b"}, empty("check", "Nothing waiting", "Requests from the team show up here and in their chat."))),
     h("div", {class: "card"}, h("div", {class: "card-h"}, icon("clock"), h("h3", {}, "History")), done.length ? h("div", {class: "list"}, done.map(item)) : h("div", {class: "card-b muted small"}, "None yet.")));
@@ -1959,6 +2013,52 @@ function slackCard(slackIds) {
       h("p", {class: "xs muted", style: "margin:10px 0 0"}, "In Slack: /jm status · /jm approve ASK-3 (or !status). @name addresses someone, @here everyone in the channel, and a thread reply goes to whoever wrote the message. In the app's DM, “@riya …” reaches Riya; anything else goes to ", nameOf(S.manager), ".")));
 }
 
+function secretsCard() {
+  const status = h("div", {class: "small", role: "status", "aria-live": "polite"}, "Not checked. No credential values are displayed."),
+    entries = h("div", {class: "list", style: "margin:12px 0"}),
+    reference = h("select", {id: "secret-reference", disabled: true, required: true}, h("option", {value: ""}, "Check status to load configured references")),
+    secret = h("input", {id: "secret-value", type: "password", autocomplete: "new-password", spellcheck: "false", disabled: true,
+      required: true, placeholder: "Paste a replacement value; never shown after saving"}),
+    result = h("div", {class: "small", role: "status", "aria-live": "polite", style: "margin-top:10px"});
+  const save = h("button", {type: "submit", class: "btn primary", disabled: true, style: "margin-top:12px"}, icon("lock"), "Save credential");
+  const check = btn("Check status", async () => {
+    check.disabled = true; status.textContent = "Checking credential storage… Native Keychain may ask for permission.";
+    try {
+      const data = await api("/api/secrets");
+      status.put(h("div", {class: "row"}, badge(data.backend === "keychain" ? "macOS Keychain" : "Environment / .env", data.encrypted_at_rest ? "info" : "warning"),
+        h("span", {class: "mono xs", style: "overflow-wrap:anywhere"}, data.namespace || "Default environment")),
+        h("p", {class: "small muted"}, data.encrypted_at_rest
+          ? "Native storage protects values at rest; it does not isolate agents running as the same OS user."
+          : "Environment mode stores .env values in plaintext (0600). Keep the file and its backups private."));
+      entries.put(data.entries.length ? data.entries.map(entry => h("div", {class: "row", style: "padding:8px 0"},
+        h("span", {class: "mono xs grow", style: "min-width:0;overflow-wrap:anywhere"}, entry.name),
+        badge(entry.status, entry.status === "configured" ? "info" : entry.status === "unavailable" ? "danger" : "warning")))
+        : h("p", {class: "small muted"}, "No credential references configured."));
+      const previous = reference.value;
+      reference.put(h("option", {value: ""}, "Choose a credential reference…"), data.entries.map(entry => h("option", {value: entry.name}, entry.name)));
+      if (data.entries.some(entry => entry.name === previous)) reference.value = previous;
+      reference.disabled = secret.disabled = save.disabled = !data.entries.length;
+    } catch (error) { status.textContent = "Status could not be checked. Verify your owner access and unlock the selected store, then try again."; }
+    finally { check.disabled = false; }
+  }, "outline sm", "refresh");
+  const form = h("form", {onsubmit: async event => {
+    event.preventDefault(); if (save.disabled || !reference.value || !secret.value) return;
+    save.disabled = true; check.disabled = true; reference.disabled = true; secret.disabled = true;
+    result.textContent = "Saving credential…";
+    try {
+      const response = await api("/api/secrets", {name: reference.value, secret: secret.value});
+      result.put(badge("Saved", "info"), h("p", {class: "small"}, response.restart_required
+        ? "Restart James before verifying the connection. Existing clients may still use the old credential; saving does not revoke it at the provider."
+        : "Saved to the selected store. Connection availability has not been verified."));
+    } catch (error) { result.textContent = "Save could not be confirmed. Check storage status before retrying; the value has been cleared."; }
+    finally { secret.value = ""; save.disabled = check.disabled = reference.disabled = secret.disabled = false; }
+  }}, h("label", {class: "f", for: "secret-reference"}, "Configured credential reference"), reference,
+    h("label", {class: "f", for: "secret-value"}, "New credential value"), secret, save, result);
+  return h("div", {class: "card"}, h("div", {class: "card-h"}, icon("lock"), h("h3", {}, "Credential storage"), badge("Owner only"),
+    h("span", {class: "grow"}), check), h("div", {class: "card-b"}, status, entries,
+      h("p", {class: "small muted"}, "Status checks read the selected store only when you click. Configured does not mean connected. No reveal, deletion or automatic migration is available here."), form,
+      h("p", {class: "xs muted", style: "margin-top:14px"}, "Choose the backend and a stable namespace in config.yaml while James is stopped. Re-provision credentials separately during recovery; GitHub does not back up secret values.")));
+}
 async function vSettings() {
   $("#main").style.padding = "";
   const s = await api("/api/settings"); const m = s.monitor || {}, l = s.llm || {};
@@ -2029,17 +2129,29 @@ async function vSettings() {
         h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Owner Telegram id"), f.owner_telegram_id), h("div", {}, h("label", {class: "f"}, "Group id"), f.group_chat_id)), tgOut)), saveBar(),
       slackCard(slackIds)]},
     {id: "github", title: "GitHub", ic: "commit", desc: "Optional: the task board as a GitHub Project, and code changes as pull requests.", body: () => [githubCard()]},
-    ...(S.me?.role === "owner" ? [{id: "access", title: "Sign-in links", ic: "lock", desc: "Who else can open this console, and what they may do. Saves as you go.", body: () => [usersCard()]}] : []),
+    ...(S.me?.role === "owner" ? [
+      {id: "secrets", title: "Secrets", ic: "lock", desc: "Manage configured credential references without exposing stored values.", body: () => [secretsCard()]},
+      {id: "access", title: "Sign-in links", ic: "lock", desc: "Who else can open this console, and what they may do. Saves as you go.", body: () => [usersCard()]}] : []),
   ];
   if (!SECTIONS.some(x => x.id === STAB)) STAB = "general";
   const built = {};
-  const content = h("div", {style: "min-width:0"});
+  const content = h("div", {id: "settings-panel", role: "tabpanel", style: "min-width:0"});
   const nav = h("div", {class: "setnav", role: "tablist", "aria-label": "Settings sections"});
-  const show = id => { STAB = id; store.set("settings-tab", id); history.replaceState(null, "", location.pathname + location.search + hashOf());
+  const show = id => { if (STAB === "secrets" && id !== STAB) content.querySelectorAll("input[type=password]").forEach(input => { input.value = ""; });
+    STAB = id; store.set("settings-tab", id); history.replaceState(null, "", location.pathname + location.search + hashOf());
     const sec = SECTIONS.find(x => x.id === id); built[id] = built[id] || sec.body();       // built once: unsaved edits survive switching
-    nav.querySelectorAll(".setnav-i").forEach(el => { const on = el.dataset.id === id; el.classList.toggle("on", on); el.setAttribute("aria-selected", on ? "true" : "false"); });
+    nav.querySelectorAll(".setnav-i").forEach(el => { const on = el.dataset.id === id; el.classList.toggle("on", on); el.tabIndex = on ? 0 : -1; el.setAttribute("aria-selected", on ? "true" : "false"); });
+    content.setAttribute("aria-labelledby", "settings-tab-" + id);
     content.put(h("div", {class: "ph", style: "margin-bottom:12px"}, h("div", {}, h("h1", {style: "font-size:17px"}, sec.title), h("p", {}, sec.desc))), built[id]); };
-  nav.put(SECTIONS.map(x => h("div", {class: "setnav-i", role: "tab", tabindex: 0, "data-id": x.id, onclick: () => show(x.id)}, icon(x.ic), x.title)));
+  nav.put(SECTIONS.map((x, index) => h("div", {id: "settings-tab-" + x.id, class: "setnav-i", role: "tab", tabindex: -1,
+    "aria-controls": "settings-panel", "data-id": x.id, onclick: () => show(x.id), onkeydown: event => {
+      const keys = {ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1};
+      let next = index;
+      if (event.key in keys) next = (index + keys[event.key] + SECTIONS.length) % SECTIONS.length;
+      else if (event.key === "Home") next = 0; else if (event.key === "End") next = SECTIONS.length - 1;
+      else if (!["Enter", " "].includes(event.key)) return;
+      event.preventDefault(); show(SECTIONS[next].id); nav.children[next].focus();
+    }}, icon(x.ic), x.title)));
   $("#main").put(pageHeader("Settings", "Company-wide settings. Projects have their own (open a project → Settings); people have theirs (their profile)."),
     h("div", {class: "setwrap"}, nav, content));
   show(STAB);
