@@ -223,9 +223,13 @@ def cmd_connection(args) -> None:
     name, email = cfg.git_author
     print(f"Git identity\n  {'✅' if email != 'jm@localhost' else '⚠️ '} {name} <{email}>")
     print("Channels")
-    print(f"  {'✅' if cfg.monitor.bot_token else '·'} Telegram {'connected' if cfg.monitor.bot_token else '(optional)'}")
-    print(f"  {'✅' if cfg.slack.configured else '·'} Slack {'connected' if cfg.slack.configured else '(optional)'}")
-    print(f"  {'✅' if cfg.github.enabled else '·'} GitHub {'board mirror on' if cfg.github.enabled else '(optional)'}")
+    for label, status in (("Telegram", cfg.monitor.bot_token_status), ("Slack", cfg.slack.credential_status)):
+        detail = {"configured": "credentials configured; live connection not verified", "missing": "not configured (optional)",
+                  "unavailable": "credential store unavailable; connection not verified"}[status]
+        print(f"  {'⚠️' if status == 'unavailable' else '·'} {label}: {detail}")
+        if status == "unavailable":
+            bad += 1
+    print(f"  · GitHub: {'board mirror enabled; sync not verified' if cfg.github.enabled else 'not configured (optional)'}")
     if args.action != "test":
         print("\nRun `jm connection test` to make one tiny call to each model.")
     sys.exit(1 if bad else 0)
