@@ -6,6 +6,7 @@ import asyncio
 import logging
 from datetime import datetime
 
+from .schedule_history import ScheduleHistory
 from .util import now, parse_hhmm
 
 log = logging.getLogger("jm.scheduler")
@@ -47,8 +48,11 @@ class Scheduler:
         self.on_digest = on_digest            # async fn(text) for work-session digests
         self.tick = tick_seconds
         self._task: asyncio.Task | None = None
+        self.history = ScheduleHistory(rt.ws.root)
 
     def start(self) -> None:
+        if self._task and not self._task.done():
+            return
         self._first = True
         self._task = asyncio.get_running_loop().create_task(self._loop())
 
@@ -64,6 +68,7 @@ class Scheduler:
     async def run_once(self, at: datetime | None = None) -> list[str]:
         cfg = self.rt.cfg
         at = at or now(cfg.timezone)
+        self.history.recover(at.isoformat(timespec="seconds"))
         state = self.rt.ws.state()
         if self._first_start_catchup(state, at):
             return []
@@ -75,36 +80,68 @@ class Scheduler:
             jobs = ["checks"]
         for job in jobs:
             try:
-                if job == "report":
-                    self._mark("report", at.date().isoformat())
-                    await self.rt.run_daily_report()
-                elif job.startswith("work:"):
-                    self._mark(job, at.date().isoformat())
-                    if not self.rt.paused("all"):
-                        # In the background: a long session never holds up checks, the report or the next tick.
-                        async def session():
-                            try:
-                                digest = await self.rt.run_work_session()
-                                if digest and self.on_digest:
-                                    await self.on_digest(digest)
-                            except Exception:  # noqa: BLE001
-                                log.exception("work session failed")
-                        self.rt._spawn(session())
-                elif job == "brief":
-                    self._mark("brief", at.date().isoformat())
-                    await self.rt.run_brief()
-                elif job == "reminders":
-                    await self.rt.run_reminders(at)
-                elif job == "github":
-                    self._mark("github", at.isoformat(timespec="seconds"))
-                    self.rt._spawn(self.rt.sync_github())
-                elif job == "checks":
-                    self._mark("checks", at.isoformat(timespec="seconds"))
-                    await self.rt.run_checks()
-                done.append(job)
+                if job.startswith("work:") or job == "github":
+                    # Claims are acquired inside the coroutine: cancellation before its first instruction
+                    # cannot leak an OS lock. A slow handler never blocks the other schedule families.
+                    self.rt._spawn(self._run_job(job, at, require_due=True))
+                    done.append(job)  # submitted, not a completion receipt
+                elif await self._run_job(job, at, require_due=True):
+                    done.append(job)
             except Exception:  # noqa: BLE001 - one failing job must never stop the others
                 log.exception("scheduled job %s failed", job)
         return done
+
+    async def _run_job(self, job: str, at: datetime, require_due: bool = False) -> bool:
+        stamp = at.isoformat(timespec="seconds")
+        slot = at.date().isoformat() if job in ("report", "brief") or job.startswith("work:") else stamp
+        with self.history.guard(job) as acquired:
+            if not acquired:
+                return False
+            if require_due:
+                # Another process may have settled this family since run_once took its snapshot.
+                try:
+                    if job not in due_jobs(self.rt.cfg, self.rt.ws.state(), at):
+                        return False
+                except (ValueError, TypeError):
+                    if job != "checks":
+                        return False
+            record = self.history.claim(job, slot, stamp)
+            if not record:
+                return False
+            try:
+                self._mark(job, slot)
+                if job.startswith("work:") and self.rt.paused("all"):
+                    record.update(status="skipped", reason="team_paused")
+                else:
+                    record.update(status="running", started_at=now(self.rt.cfg.timezone).isoformat(timespec="seconds"))
+                    self.history.save(record)
+                    if job == "report":
+                        await self.rt.run_daily_report()
+                    elif job.startswith("work:"):
+                        digest = await self.rt.run_work_session()
+                        if digest and self.on_digest:
+                            await self.on_digest(digest)
+                    elif job == "brief":
+                        await self.rt.run_brief()
+                    elif job == "reminders":
+                        await self.rt.run_reminders(at)
+                    elif job == "github":
+                        await self.rt.sync_github()
+                    elif job == "checks":
+                        await self.rt.run_checks()
+                    else:
+                        raise ValueError("Unknown scheduled job")
+                    record["status"] = "completed"
+            except asyncio.CancelledError:
+                record.update(status="interrupted", error_type="CancelledError")
+                raise
+            except Exception as exc:  # partial effects are possible: only an owner may unblock this family
+                record.update(status="failed", error_type=type(exc).__name__)
+                log.error("scheduled job %s failed (%s); owner acknowledgment required", job, type(exc).__name__)
+            finally:
+                record["finished_at"] = now(self.rt.cfg.timezone).isoformat(timespec="seconds")
+                self.history.save(record)
+            return record["status"] in ("completed", "skipped")
 
     def _first_start_catchup(self, state: dict, at: datetime) -> bool:
         """On the very first start, don't fire today's already-passed report/work sessions all at once."""

@@ -35,6 +35,7 @@ from .llm import LLMError, LLMResult, make_llm
 from .monitor import open_decisions, team_status_lines
 from .runtime import Event, Runtime
 from .scheduler import Scheduler
+from .schedule_history import ScheduleHistory
 from .setup import detect_git_identity, detect_timezone, scaffold, slug
 from .tasks import PRIORITIES, TaskError
 from .ui import TeamAdmin
@@ -1160,6 +1161,23 @@ class App:
         self.rt.ws.update_state(fn)
         return self.notifications(user)
 
+    def schedule_runs(self) -> dict:
+        history = ScheduleHistory(self.rt.ws.root)
+        records = history.all()
+        return {"recent": records[:200], "needs_review": [r for r in records if history.unresolved(r)]}
+
+    def schedule_acknowledge(self, b: dict, user: dict) -> dict:
+        if user["role"] != "owner":
+            raise PermissionError("Only the founder can acknowledge an uncertain scheduled run.")
+        from .util import now
+        history = ScheduleHistory(self.rt.ws.root)
+        record = history.acknowledge(str(b.get("id", "")), user["name"], str(b.get("evidence", "")),
+                                     now(self.rt.cfg.timezone).isoformat(timespec="seconds"))
+        self.rt._audit("decision", user["name"], "acknowledge scheduled run", record["id"],
+                       {"job": record["job"], "status": record["status"]}, via="console")
+        return {"acknowledged": record["id"], "retried": False,
+                "message": "Future scheduled occurrences may run. This occurrence was not retried."}
+
     # -- system health ------------------------------------------------------------------------
     def health(self) -> dict:
         import shutil
@@ -1179,8 +1197,15 @@ class App:
             ok("Team engine", False, f"not responding: {e}", "Restart `jm run`.")
         running = bool(self.sched and self.sched._task and not self.sched._task.done())
         sched = st.get("sched") or {}
-        ok("Scheduler", running, f"last checks {sched.get('checks', 'never')} · report {sched.get('report') or 'not yet'}",
+        ok("Scheduler", running, f"last checks triggered {sched.get('checks', 'never')} · report triggered {sched.get('report') or 'not yet'}",
            "Save Settings (it restarts the team) or restart `jm run`.")
+        try:
+            held = self.schedule_runs()["needs_review"]
+            ok("Scheduled outcomes", not held, f"{len(held)} failed/interrupted runs awaiting owner acknowledgment",
+               "Inspect the destination and acknowledge the run with evidence; never blindly repeat its effects.")
+        except (ValueError, OSError, KeyError):
+            ok("Scheduled outcomes", False, "Schedule history is unreadable; scheduled execution is stopped",
+               "Restore verified schedule receipts. Do not delete history to resume work.")
         try:
             last = rt.ws._git("log", "-1", "--format=%cI").strip()
         except RuntimeError:
@@ -1905,7 +1930,7 @@ class App:
 # -- HTTP -----------------------------------------------------------------------------------
 # Every route and the permission it needs (see users.py). Anything not listed is refused.
 GET_PERMS = {
-    "/api/executions": "owner",
+    "/api/schedule/runs": "owner",
     "/api/secrets": "owner",
     "/api/state": "any", "/api/dashboard": "read", "/api/tasks": "read", "/api/task": "read", "/api/asks": "read",
     "/api/chat": "read", "/api/rooms": "read", "/api/pulse": "read", "/api/thread": "read", "/api/member": "read",
@@ -1919,7 +1944,7 @@ GET_PERMS = {
     "/api/model_login": "admin", "/api/connections/login": "admin",
 }
 POST_PERMS = {
-    "/api/ask/reconcile": "owner",
+    "/api/schedule/acknowledge": "owner",
     "/api/secrets": "owner",
     "/api/chat": "chat", "/api/tasks": "task", "/api/task": "task", "/api/ask": "approve", "/api/project/settings": "admin",
     "/api/project/pause": "admin",
@@ -2037,7 +2062,7 @@ def make_handler(app: App, key: str):
                     return self._send(200, body, "text/csv; charset=utf-8",
                                       {"Content-Disposition": f'attachment; filename="audit-{today(app.rt.cfg.timezone)}.csv"'})
                 routes = {
-                    "/api/executions": lambda: [app._ask_json(a) for a in app.rt.asks.unresolved_executions()],
+                    "/api/schedule/runs": lambda: app.schedule_runs(),
                     "/api/secrets": lambda: app.secrets_status(),
                     "/api/dashboard": lambda: app.dashboard(user),
                     "/api/tasks": lambda: [app._task_json(t) for t in app.rt.tasks.all() if app.can_see_task(user, t)],
@@ -2178,7 +2203,7 @@ def make_handler(app: App, key: str):
             if path in ("/api/task",) and not app.can_see_task(user, app.rt.tasks.get(str(b.get("id", "")))):
                 raise PermissionError("That task is private.")
             routes = {
-                "/api/ask/reconcile": lambda: app.reconcile_ask(b, user),
+                "/api/schedule/acknowledge": lambda: app.schedule_acknowledge(b, user),
                 "/api/chat": lambda: app.chat_send(str(b.get("room", TEAM_ROOM)), str(b.get("text", "")), user,
                                                    b.get("reply_to")),
                 "/api/tasks": lambda: app.task_create(b, user),
