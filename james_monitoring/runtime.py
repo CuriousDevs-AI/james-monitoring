@@ -361,6 +361,10 @@ class Runtime:
         p = self.cfg.projects.get(pid) if pid else None
         return bool(p and p.status == "paused")
 
+    def project_schedulable(self, pid: str) -> bool:
+        p = self.cfg.projects.get(pid) if pid else None
+        return not p or p.status not in ("paused", "done")
+
     def action_project(self, a: dict, ev: "Event") -> str:
         """The project an action touches — the one it names, its task's, or the conversation's — whose rules apply."""
         if a.get("project") and a["project"] in self.cfg.projects:
@@ -1068,7 +1072,7 @@ class Runtime:
         if level == "red":
             ask = self.asks.create(requester=m.id, summary=f"{m.name} wants to {self.describe(m, a)}",
                                    details=str(a.get("why") or a.get("description") or ""), level="red",
-                                   task=str(a.get("task") or a.get("id") or ""), kind="action",
+                                   task=str(a.get("task") or a.get("id") or ev.task or ""), kind="action",
                                    payload={"action": a, "project": ev.project, "room": ev.room})
             post = getattr(self.bus, "post", None)
             if post and ev.room and ev.room.startswith(PROJECT_ROOM):   # asked in a project room → the card is there
@@ -1106,8 +1110,14 @@ class Runtime:
         if tid and not self.cfg.agent_can_access(self.tasks.get(str(tid)).owner, m.id):
             raise TaskError("That task is private to its personal assistant.")
 
+    def _check_action_dependencies(self, a: dict, event_task: str = "") -> None:
+        tid = a.get("task") or event_task
+        if a.get("type") in ("write_file", "run_code") and tid:
+            self.tasks.require_dependencies(self.tasks.get(tid))
+
     async def _do(self, m: Member, a: dict, ev: Event) -> str:
         self._check_action_access(m, a)
+        self._check_action_dependencies(a, ev.task)
         t = a["type"]
         if t == "remind":
             if not m.assistant:
@@ -1456,6 +1466,13 @@ class Runtime:
             raise AskError(f"{pre.id} is already {pre.status}")
         merged = ""
         github_result = ""
+        if pre.kind == "action" and decision == "approved":
+            action = (pre.doc.meta.get("payload") or {}).get("action")
+            if isinstance(action, dict):
+                try:
+                    self._check_action_dependencies(action, pre.doc.meta.get("task", ""))
+                except TaskError as e:
+                    raise AskError(f"{pre.id} is still open — {e}") from None
         if pre.kind == "github_change" and decision == "approved":
             from .github import Change
             if via != "console" and len(pre.doc.sections.get("Details", "")) > 1500:
@@ -1476,11 +1493,13 @@ class Runtime:
             # and the request stays open.
             p = pre.doc.meta.get("payload") or {}
             try:
+                if pre.doc.meta.get("task"):
+                    self.tasks.require_dependencies(self.tasks.get(pre.doc.meta["task"]))
                 if p.get("pr"):
                     sha = await asyncio.to_thread(self.executor.merge_pr, p["project"], p["pr"])
                 else:
                     sha = await asyncio.to_thread(self.executor.merge, p["project"], p["branch"])
-            except (ExecutorError, KeyError) as e:
+            except (ExecutorError, KeyError, TaskError) as e:
                 raise AskError(f"{pre.id} is still open — the merge didn't happen: {e}. Fix it and approve again, "
                                f"or reject.") from None
             merged = f" — merged {p['branch']} into {p['project']} ({sha})"
@@ -1509,6 +1528,7 @@ class Runtime:
             if m and isinstance(p.get("action"), dict):
                 try:
                     done = await self._do(m, p["action"], Event("system", f"approved {ask.id}", sender="system",
+                                                                  task=ask.doc.meta.get("task", ""),
                                                                   project=p.get("project", ""), room=p.get("room", ""),
                                                                   meta={"approved": ask.id}))
                     result += f" — done{': ' + done if done else ''}"
@@ -1839,7 +1859,7 @@ class Runtime:
     def blocked_on_member(self, m: Member) -> list:
         return [t for t in self.tasks.all() if t.is_open and t.status == "blocked" and t.owner != m.id
                 and self.cfg.agent_can_access(t.owner, m.id)
-                and not self.project_paused(t.project) and any(x.id == m.id for x in self.people_in(t.blocked_on))]
+                and self.project_schedulable(t.project) and any(x.id == m.id for x in self.people_in(t.blocked_on))]
 
     def next_work(self, m: Member) -> tuple[str, object] | None:
         """What a person does first: unblock others → rework asked for by the owner → their top task."""
@@ -1847,7 +1867,7 @@ class Runtime:
         if waiting:
             return "unblock", waiting[0]
         mine = [t for t in self.tasks.for_owner(m.id) if t.status in ("todo", "doing")
-                and not self.project_paused(t.project)]          # paused projects wait
+                and self.project_schedulable(t.project) and not self.tasks.unmet_dependencies(t)]
         rework = [t for t in mine if t.doc.meta.get("rework")]
         if rework:
             return "rework", rework[0]
@@ -1885,7 +1905,8 @@ class Runtime:
                          f"{', rework' if kind == 'rework' else ''}): {reply.splitlines()[0][:200] if reply else '-'}")
         await asyncio.gather(*(one(m) for m in self.cfg.team))
         mgr = self.cfg.monitor
-        if not self.paused(mgr.id) and any(t.is_open for t in self.tasks.all()):
+        if not self.paused(mgr.id) and any(t.is_open and self.cfg.agent_can_access(t.owner)
+                                         and self.project_schedulable(t.project) for t in self.tasks.all()):
             reply = await self.dispatch(mgr.id, Event(
                 "system", "Manager's round after the work session. Look at the board and what people just did. "
                           "Chase what's stuck: message_agent the person (not the founder) with a specific ask; "

@@ -77,6 +77,15 @@ they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits
 
 ## Reliability
 
+- **Task dependencies** are validated on creation and editing (missing references, self-dependencies and new
+  cycles are rejected). Only `done` satisfies a prerequisite; `review`, `cut` and missing task files do not.
+  Work sessions skip tasks with unfinished prerequisites and skip paused/completed projects. Status changes
+  to doing/review/done, task-linked document writes, coding starts and merge approvals recheck prerequisites.
+  Action approvals retain their originating task and remain pending if that dependency preflight fails.
+  A task-ID blocker clears only when all named and declared prerequisites are done. Other human blockers
+  are not cleared just because a declared dependency finished. Remove an obsolete dependency explicitly.
+  Unrelated one-off requests remain available. These are runtime checks, not an OS sandbox or a transaction
+  spanning a remote merge; in-flight work and cross-process races still need the durable execution layer.
 - **config.yaml**: every change is read-modify-validate-write under one lock, with a `.bak`. A reload builds the new
   runtime first and swaps it in one step. The old one's work in flight continues, sharing the per-person locks.
 - **git**: one lock per repo (threads and processes), no prompts (`GIT_TERMINAL_PROMPT=0`, SSH BatchMode), no
