@@ -33,6 +33,7 @@ implies automatic paid-to-free fallback, a complete credential sandbox or exactl
 | `workspace.py` | Git repo layout, commits, memory, logs, runtime state (`.jm/state.json`, not committed) |
 | `mdoc.py` | Markdown with YAML front matter + `## Sections` |
 | `tasks.py` | Task board and the rules (P0, WIP, done-means, reviewer, blocked-on) |
+| `project_resources.py`, `project_plans.py` | Bounded project references/text context; consent-bound, non-executing AI drafts and idempotent human-reviewed task creation |
 | `asks.py` | Permission requests, durable execution attempts, decision locks and owner reconciliation |
 | `prompts.py` | System prompt = charter + persona + memory + roster + context + action protocol |
 | `chat.py` | Rooms (`team`, `p-<project>`, `<member>`, `backchannel`): one JSONL record per room in `.jm/chat/` |
@@ -291,9 +292,10 @@ code-run or provider-delivery receipts. Locks coordinate local POSIX processes, 
    not a second click. Neither a code-command exit nor a merge means production deployment or acceptance
    testing happened automatically.
 
-**Open gap:** executor exceptions/timeouts and coding cancellation can leave the task available for later work
-sessions, unlike the returned-failure path in step 4. Pause and inspect interrupted work; final code-run
-receipts and consistent holds are still required.
+Caught executor exceptions/timeouts and coding cancellation now create an uncertain `code_recovery` request,
+block the task and survive restart. The existing scheduler/dispatch/action guards refuse that task until owner
+reconciliation. This is not a pre-start code-run ledger: abrupt process termination before recording the hold
+can still leave unfinished work without a receipt. Final code-run receipts remain required.
 
 ### GitHub persistence and review
 

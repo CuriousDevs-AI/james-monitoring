@@ -7,6 +7,8 @@ live account, a free provider, or a production deployment works.
 ## Release acceptance
 
 - [x] Configurable company, projects, personas/skills and per-person/project model assignment.
+- [x] Versioned project resources and bounded assigned-agent text context; manual tasks and reviewed AI drafts.
+      Cloud URLs are references only; binary attachments need notes/text exports. See [PROJECT-RESOURCES.md](PROJECT-RESOURCES.md).
 - [x] Console, Telegram/Slack transports, human approval and GitHub task-board integration exist.
 - [x] Private-assistant task/file boundaries and inbound GitHub proposal review have regression tests.
 - [x] Dependencies block work until accepted completion; one-off requests can remain separate from daily work.
@@ -16,8 +18,8 @@ live account, a free provider, or a production deployment works.
       with no blind replay; rejection-triggered PR closure, ungated actions and final background-code results
       still need equivalent receipts. New merge approvals bind an immutable reviewed head and require a
       completed GitHub merge receipt; older unbound requests fail closed.
-      Executor exceptions/timeouts and cancellations can leave code tasks scheduler-eligible; durable
-      code-run outcomes and consistent interruption holds are required before unattended operation.
+      Caught executor exceptions/timeouts and cancellations now create durable recovery holds; hard-crash
+      coverage still needs a pre-start ledger and final code-run outcomes before unattended operation.
       See [EXECUTION.md](EXECUTION.md) for the exact boundary.
 - [ ] Recovery drill from another directory/machine with configuration, tasks, private runtime state and
       separately re-provisioned credentials. GitHub Projects alone is not a full backup. Private atomic
@@ -71,5 +73,5 @@ The following are not assumed or enabled by this implementation:
    or owner-provided records and draft-only output unless real source access and outbound testing are approved.
 
 Outstanding engineering also includes final background-code receipts, ungated-effect/outbound reconciliation,
-and an isolated self-improvement pipeline with required tests and human review. Passing the current 338-test
-suite does not close those items. The browser recovery-submit sign-off remains documented in CONSOLE-QA.md.
+and an isolated self-improvement pipeline with required tests and human review. Passing the current 369-test
+suite does not close those items. Browser verification is documented in CONSOLE-QA.md.

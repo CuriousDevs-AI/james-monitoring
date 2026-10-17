@@ -473,6 +473,42 @@ class App:
                 "last": (self.chat.since(PROJECT_ROOM + pid, -1) or [])[-3:]}
 
     # -- project settings: this project's own model, rules and instructions — for everyone, or per person --------
+    def project_resources(self, pid: str, rid: str = "") -> dict:
+        from .project_resources import ProjectResources
+        if pid not in self.rt.cfg.projects:
+            raise ValueError("Unknown project.")
+        store = ProjectResources(self.rt.ws.root, pid)
+        return store.get(rid) if rid else {"resources": [store.view(r) for r in store.all()]}
+
+    def project_resource_save(self, b: dict, user: dict) -> dict:
+        from .project_resources import ProjectResources
+        pid = str(b.get("id", ""))
+        if pid not in self.rt.cfg.projects:
+            raise ValueError("Unknown project.")
+        result = ProjectResources(self.rt.ws.root, pid).save(b, user["name"])
+        self.rt.ws.commit(f"project {pid}: resource updated", user["name"])
+        return result
+
+    def project_plan(self, pid: str) -> dict:
+        from .project_plans import ProjectPlan
+        planner = ProjectPlan(self.rt, pid)
+        members = planner.members()
+        m = next((m for m in members if m.id == planner.project.lead), members[0] if members else None)
+        return {"plan": planner.read(), "planner": m.id if m else "", "signature": planner.signature(),
+                "model": self.rt.model_name(m, pid) if m else "Assign a project teammate first"}
+
+    def project_plan_generate(self, b: dict) -> dict:
+        from .project_plans import ProjectPlan
+        if b.get("consent") is not True:
+            raise ValueError("Confirm the selected model may read the included project context.")
+        return self.submit(ProjectPlan(self.rt, str(b.get("id", ""))).generate(
+            str(b.get("instructions", "")), str(b.get("signature", ""))), timeout=120)
+
+    def project_plan_accept(self, b: dict, user: dict) -> dict:
+        from .project_plans import ProjectPlan
+        task = ProjectPlan(self.rt, str(b.get("id", ""))).accept(b, self.rt.owner_id)
+        return self._task_json(task)
+
     def project_settings(self, pid: str) -> dict:
         cfg = self.rt.cfg
         p = cfg.projects.get(pid)
@@ -1930,6 +1966,8 @@ class App:
 # -- HTTP -----------------------------------------------------------------------------------
 # Every route and the permission it needs (see users.py). Anything not listed is refused.
 GET_PERMS = {
+    "/api/project/resources": "read",
+    "/api/project/plan": "admin",
     "/api/schedule/runs": "owner",
     "/api/executions": "owner",
     "/api/secrets": "owner",
@@ -1945,6 +1983,9 @@ GET_PERMS = {
     "/api/model_login": "admin", "/api/connections/login": "admin",
 }
 POST_PERMS = {
+    "/api/project/resources": "admin",
+    "/api/project/plan/generate": "admin",
+    "/api/project/plan/accept": "admin",
     "/api/schedule/acknowledge": "owner",
     "/api/ask/reconcile": "owner",
     "/api/secrets": "owner",
@@ -2064,6 +2105,8 @@ def make_handler(app: App, key: str):
                     return self._send(200, body, "text/csv; charset=utf-8",
                                       {"Content-Disposition": f'attachment; filename="audit-{today(app.rt.cfg.timezone)}.csv"'})
                 routes = {
+                    "/api/project/resources": lambda: app.project_resources(q.get("id", ""), q.get("resource_id", "")),
+                    "/api/project/plan": lambda: app.project_plan(q.get("id", "")),
                     "/api/schedule/runs": lambda: app.schedule_runs(),
                     "/api/executions": lambda: [app._ask_json(a) for a in app.rt.asks.unresolved_executions()],
                     "/api/secrets": lambda: app.secrets_status(),
@@ -2144,7 +2187,9 @@ def make_handler(app: App, key: str):
                     label = AUDIT_LABEL.get(path, path)
                     if path == "/api/task":
                         label = f"task {b.get('action', '')}".strip()
-                    detail = {"name": b.get("name", "")} if path == "/api/secrets" else b
+                    detail = {"name": b.get("name", "")} if path == "/api/secrets" else (
+                        {k: b.get(k) for k in ("id", "resource_id", "plan_id", "draft_id")}
+                        if path.startswith(("/api/project/resources", "/api/project/plan/")) else b)
                     app.rt._audit("console", user["name"], label, target, detail, via="console")
                 return self._json(200, out)
             except PermissionError as e:
@@ -2206,6 +2251,9 @@ def make_handler(app: App, key: str):
             if path in ("/api/task",) and not app.can_see_task(user, app.rt.tasks.get(str(b.get("id", "")))):
                 raise PermissionError("That task is private.")
             routes = {
+                "/api/project/resources": lambda: app.project_resource_save(b, user),
+                "/api/project/plan/generate": lambda: app.project_plan_generate(b),
+                "/api/project/plan/accept": lambda: app.project_plan_accept(b, user),
                 "/api/schedule/acknowledge": lambda: app.schedule_acknowledge(b, user),
                 "/api/ask/reconcile": lambda: app.reconcile_ask(b, user),
                 "/api/chat": lambda: app.chat_send(str(b.get("room", TEAM_ROOM)), str(b.get("text", "")), user,

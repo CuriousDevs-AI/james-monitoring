@@ -69,12 +69,15 @@ task selection from automatically picking that blocked task; it is not yet a dur
 unbypassable execution hold against a separately issued action. Successful command exit also does not prove
 that tests passed: the configured coding command and owner review must verify the actual acceptance criteria.
 
-**Known interruption gap:** the task-blocking path above covers a returned unsuccessful command result.
-An `ExecutorError` (including an executor timeout) is logged and reported without blocking the task;
-cancellation clears the in-memory coding guard without a durable final code-run record. A task can remain
-`todo`/`doing` and be selected by another work session. Pause affected automation and inspect the worktree,
-task and any remote effects before continuing. Do not interpret the approval's `succeeded` receipt as code-run
-completion. Durable code-run receipts and consistent holds across these paths remain release blockers.
+**Caught interruption recovery:** `ExecutorError`, timeout and cancellation create an uncertain `code_recovery`
+request before clearing the in-memory guard. Its task is blocked and the existing execution hold excludes it
+from scheduling, dispatch and action execution after restart. The owner inspects the worktree and remote
+effects, then records evidence through Execution recovery; this does not retry code. Reconciliation can make
+the original task schedulable again, so pause the project if further work must remain stopped.
+
+**Remaining hard-crash gap:** there is still no pre-start/final code-run ledger. Abrupt process termination or
+failure to persist the recovery record can leave partial work without a hold. Pause affected automation and
+inspect it before continuing. The original approval's `succeeded` receipt confirms startup, not code completion.
 
 New merge requests include a full reviewed commit id in their details and payload. Local merges verify the
 branch head and merge that exact commit even if the branch subsequently moves. GitHub merges send the expected
