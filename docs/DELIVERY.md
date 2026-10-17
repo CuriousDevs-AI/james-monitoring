@@ -55,3 +55,19 @@ and applicable outreach rules. Credentials are provisioned locally, never commit
   actually exists and has been exercised.
 - Integration credentials, deployment platform, outreach scope and approved test destinations are external
   prerequisites. Missing access does not prevent local implementation, but it does prevent live sign-off.
+
+## Next implementation decisions
+
+The following are not assumed or enabled by this implementation:
+
+1. **Deployment / isolation:** local macOS for one founder, or a Linux multi-user service. This determines
+   native credential storage versus a server-side broker and the OS/container boundary for untrusted workers.
+2. **Fallback policy:** approved model destinations, permitted data classes (including private-assistant
+   context), and per-provider spending limits. A provider advertising a free tier is not permission to send
+   company data there. Routing and broker/grant enforcement still require implementation after this policy.
+3. **Pilot connectors:** choose an allowed source and a controlled delivery destination. Start with synthetic
+   or owner-provided records and draft-only output unless real source access and outbound testing are approved.
+
+Outstanding engineering also includes final background-code receipts, ungated-effect/outbound reconciliation,
+and an isolated self-improvement pipeline with required tests and human review. Passing the current 338-test
+suite does not close those items. The browser recovery-submit sign-off remains documented in CONSOLE-QA.md.

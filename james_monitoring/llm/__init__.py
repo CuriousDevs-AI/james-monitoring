@@ -39,12 +39,14 @@ class LLMResult:
 
     @property
     def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens
+        return max(0, self.input_tokens) + max(0, self.output_tokens)
 
     @property
     def billable_tokens(self) -> int:
         """What counts against the daily budget: cached input costs about a tenth of fresh input."""
-        return self.input_tokens - self.cached_tokens + self.cached_tokens // 10 + self.output_tokens
+        inputs = max(0, self.input_tokens)
+        cached = min(inputs, max(0, self.cached_tokens))
+        return inputs - cached + cached // 10 + max(0, self.output_tokens)
 
 
 class LLM(Protocol):

@@ -63,6 +63,11 @@ Approved actions, merges and inbound GitHub proposals are journaled. Rejection-t
 green/yellow actions and background coding results are not yet covered by this execution record. Scheduled
 runs have their own receipts (see SCHEDULER.md). A successful approval handler does not prove completion of
 any follow-up tasks it spawned. Do not treat their request IDs or runtime state as a transactional ledger.
+An unsuccessful coding command now blocks the task for inspection and creates neither a PR nor a merge
+approval, even if the command produced partial changes. Its working branch is retained. This prevents daily
+task selection from automatically picking that blocked task; it is not yet a durable code-run ledger or an
+unbypassable execution hold against a separately issued action. Successful command exit also does not prove
+that tests passed: the configured coding command and owner review must verify the actual acceptance criteria.
 New merge requests include a full reviewed commit id in their details and payload. Local merges verify the
 branch head and merge that exact commit even if the branch subsequently moves. GitHub merges send the expected
 head SHA to the immediate merge API and require a completed-merge receipt. A missing full commit in a legacy

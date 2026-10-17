@@ -145,6 +145,11 @@ they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits
   GitHub comment can't make itself binding.
 - **Temporary model failures are retried** (rate limit, overload, network: after 3s, then 10s, within the turn's
   time). Login, key and model errors aren't retried; they're shown with the fix.
+- **Reported token usage is checked before each model attempt**, including read/repair follow-ups. A partial
+  turn stopped by the budget is not queued for replay. This is not a hard spending cap or automatic provider
+  fallback; see [BUDGETS.md](BUDGETS.md).
+- **Failed coding commands are not merge-ready.** Their working branch remains available for inspection,
+  their task is blocked, and no PR/merge approval is created. A command's successful exit is not proof of tests.
 - **A hung turn is stopped** by the hub's watchdog (turn limit + 2 minutes). The person says so in the room, the
   lock is released, and it shows in Activity & health.
 - **Activity & health** (console) checks the engine, scheduler, git, disk, models, channels, replies in progress,

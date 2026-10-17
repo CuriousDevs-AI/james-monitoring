@@ -5,10 +5,11 @@ dependency or external design-source upload is involved.
 
 ## Automated evidence
 
-- The combined Python suite passes 310 tests, including the Node form-test wrapper.
-- Seven dependency-free Node tests check JavaScript parsing, manual secret-status loading, duplicate-save
+- The initial owner-controls increment passed 310 Python tests, including the Node form-test wrapper.
+  The subsequent integration passes 338 Python tests.
+- Eight dependency-free Node tests check JavaScript parsing, manual secret-status loading, duplicate-save
   prevention, clearing secret inputs on success/failure, non-disclosure of error details, and evidence,
-  outcome and explicit-verification requirements for recovery submissions.
+  outcome and explicit-verification requirements for recovery submissions. Status refresh cannot race a save.
 - These isolated DOM stubs test behavior, not browser layout or actual credential storage.
 
 ## Local browser evidence

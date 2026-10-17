@@ -115,12 +115,9 @@ class Executor:
                 name, email = self.cfg.git_author
                 _git(wt, "-c", f"user.name={name}", "-c", f"user.email={email}", "-c", "commit.gpgsign=false",
                      "commit", "-q", "--no-verify", "-m", f"{task_id}: {self._title(task_id)}")
-            try:
-                return _git(wt, "rev-parse", "HEAD"), _git(repo, "diff", "--stat", f"{p.main_branch}...{branch}")
-            except ExecutorError:
-                return "", ""
+            return _git(wt, "rev-parse", "HEAD"), _git(repo, "diff", "--stat", f"{p.main_branch}...{branch}")
         commit, diffstat = await asyncio.to_thread(commit_changes)
-        return RunResult(ok=proc.returncode == 0 and bool(diffstat), branch=branch, worktree=str(wt),
+        return RunResult(ok=proc.returncode == 0, branch=branch, worktree=str(wt),
                          commit=commit, diffstat=diffstat or "(no changes)", output_tail=text[-1500:])
 
     def open_pr(self, project_id: str, task_id: str, branch: str, body: str) -> str:
