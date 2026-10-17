@@ -36,6 +36,8 @@ class LLMResult:
     session_id: str = ""             # the CLI session this answer belongs to (to resume next time)
     system_hash: str = ""            # the team prompt now inside that session
     cached_tokens: int = 0           # input tokens served from the provider's prompt cache (cheaper)
+    model: str = ""                  # actual responder when an explicitly configured fallback is used
+    fallback_used: bool = False
 
     @property
     def total_tokens(self) -> int:
@@ -74,11 +76,17 @@ def is_transient(error: str) -> bool:
 
 
 def make_llm(cfg: LLMConfig) -> LLM:
+    if cfg.fallbacks:
+        from .fallback import FallbackLLM
+        return FallbackLLM(cfg)
     p = cfg.provider.lower()
+    if p == "bedrock":
+        from .bedrock_llm import BedrockLLM
+        return BedrockLLM(cfg)
     if p in ("anthropic", "claude"):
         from .anthropic_llm import AnthropicLLM
         return AnthropicLLM(cfg)
-    if p in ("openai", "codex", "ollama", "openrouter", "openai-compatible"):
+    if p in ("openai", "codex", "ollama", "openrouter", "openai-compatible", "gemini"):
         from .openai_llm import OpenAILLM
         return OpenAILLM(cfg)
     if p in ("claude-code", "claude_code", "claude-cli", "subscription"):

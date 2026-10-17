@@ -13,6 +13,7 @@ class Element {
   constructor(tag, attrs, children) {
     this.tag = tag; this.attrs = {...attrs}; this.children = children.flat(9).filter(x => x != null && x !== false);
     Object.assign(this, attrs); this.value = attrs.value || ''; this.disabled = !!attrs.disabled;
+    this.style = {};
     if (tag === 'textarea') this.value = this.textContent; // HTML ignores a textarea value attribute.
   }
   focus() {}
@@ -42,6 +43,29 @@ const metadata = {backend: 'env', namespace: '', encrypted_at_rest: false,
   entries: [{name: 'OPENAI_API_KEY', status: 'missing'}]};
 
 test('entire console JavaScript parses', () => { new vm.Script(script); });
+
+test('model routing needs consent, retains fallback settings and changes only the selected purpose', async () => {
+  const calls = [], saved = {company: {provider: 'claude-code', model: 'sonnet'},
+    planning: {provider: 'gemini', model: 'planner', fallbacks: [{provider: 'openrouter', model: 'openrouter/free', free_only: true}]}};
+  const context = vm.createContext({h, S: {}, AI_HEALTH: null,
+    PROVIDERS: [['claude-code', 'Claude CLI'], ['gemini', 'Gemini'], ['openrouter', 'OpenRouter'], ['bedrock', 'Bedrock']],
+    api: async (path, body) => { calls.push({path, body}); return path === '/api/models/routes' ? saved : {}; }});
+  new vm.Script(section('function modelRoutingCard(', 'function modelsCard(')).runInContext(context);
+  const card = context.modelRoutingCard(); await new Promise(setImmediate);
+  const field = label => find(card, x => x.attrs['aria-label'] === label);
+  field('Model routing scope').value = 'planning'; field('Model routing scope').onchange();
+  assert.equal(field('Primary provider').value, 'gemini');
+  assert.equal(field('Fallback 1 model').value, 'openrouter/free');
+  const save = find(card, x => x.tag === 'button' && x.textContent === 'Save routing');
+  await save.onclick(); assert.equal(calls.filter(x => x.body).length, 0);
+  field('Approve model routing').checked = true;
+  await save.onclick();
+  const posted = calls.find(x => x.body)?.body;
+  assert.equal(posted.who, 'planning'); assert.equal(posted.fallbacks[0].free_only, true);
+  field('Primary provider').value = 'bedrock'; field('Primary provider').onchange();
+  assert.equal(field('Primary model').value, '');
+  assert.match(card.textContent, /not IAM\/SSO/);
+});
 
 function projectFixture(respond = async () => ({})) {
   const calls = [], p = {id: 'site', name: 'Site', members: ['riya'], lead: 'riya'};

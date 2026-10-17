@@ -27,7 +27,8 @@ class OpenAILLM:
             raise LLMError(str(e)) from None
         if cfg.secret_store and cfg.secret_store.backend == "keychain" and cfg.api_key_env and not key:
             raise LLMError("API credential is missing from Keychain; environment fallback is disabled.")
-        self.client = openai.OpenAI(api_key=key or "not-needed", base_url=cfg.base_url or None)
+        self.client = openai.OpenAI(api_key=key or "not-needed", base_url=cfg.base_url or None,
+                                   timeout=120, max_retries=0)
         self.cfg = cfg
         self.reasoning = bool(_REASONING.match(cfg.model.split("/")[-1]))
         self.json_mode = True                    # switched off if the endpoint doesn't support it
@@ -41,6 +42,10 @@ class OpenAILLM:
             kw["temperature"] = self.cfg.temperature
         if self.json_mode:
             kw["response_format"] = {"type": "json_object"}
+        if self.cfg.free_only:
+            # Prevent account-level model fallbacks from silently selecting a paid model.
+            kw["extra_body"] = {"route": "fallback", "models": [self.cfg.model],
+                                "provider": {"max_price": {"prompt": 0, "completion": 0}}}
         return kw
 
     def complete(self, system: str, messages: list[dict]) -> LLMResult:
