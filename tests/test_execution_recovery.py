@@ -2,12 +2,15 @@
 import asyncio
 import subprocess
 import sys
+import threading
+from dataclasses import asdict
 
 import pytest
 
 from james_monitoring.asks import AskError, AskStore
 from james_monitoring.llm.fake import FakeLLM
 from james_monitoring.runtime import ConsoleBus, Event, Runtime
+from james_monitoring.github import Change
 from .test_workforce import app, http  # reusable synthetic HTTP fixtures
 
 
@@ -185,3 +188,112 @@ async def test_action_card_contains_exact_content_and_truncated_chat_cannot_appr
     await rt.decide_ask(ask.id, "approved", rt.owner_id, via="console")
     await rt.drain()
     assert rt.asks.get(ask.id).execution["status"] == "succeeded"
+
+
+def effect_ask(rt, kind):
+    task = rt.tasks.create(title="Reviewed work", owner="sofia", created_by=rt.owner_id,
+                           project="site", done_means=["Owner verification"])
+    if kind == "merge":
+        payload = {"project": "site", "branch": "jm/" + task.id, "pr": "", "expected_head": "a" * 40}
+    else:
+        payload = {"change": asdict(Change(task.id, "priority", "P2")),
+                   "expected": rt.github.values(task)["priority"], "task_owner": task.owner,
+                   "task_project": task.project,
+                   "scope": [rt.cfg.github.owner, rt.cfg.github.repo, rt.cfg.github.project]}
+    return rt.asks.create(requester="sofia", summary="Reviewed effect", kind=kind,
+                          task=task.id, payload=payload)
+
+
+@pytest.mark.parametrize("kind", ["merge", "github_change"])
+async def test_other_approval_effects_record_before_execution_and_survive_restart(rt, monkeypatch, kind):
+    ask = effect_ask(rt, kind)
+    calls = []
+
+    def apply(*args):
+        assert rt.asks.get(ask.id).execution["status"] == "started"
+        calls.append("effect")
+        return "synthetic-receipt"
+
+    async def apply_async(*args, **kwargs):
+        return apply()
+
+    monkeypatch.setattr(rt.executor, "merge", apply)
+    monkeypatch.setattr(rt, "_apply_github", apply_async)
+    await rt.decide_ask(ask.id, "approved", rt.owner_id, via="console")
+    await rt.drain()
+    assert rt.asks.get(ask.id).execution["status"] == "succeeded"
+    restarted = Runtime(rt.cfg, FakeLLM(), bus=ConsoleBus(quiet=True))
+    with pytest.raises(AskError, match="No retry"):
+        await restarted.decide_ask(ask.id, "approved", rt.owner_id)
+    assert calls == ["effect"]
+
+
+@pytest.mark.parametrize("kind", ["merge", "github_change"])
+async def test_other_approval_partial_failure_holds_task_and_never_retries(rt, monkeypatch, kind):
+    ask = effect_ask(rt, kind)
+    calls = []
+
+    def fail(*args):
+        calls.append("may-have-applied")
+        raise TimeoutError("private-provider-error")
+
+    async def fail_async(*args, **kwargs):
+        return fail()
+
+    monkeypatch.setattr(rt.executor, "merge", fail)
+    monkeypatch.setattr(rt, "_apply_github", fail_async)
+    with pytest.raises(AskError, match="uncertain") as error:
+        await rt.decide_ask(ask.id, "approved", rt.owner_id, via="console")
+    saved = rt.asks.get(ask.id)
+    assert saved.execution["status"] == "uncertain"
+    assert "private-provider-error" not in saved.path.read_text() + str(error.value)
+    assert rt.tasks.get(ask.doc.meta["task"]).status == "blocked"
+    with pytest.raises(AskError, match="No retry"):
+        await rt.decide_ask(ask.id, "approved", rt.owner_id)
+    await rt.reconcile_ask(ask.id, "completed", rt.owner_id, "Verified destination receipt")
+    assert calls == ["may-have-applied"]
+    assert not rt.llm.calls
+
+
+async def test_cancelled_merge_keeps_process_guard_until_worker_really_stops(rt, monkeypatch):
+    ask = effect_ask(rt, "merge")
+    started, release = threading.Event(), threading.Event()
+    other = Runtime(rt.cfg, FakeLLM(), bus=ConsoleBus(quiet=True))
+
+    def merge(*args):
+        started.set()
+        assert release.wait(10), "test worker was not released"
+        return "synthetic-sha"
+
+    monkeypatch.setattr(rt.executor, "merge", merge)
+    execution = asyncio.create_task(rt.decide_ask(ask.id, "approved", rt.owner_id))
+    try:
+        assert await asyncio.to_thread(started.wait, 5)
+        execution.cancel()
+        await asyncio.sleep(0)
+        assert not execution.done()
+        with pytest.raises(AskError, match="elsewhere"):
+            await other.reconcile_ask(ask.id, "not_completed", rt.owner_id, "Too early")
+        assert rt.asks.get(ask.id).execution["status"] == "started"
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await execution
+    assert rt.asks.get(ask.id).execution["status"] == "uncertain"
+
+
+async def test_stale_github_proposal_has_no_execution_attempt(rt):
+    ask = effect_ask(rt, "github_change")
+    rt.tasks.update_fields(ask.doc.meta["task"], rt.owner_id, priority="P0")
+    with pytest.raises(AskError, match="changed"):
+        await rt.decide_ask(ask.id, "approved", rt.owner_id, via="console")
+    assert rt.asks.get(ask.id).execution == {}
+
+
+async def test_merge_dependency_preflight_does_not_consume_approval(rt):
+    ask = effect_ask(rt, "merge")
+    prerequisite = rt.tasks.create(title="Prerequisite", owner="marcus", created_by=rt.owner_id)
+    rt.tasks.update_fields(ask.doc.meta["task"], rt.owner_id, depends_on=[prerequisite.id])
+    with pytest.raises(AskError):
+        await rt.decide_ask(ask.id, "approved", rt.owner_id)
+    assert rt.asks.get(ask.id).execution == {}

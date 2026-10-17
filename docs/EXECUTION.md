@@ -5,8 +5,8 @@ message reached its destination or a background coding run finished.
 
 ## Covered in this increment
 
-For requests of kind `action`, James persists an execution attempt before recording approval and running
-the action. The attempt includes the approver, timestamp and hash of the reviewed request. Changes between
+For approved requests of kind `action`, `merge` and `github_change`, James persists an execution attempt
+before running the side effect. The attempt includes the approver, timestamp and hash of the request. Changes between
 preflight and the durable write are refused. Action requests show the proposed action, destination and full
 content in Details; requests exceeding the chat preview require console approval.
 
@@ -28,7 +28,19 @@ Any recorded attempt prevents re-approving/rejecting that same request through t
 Interrupted and uncertain task-linked work is held in scheduling, dispatch and action checks until reconciled.
 Unrelated one-off work remains available. Do not create a replacement request merely to bypass this hold.
 
+GitHub proposals are checked against the current connection and task before the attempt is recorded.
+Merge dependency checks also run first. Once a merge/proposal handler starts, an exception is conservatively
+uncertain even if it may have failed before changing anything. There is no longer an instruction to blindly
+approve the same failed merge again. Inspect the local repository/remote PR or task state and reconcile.
+Cancelling a merge waits for its bounded git worker to exit before releasing the decision lock; cancelling
+an asyncio task cannot stop an already-running thread. This may delay shutdown until command timeouts expire.
+Reconciliation records evidence only: it does not repair task state, merge code or replay follow-up messages.
+
 ## Owner recovery API
+
+The owner console exposes this flow under Approvals → Execution recovery. It shows interrupted/uncertain
+attempts separately from normal approval buttons, requires a verified outcome, evidence and an explicit
+verification checkbox, and never offers a retry button. Unsaved evidence is protected from automatic refresh.
 
 `GET /api/executions` lists all unresolved attempts (not just the latest 50 approvals). The normal asks API
 includes execution metadata; the owner's notifications flag unresolved attempts. Neither endpoint executes
@@ -47,9 +59,22 @@ Do not paste credentials or private provider diagnostics into the evidence field
 
 ## Limits still requiring work
 
-This increment journals `action` requests only. Merge requests, inbound GitHub proposals, scheduled-run
-attempts, green/yellow actions and background coding results are not yet covered by this execution record.
-Do not treat their existing request IDs or runtime state as a transactional ledger.
+Approved actions, merges and inbound GitHub proposals are journaled. Rejection-triggered PR closure,
+green/yellow actions and background coding results are not yet covered by this execution record. Scheduled
+runs have their own receipts (see SCHEDULER.md). A successful approval handler does not prove completion of
+any follow-up tasks it spawned. Do not treat their request IDs or runtime state as a transactional ledger.
+New merge requests include a full reviewed commit id in their details and payload. Local merges verify the
+branch head and merge that exact commit even if the branch subsequently moves. GitHub merges send the expected
+head SHA to the immediate merge API and require a completed-merge receipt. A missing full commit in a legacy
+request fails closed: reject it and review a newly generated request. The execution hash detects request-file
+changes during preflight, not a stale approval page opened before another edit.
+
+The GitHub path validates the PR repository against the configured repository, and checks its head, base
+branch and open/non-draft state. It does not enable auto-merge/queues, bypass checks, delete branches or merge
+other PRs in a stack. Repositories requiring those workflows need manual handling. Remote base retargeting
+between validation and merge, configuration changes, and concurrent human git commands are not an atomic
+transaction with this approval. Local James merge/catch-up operations share a repository lock; other git
+clients do not participate. If automatic conflict abort fails, no destructive hard reset is attempted.
 
 There is no automatic retry, external provider reconciliation, outbox delivery, or cross-machine idempotency.
 The same operation intentionally created under another approval ID is a separate request, not automatically

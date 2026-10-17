@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import subprocess
 
 path = os.environ["FAKE_GH_STATE"]
 st = json.load(open(path)) if os.path.exists(path) else {}
@@ -67,8 +68,24 @@ elif args[0] == "api" and "issues/comments" in args[1]:
 elif args[:2] == ["pr", "create"]:
     n = len(st["prs"]) + 1
     url = f"https://github.com/acme/site/pull/{n}"
-    st["prs"][url] = {"head": flag("--head"), "title": flag("--title"), "state": "open"}
+    head_sha = subprocess.check_output(["git", "rev-parse", flag("--head")], text=True).strip()
+    st["prs"][url] = {"head": flag("--head"), "head_sha": head_sha, "base": flag("--base"),
+                       "title": flag("--title"), "state": "open"}
     out = url + "\n"
+elif args[:2] == ["repo", "view"]:
+    out = json.dumps({"url": "https://github.com/acme/site"})
+elif args[0] == "api" and args[1].startswith("repos/acme/site/pulls/"):
+    number = args[1].split("/")[4]
+    pr = st["prs"][f"https://github.com/acme/site/pull/{number}"]
+    if args[1].endswith("/merge"):
+        body = json.loads(stdin)
+        if body["sha"] != pr["head_sha"]:
+            sys.exit("reviewed SHA mismatch")
+        pr["state"] = "merged"
+        out = json.dumps({"merged": True, "sha": pr["head_sha"]})
+    else:
+        out = json.dumps({"state": pr["state"], "draft": False, "head": {"sha": pr["head_sha"]},
+                          "base": {"ref": pr["base"]}})
 elif args[:2] in (["pr", "merge"], ["pr", "close"]):
     st["prs"][args[2]]["state"] = "merged" if args[1] == "merge" else "closed"
 json.dump(st, open(path, "w"))

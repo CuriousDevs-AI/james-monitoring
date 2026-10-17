@@ -1447,9 +1447,9 @@ class Runtime:
             except ExecutorError as e:
                 self.tasks.add_log(task_id, m.id, f"no pull request: {e}")
         ask = self.asks.create(requester=m.id, summary=f"Merge {pr or r.branch} into {project_id} main ({task_id})",
-                               details=f"{r.diffstat}\n\n" + (f"Pull request: {pr}" if pr else f"Worktree: {r.worktree}"),
+                               details=f"Reviewed commit: {r.commit}\n\n{r.diffstat}\n\n" + (f"Pull request: {pr}" if pr else f"Worktree: {r.worktree}"),
                                level="red", task=task_id, kind="merge",
-                               payload={"project": project_id, "branch": r.branch, "pr": pr})
+                               payload={"project": project_id, "branch": r.branch, "pr": pr, "expected_head": r.commit})
         self.tasks.set_status(task_id, "review", by=m.id, note=f"code ready on {r.branch}")
         await asyncio.to_thread(self.ws.commit, f"{task_id}: code ready on {r.branch}", m.name)
         await self.bus.send_owner(m.id, ask.summary, ask=ask, urgent=True)
@@ -1459,7 +1459,18 @@ class Runtime:
         """One decision per request, even when Approve is tapped twice or in two channels at once."""
         async with self._ask_locks[ask_id.upper()]:
             with self.asks.decision_guard(ask_id):
-                out = await self._decide_ask(ask_id, decision, by, note, via)
+                had_execution = bool(self.asks.get(ask_id).execution)
+                try:
+                    out = await self._decide_ask(ask_id, decision, by, note, via)
+                except BaseException as error:
+                    current = self.asks.get(ask_id)
+                    if not had_execution and current.execution.get("status") == "started":
+                        current = self.asks.finish_execution(ask_id, "uncertain", type(error).__name__)
+                        await self._hold_task_for(current)
+                        if isinstance(error, Exception):
+                            raise AskError(f"{ask_id} execution outcome is uncertain; inspect the destination and "
+                                           "reconcile. Do not retry.") from None
+                    raise
             try:
                 summary = self.asks.get(ask_id).summary
             except Exception:  # noqa: BLE001
@@ -1484,6 +1495,28 @@ class Runtime:
             self.audit.record(kind, who, action, target, detail, via)
         except Exception:  # noqa: BLE001
             log.exception("audit record failed")
+
+    async def _merge_with_guard(self, project: str, target: str, is_pr: bool, expected_head: str) -> str:
+        """Keep the caller's decision lock until the non-cancellable git thread really stops.
+
+        Cancellation of to_thread does not stop its side effect. Never allow another process to
+        reconcile while that worker can still merge. Executor commands have their own timeouts.
+        """
+        worker = asyncio.create_task(asyncio.to_thread(
+            self.executor.merge_pr if is_pr else self.executor.merge, project, target, expected_head))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not worker.cancelled():
+                worker.exception()  # retrieve any failure; the cancelled caller remains uncertain
+            raise
 
     async def _decide_ask(self, ask_id: str, decision: str, by: str, note: str = "", via: str = "") -> str:
         pre = self.asks.get(ask_id)
@@ -1522,24 +1555,28 @@ class Runtime:
                     or p.get("expected") != self.github.values(t).get(c.field) \
                     or p.get("task_owner") != t.owner or p.get("task_project") != t.project:
                 raise AskError("The task or GitHub connection changed. Reject this request and review a fresh edit.")
-            try:
-                github_result = await self._apply_github(c, approved=True)
-            except (TaskError, ValueError) as e:
-                raise AskError(f"{pre.id} is still open — GitHub change failed: {e}") from None
+            if not self.cfg.agent_can_access(t.owner):
+                raise AskError("Private tasks cannot be controlled through the shared GitHub board.")
+            self._check_execution_hold({"type": "update_task", "id": t.id})
+            self.asks.start_execution(pre, by)
+            github_result = await self._apply_github(c, approved=True)
         if pre.kind == "merge" and decision == "approved" and pre.status == "pending":
-            # Merge first; only a merge that worked makes the request "approved". A failed merge is rolled back
-            # and the request stays open.
             p = pre.doc.meta.get("payload") or {}
+            if not isinstance(p, dict) or not p.get("project") or not p.get("branch"):
+                raise AskError("The merge request is incomplete. Reject it and review a fresh request.")
             try:
                 if pre.doc.meta.get("task"):
                     self.tasks.require_dependencies(self.tasks.get(pre.doc.meta["task"]))
-                if p.get("pr"):
-                    sha = await asyncio.to_thread(self.executor.merge_pr, p["project"], p["pr"])
-                else:
-                    sha = await asyncio.to_thread(self.executor.merge, p["project"], p["branch"])
-            except (ExecutorError, KeyError, TaskError) as e:
-                raise AskError(f"{pre.id} is still open — the merge didn't happen: {e}. Fix it and approve again, "
-                               f"or reject.") from None
+                    self._check_execution_hold({"type": "run_code", "task": pre.doc.meta["task"]})
+            except TaskError as e:
+                raise AskError(f"{pre.id} is still open — {e}") from None
+            if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", str(p.get("expected_head") or "")):
+                raise AskError("This merge request has no full reviewed commit. Reject it and review a fresh request.")
+            if via != "console" and len(pre.doc.sections.get("Details", "")) > 1500:
+                raise AskError("This merge exceeds the chat preview. Review the full details in the console.")
+            self.asks.start_execution(pre, by)
+            sha = await self._merge_with_guard(p["project"], p.get("pr") or p["branch"], bool(p.get("pr")),
+                                               p["expected_head"])
             merged = f" — merged {p['branch']} into {p['project']} ({sha})"
             if pre.doc.meta.get("task"):
                 try:
@@ -1549,6 +1586,8 @@ class Runtime:
                 except TaskError:
                     pass
         ask = self.asks.decide(ask_id, decision, by=by, note=note)
+        if pre.kind in ("merge", "github_change") and decision == "approved":
+            ask = self.asks.finish_execution(ask.id, "succeeded")
         result = f"{ask.id} {decision}{merged}" + (f" — {github_result}" if github_result else "")
         pr = (ask.doc.meta.get("payload") or {}).get("pr")
         if ask.kind == "merge" and decision == "rejected" and pr:

@@ -11,16 +11,19 @@ live account, a free provider, or a production deployment works.
 - [x] Private-assistant task/file boundaries and inbound GitHub proposal review have regression tests.
 - [x] Dependencies block work until accepted completion; one-off requests can remain separate from daily work.
 - [x] Opt-in native credential storage, owner-only metadata/save API and unavailable-store handling.
-- [ ] Owner-facing Secrets Settings screen; no reveal, explicit status checks, restart guidance.
-- [ ] Full execution coverage. Action-approval attempts and owner reconciliation now exist with no blind replay;
-      merge approvals, GitHub proposals and final background-code results still need equivalent receipts.
+- [x] Owner-facing Secrets Settings screen; no reveal, explicit status checks, restart guidance.
+- [ ] Full execution coverage. Action, merge and GitHub-proposal approval attempts now have owner reconciliation
+      with no blind replay; rejection-triggered PR closure, ungated actions and final background-code results
+      still need equivalent receipts. New merge approvals bind an immutable reviewed head and require a
+      completed GitHub merge receipt; older unbound requests fail closed.
       See [EXECUTION.md](EXECUTION.md) for the exact boundary.
 - [ ] Recovery drill from another directory/machine with configuration, tasks, private runtime state and
       separately re-provisioned credentials. GitHub Projects alone is not a full backup. Private atomic
       runtime snapshots and validated offline extraction now exist; see [RECOVERY.md](RECOVERY.md).
 - [x] Scheduler-owned run receipts distinguish scheduled, running, completed, interrupted, failed and
       skipped work; interrupted/failed families require owner acknowledgment. See [SCHEDULER.md](SCHEDULER.md)
-      for local-filesystem and handler-return limits. Owner UI and provider delivery receipts remain separate.
+      for local-filesystem and handler-return limits. Owner recovery UI exists; provider delivery receipts
+      remain separate.
 - [ ] Explicit, opt-in model fallback policy with budget/privacy boundaries; never silently send private
       context to a different provider or treat a free tier as guaranteed capacity.
 - [ ] Per-agent/project connector grants enforced by the executor, not merely by a persona prompt.

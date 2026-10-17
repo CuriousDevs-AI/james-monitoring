@@ -81,8 +81,17 @@ With `prs: true`, and a project that has a code repo pushed to GitHub (`origin`)
 
 1. The coding agent works on `jm/T-012` in a separate worktree. The commits are yours.
 2. The branch is pushed and a PR is opened as you (`T-012: <task title>`, with the task's "Done means").
-3. You get the usual 🔴 approval card, which links the PR.
-   - **Approve**: the PR is merged on GitHub, the task is done, and your local `main` is fast-forwarded if it's clean.
+3. You get the usual 🔴 approval card, which links the PR and records its full reviewed commit id.
+   - **Approve**: the matching commit is merged on GitHub, the task is done after a completed-merge receipt,
+     and your local `main` is fast-forwarded if it's clean. A changed head or base is refused.
    - **Reject**: the PR is closed with your reason.
 
-If the merge fails (a conflict, a required check), the request stays open, so you can fix it and approve again.
+Approved merges and GitHub proposals persist an execution attempt before applying their side effects.
+If a handler fails, its outcome is marked uncertain and that request cannot be approved again, even when a
+local merge conflict was rolled back. The owner checks the actual repository/PR/task state and records
+reconciliation under Approvals → Execution recovery. This does not retry the operation. See
+[EXECUTION.md](EXECUTION.md) for the boundaries. Legacy merge requests without a full commit id require a fresh
+review. The immediate merge API uses its `sha` condition and must return `merged: true` with a commit id;
+no auto-merge, queue, admin bypass, stack expansion or branch deletion is requested. Queue-only/stacked
+workflows require manual handling. This deliberately uses the bounded immediate endpoint rather than an
+asynchronous merge workflow: [GitHub merge API](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request).

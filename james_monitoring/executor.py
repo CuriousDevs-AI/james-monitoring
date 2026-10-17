@@ -9,11 +9,13 @@ branch jm/<task>; main is only touched by `merge()` after the owner approves.
 from __future__ import annotations
 
 import asyncio
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Config, Project
+from .fileio import path_lock
 
 
 class ExecutorError(Exception):
@@ -114,7 +116,7 @@ class Executor:
                 _git(wt, "-c", f"user.name={name}", "-c", f"user.email={email}", "-c", "commit.gpgsign=false",
                      "commit", "-q", "--no-verify", "-m", f"{task_id}: {self._title(task_id)}")
             try:
-                return _git(wt, "rev-parse", "--short", "HEAD"), _git(repo, "diff", "--stat", f"{p.main_branch}...{branch}")
+                return _git(wt, "rev-parse", "HEAD"), _git(repo, "diff", "--stat", f"{p.main_branch}...{branch}")
             except ExecutorError:
                 return "", ""
         commit, diffstat = await asyncio.to_thread(commit_changes)
@@ -133,22 +135,23 @@ class Executor:
         except (ExecutorError, GitHubError) as e:
             raise ExecutorError(f"couldn't open the pull request: {e}") from None
 
-    def merge_pr(self, project_id: str, url: str) -> str:
+    def merge_pr(self, project_id: str, url: str, expected_head: str) -> str:
         """Approve = merge the PR on GitHub (as the owner), then bring local main up to date if it's clean."""
         p = self.project(project_id)
         repo = Path(p.repo).resolve()
         from .github import GitHubError, GitHubSync
         try:
-            GitHubSync(self.cfg, None, None).merge_pr(repo, url)
+            sha = GitHubSync(self.cfg, None, None).merge_pr(repo, url, expected_head, p.main_branch)
         except GitHubError as e:
             raise ExecutorError(f"GitHub didn't merge {url}: {e}") from None
         try:
-            if _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == p.main_branch and \
-                    not _git(repo, "status", "--porcelain", "--untracked-files=no"):
-                _git(repo, "pull", "-q", "--ff-only", timeout=120)
+            with path_lock(repo / ".jm" / "git"):
+                if _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == p.main_branch and \
+                        not _git(repo, "status", "--porcelain", "--untracked-files=no"):
+                    _git(repo, "pull", "-q", "--ff-only", timeout=120)
         except ExecutorError:
             pass                                          # merged on GitHub; local catch-up is best effort
-        return url.rstrip("/").rsplit("/", 1)[-1] and f"PR #{url.rstrip('/').rsplit('/', 1)[-1]}"
+        return f"PR #{url.rstrip('/').rsplit('/', 1)[-1]} @ {sha}"
 
     def close_pr(self, project_id: str, url: str, why: str) -> None:
         p = self.project(project_id)
@@ -158,24 +161,32 @@ class Executor:
         except GitHubError as e:
             raise ExecutorError(str(e)) from None
 
-    def merge(self, project_id: str, branch: str) -> str:
+    def merge(self, project_id: str, branch: str, expected_head: str) -> str:
         p = self.project(project_id)
         repo = Path(p.repo).resolve()
+        with path_lock(repo / ".jm" / "git"):
+            return self._merge_local(p, repo, branch, expected_head)
+
+    def _merge_local(self, p: Project, repo: Path, branch: str, expected_head: str) -> str:
+        if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", expected_head or ""):
+            raise ExecutorError("A full reviewed commit id is required; create a fresh merge request.")
+        if _git(repo, "rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}") != expected_head:
+            raise ExecutorError("The branch changed after review; create a fresh merge request.")
         current = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
         if current != p.main_branch:
             raise ExecutorError(f"{repo} is on `{current}`, expected `{p.main_branch}` — not merging")
         if _git(repo, "status", "--porcelain", "--untracked-files=no"):
             raise ExecutorError(f"{repo} has uncommitted changes — not merging")
-        before = _git(repo, "rev-parse", "HEAD")
         try:
             name, email = self.cfg.git_author
             _git(repo, "-c", f"user.name={name}", "-c", f"user.email={email}", "-c", "commit.gpgsign=false",
-                 "merge", "--no-ff", "--no-verify", "-m", f"Merge {branch} (approved)", branch)
+                 "merge", "--no-ff", "--no-verify", "-m", f"Merge {branch} (approved)", expected_head)
         except ExecutorError as e:
-            try:                                              # never leave the real repo half-merged
+            try:
                 _git(repo, "merge", "--abort")
             except ExecutorError:
-                _git(repo, "reset", "--hard", before)
+                raise ExecutorError("Merge failed and automatic abort could not be confirmed; inspect the "
+                                    "repository manually. No hard reset was attempted.") from None
             raise ExecutorError(f"merge conflict or error, rolled back: {str(e)[:300]}") from None
         sha = _git(repo, "rev-parse", "--short", "HEAD")
         if p.push:
