@@ -116,7 +116,8 @@ class OpenCodeLLM:
         if err or not text:
             noise = [ln for ln in (r.stderr or "").splitlines() if ln.strip() and "opencode-claude-auth" not in ln]
             detail = err or ("\n".join(noise)[-300:] if noise else "") or "no answer"
-            hint = "" if self.free else (f" — is {self.cfg.model.split('/')[0]} signed in? Settings → Models → Log in")
+            auth_error = re.search(r"auth|401|403|api.?key|not logged|sign.?in|log.?in", detail, re.I)
+            hint = "" if self.free or not auth_error else (f" — is {self.cfg.model.split('/')[0]} signed in? Settings → Models → Log in")
             raise LLMError(f"opencode ({self.cfg.model}) failed: {detail}{hint}")
         m = re.search(r'"sessionID"\s*:\s*"([^"]+)"', r.stdout or "")
         return LLMResult(text=text, input_tokens=tin, output_tokens=tout, cached_tokens=cached,

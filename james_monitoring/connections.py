@@ -20,7 +20,8 @@ from .config import CLI_PROVIDERS, LLMConfig
 LOGIN = {"claude-code": ["auth", "login", "--claudeai"], "codex-cli": ["login", "--device-auth"]}   # (for jm connection)
 LABEL = {"claude-code": "Claude subscription (claude CLI)", "codex-cli": "ChatGPT / Codex subscription (codex CLI)",
          "opencode": "OpenCode (any model, incl. free)",
-         "anthropic": "Anthropic API", "openai": "OpenAI-compatible API", "fake": "Fake (tests)"}
+         "anthropic": "Anthropic API", "openai": "OpenAI-compatible API", "gemini": "Gemini API",
+         "bedrock": "Amazon Bedrock API", "fake": "Fake (tests)"}
 INSTALL = {"claude-code": "npm install -g @anthropic-ai/claude-code", "codex-cli": "npm install -g @openai/codex",
            "opencode": "npm install -g opencode-ai"}
 
@@ -466,7 +467,10 @@ def catalog() -> list[dict]:
                            f"free models available") if oc.get("installed") else "not installed",
                 "fix": "" if oc.get("installed") else f"Install it on this machine: {INSTALL['opencode']}",
                 "providers": oc.get("providers", [])})
-    for pid, label, env, base in (("anthropic", "Anthropic API (pay per use)", "ANTHROPIC_API_KEY", ""),
+    for pid, label, env, base in (("gemini", "Gemini API — free quota or paid billing", "GEMINI_API_KEY",
+                                   "https://generativelanguage.googleapis.com/v1beta/openai/"),
+                                  ("bedrock", "Amazon Bedrock — regional API key", "AWS_BEARER_TOKEN_BEDROCK", ""),
+                                  ("anthropic", "Anthropic API (pay per use)", "ANTHROPIC_API_KEY", ""),
                                   ("openai", "OpenAI API (pay per use)", "OPENAI_API_KEY", ""),
                                   ("openrouter", "OpenRouter — hundreds of models, one key", "OPENROUTER_API_KEY",
                                    "https://openrouter.ai/api/v1")):

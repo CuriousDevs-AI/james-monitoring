@@ -250,13 +250,13 @@ class Runtime:
             self._locks, self._bg, self.turns = shared._locks, shared._bg, shared.turns
             self._coding, self._ask_locks, self._gh_lock = shared._coding, shared._ask_locks, shared._gh_lock
 
-    def llm_for(self, m: Member, project: str = "") -> LLM:
+    def llm_for(self, m: Member, project: str = "", purpose: str = "") -> LLM:
         """Each person can run on their own model (Claude, Codex, a local model…) — and on a project, on that
         project's model or their own model for that project. Default: the company's."""
-        conf = self.cfg.llm_for(m, project)
+        conf = self.cfg.llm_for(m, project, purpose)
         if conf is self.cfg.llm:
             return self._sandboxed(self.llm)
-        key = f"{m.id}@{project}" if self.cfg.llm_source(m, project) in ("project", "person_project") else m.id
+        key = f"{m.id}@{project}:{purpose}"
         if key not in self._llms:
             self._llms[key] = self._sandboxed(make_llm(conf))
         return self._llms[key]
@@ -286,26 +286,26 @@ class Runtime:
             fn(data)
             atomic_write(self._sessions_path(), json.dumps(data, indent=1))
 
-    def session_for(self, m: Member, room: str, project: str = ""):
+    def session_for(self, m: Member, room: str, project: str = "", purpose: str = ""):
         """This person's session in this room — resumed if it's still the same model and not too long or old."""
         from .llm import Session
-        key = f"{m.id}:{room}"
+        key = f"{m.id}:{room}" + (f":{purpose}" if purpose else "")
         rec = self._sessions().get(key) or {}
-        fresh = (not rec.get("id") or rec.get("model") != self.model_name(m, project)
+        fresh = (not rec.get("id") or rec.get("model") != self.model_name(m, project, purpose)
                  or int(rec.get("calls", 0)) >= SESSION_MAX_CALLS or int(rec.get("tokens", 0)) >= SESSION_MAX_TOKENS
                  or (time.time() - float(rec.get("started", 0) or 0)) > SESSION_MAX_DAYS * 86400)
         return Session(key, "" if fresh else rec["id"], "" if fresh else rec.get("system_hash", ""))
 
-    def _save_session(self, m: Member, sess, res, project: str = "") -> None:
+    def _save_session(self, m: Member, sess, res, project: str = "", purpose: str = "") -> None:
         if not res.session_id:
             return
-        model = self.model_name(m, project)
+        model = self.model_name(m, project, purpose)
 
         def fn(data):
             rec = data.get(sess.key) or {}
             if rec.get("id") != res.session_id:
                 rec = {"id": res.session_id, "started": time.time(), "calls": 0, "tokens": 0}
-            rec.update(model=model, system_hash=res.system_hash, last=time.time(),
+            rec.update(model=model, project=project, purpose=purpose, system_hash=res.system_hash, last=time.time(),
                        calls=int(rec.get("calls", 0)) + 1,
                        tokens=int(rec.get("tokens", 0)) + getattr(res, "billable_tokens", res.total_tokens))
             data[sess.key] = rec
@@ -319,9 +319,12 @@ class Runtime:
             mid, _, room = key.partition(":")
             if not self.cfg.member(mid):
                 continue
+            purpose = rec.get("purpose", "")
+            if purpose and room.endswith(":" + purpose):
+                room = room[:-(len(purpose) + 1)]
             out.append({"member": mid, "room": room, "model": rec.get("model", ""), "calls": rec.get("calls", 0),
                         "tokens": rec.get("tokens", 0), "started": rec.get("started"), "last": rec.get("last"),
-                        "current": rec.get("model") == self.model_name(self.cfg.member(mid))})
+                        "current": rec.get("model") == self.model_name(self.cfg.member(mid), rec.get("project", ""), purpose)})
         return sorted(out, key=lambda x: (x["member"], -(x["last"] or 0)))
 
     def reset_sessions(self, member: str = "", room: str = "") -> int:
@@ -331,6 +334,9 @@ class Runtime:
         def fn(data):
             for key in list(data):
                 mid, _, r = key.partition(":")
+                purpose = data[key].get("purpose", "")
+                if purpose and r.endswith(":" + purpose):
+                    r = r[:-(len(purpose) + 1)]
                 if (not member or mid == member) and (not room or r == room):
                     gone.append(data.pop(key))
         self._update_sessions(fn)
@@ -346,11 +352,11 @@ class Runtime:
 
     def models_of(self, m: Member) -> set[str]:
         """Every model this person uses now: their own, and any a project gives them."""
-        return {self.model_name(m)} | {self.model_name(m, p) for p in self.cfg.projects if m.id in
-                                       [x.id for x in self.cfg.project_members(p)]}
+        return {self.model_name(m, p, purpose) for p in ("", *m.projects)
+                for purpose in ("", "planning", "work")}
 
-    def model_name(self, m: Member, project: str = "") -> str:
-        c = self.cfg.llm_for(m, project)
+    def model_name(self, m: Member, project: str = "", purpose: str = "") -> str:
+        c = self.cfg.llm_for(m, project, purpose)
         if c.provider in ("opencode", "open-code"):
             return f"opencode:{c.model}"                  # OpenCode models already read "provider/model"
         return c.provider + (f"/{c.model}" if c.model else "")
@@ -431,10 +437,10 @@ class Runtime:
                 bm[day][model] = int(bm[day].get(model, 0)) + tokens
         return int(self.ws.update_state(fn)["usage"][day][member_id])
 
-    def _heartbeat(self, member_id: str, error: str = "", project: str = "") -> None:
+    def _heartbeat(self, member_id: str, error: str = "", project: str = "", purpose: str = "") -> None:
         """Last contact per person; `fails` counts consecutive model failures (one timeout isn't an incident)."""
         m = self.cfg.member(member_id)
-        model = self.model_name(m, project) if m else ""
+        model = self.model_name(m, project, purpose) if m else ""
 
         if error:
             prev_err = ((self.ws.state().get("heartbeat") or {}).get(member_id) or {}).get("error", "")
@@ -902,10 +908,11 @@ class Runtime:
             channel=channel, needs_approval=[a for a, lv in gated.items() if lv == "red"
                                              and (a != "run_code" or (self.executor.enabled and not m.monitor))],
             extra_actions=REMIND_SPEC if m.assistant else "")
+        purpose = "work" if ev.task else ""
         try:
-            llm = self.llm_for(m, ev.project)
+            llm = self.llm_for(m, ev.project, purpose)
         except LLMError as e:
-            self._heartbeat(m.id, error=str(e)[:200], project=ev.project)
+            self._heartbeat(m.id, error=str(e)[:200], project=ev.project, purpose=purpose)
             return f"⚠️ My AI model isn't available right now: {e}"
         room = self.room_of(m, ev)
         hkey = f"{m.id}:{room}"
@@ -922,7 +929,7 @@ class Runtime:
         budget_exhausted = False
         deadline = time.monotonic() + TURN_SECONDS           # one turn never holds this person's lock for long
 
-        sess = self.session_for(m, room, ev.project) if getattr(llm, "sessions", False) else None
+        sess = self.session_for(m, room, ev.project, purpose) if getattr(llm, "sessions", False) else None
 
         async def call(msgs):
             nonlocal last_error, budget_exhausted
@@ -936,7 +943,7 @@ class Runtime:
                 try:
                     if sess is not None:
                         res = await asyncio.to_thread(llm.complete, system, msgs, sess)
-                        self._save_session(m, sess, res, ev.project)   # resumed next time, even after a restart
+                        self._save_session(m, sess, res, ev.project, purpose)
                     else:
                         res = await asyncio.to_thread(llm.complete, system, msgs)
                     break
@@ -948,11 +955,15 @@ class Runtime:
                         await asyncio.sleep(wait)                 # rate limit / overload / network: try again
                         continue
                     log.error("llm failed for %s: %s", m.id, e)
-                    self._heartbeat(m.id, error=str(e)[:200], project=ev.project)
+                    self._heartbeat(m.id, error=str(e)[:200], project=ev.project, purpose=purpose)
                     return None
-            self._heartbeat(m.id, project=ev.project)
+            self._heartbeat(m.id, project=ev.project, purpose=purpose)
             billable = getattr(res, "billable_tokens", res.total_tokens)
-            used = self._add_usage(m.id, billable, self.model_name(m, ev.project))
+            actual_model = res.model or self.model_name(m, ev.project, purpose)
+            used = self._add_usage(m.id, billable, actual_model)
+            if res.fallback_used:
+                self.ws.log(m.id, f"Configured model fallback answered: {actual_model}")
+                self._audit("model", m.id, "configured fallback answered", actual_model)
             if cap and used >= 0.8 * cap and used - billable < 0.8 * cap:
                 await self.bus.send_owner(self.cfg.monitor.id, f"💸 {m.name} used 80% of today's token budget.")
             return res

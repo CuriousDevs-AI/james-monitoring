@@ -48,7 +48,7 @@ a token or seeing a green readiness check does not prove that a model answers or
 | Telegram / Slack | Routing, DMs, group messages and approval handling; simulated integration tests | Test your actual bots/app, group membership, permissions and approved destinations |
 | GitHub | Shared-task Project mirror, reviewed inbound proposals and commit-bound merge approvals | Verify your actual board, repository permissions and sync; repository access alone is insufficient |
 | Claude and other model adapters | CLI/API adapters, per-person/project assignment and model probes | Verify the selected model's response, credentials, limits and data policy |
-| Local / free-model options | Ollama endpoint support and explicit opt-in OpenCode free-model path | Verify available models and responses; no guaranteed free capacity or automatic paid-to-free fallback |
+| Local / free-model options | Ollama, opt-in OpenCode free models, Gemini/OpenRouter APIs, explicit bounded fallback | Verify availability and account data/billing policies; no guaranteed free capacity |
 | Human approval and recovery | Execution records for approved actions, merges and GitHub proposals; scheduler receipts; owner recovery UI | Complete background-code and other side-effect receipts, plus live acceptance |
 | Secrets and persistence | Legacy `.env`, opt-in macOS Keychain, git history and private runtime snapshots | Executor-enforced connector grants, protected off-machine backups and credential recovery |
 
@@ -567,6 +567,8 @@ always require approval. Project rules apply to actions that touch that project,
 | `anthropic` | Anthropic API | `ANTHROPIC_API_KEY` | — |
 | `openai` | any OpenAI-compatible API | `OPENAI_API_KEY` (+ `base_url`) | — |
 | `openrouter` | OpenRouter | `OPENROUTER_API_KEY` | — |
+| `gemini` | Gemini's OpenAI-compatible API | `GEMINI_API_KEY` | — |
+| `bedrock` | Amazon Bedrock Converse (supported models/inference profiles) | `AWS_BEARER_TOKEN_BEDROCK` API key + `region` | — |
 | `ollama` | local models | none (`http://localhost:11434/v1`) | — |
 
 - **Per person, per project.** Set a model in `team[].llm`, in `projects.<id>.llm`, or in
@@ -581,10 +583,59 @@ always require approval. Project rules apply to actions that touch that project,
   - `claude`: no tools and no MCP servers.
   - `codex`: shell, browser, apps and user config are off.
   - `opencode`: an isolated config; paid models have every tool off and every permission denied.
-- **Budget, not automatic fallback.** Reported usage is checked before each attempt. A budget-stopped partial
-  turn is not automatically replayed, but this is not a hard spending cap. No paid-to-free switch is implemented;
-  see [BUDGETS.md](docs/BUDGETS.md). OpenCode free mode is opt-in and does not share the paid path's tool denial.
+- **Budget and opt-in fallback.** Reported usage guards remain in place across providers. A budget-stopped
+  partial turn is not replayed. At most two explicitly configured backups can answer on quota/rate-limit or
+  transient service failures; login, permission, invalid-model and policy errors stop. No fallback is enabled
+  by default. This is not a currency cap; see [BUDGETS.md](docs/BUDGETS.md).
 - **Check a model:** use **Settings → AI models** or run `jm connection check`.
+
+### Mix CLI subscriptions and APIs
+
+In **Settings → AI models → Planning, task work & fallback**, choose the company/chat default, AI task
+planning, or task work. Enter the exact primary and optional backup model IDs; approve the destinations before
+saving. Save API credentials in **Settings → Secrets**; configuration contains references, not key values.
+Changing a route invalidates an existing task-draft consent signature. Drafts still require human review.
+
+Precedence is **person-on-project → project → person → purpose route → company default**. Planning routes
+serve AI task drafts; work routes serve task-linked agent turns (including scheduled work). Ordinary chat
+keeps its assigned model. The separate coding executor is unchanged: these routes do not switch a shell
+executor's CLI or replay a partially completed external action.
+
+```yaml
+llm:
+  provider: opencode
+  model: your-provider/your-model  # use the exact ID from your existing OpenCode login
+  fallbacks:                     # optional; context may be sent to each listed destination
+    - provider: openrouter
+      model: openrouter/free
+      free_only: true
+model_routes:
+  planning:
+    provider: claude-code         # retain CLI subscription for planning
+  work:
+    provider: openrouter
+    model: openrouter/free
+    free_only: true
+```
+
+Gemini can be used in any slot with `provider: gemini` and an available model ID. It has **no enforced
+free-only switch** here: quota, billing and data usage depend on the Google project/account. Bedrock uses
+`provider: bedrock`, `region: us-east-1` (or your region), and a Converse-compatible model/inference-profile
+ID. This adapter supports scoped Bedrock bearer API keys, **not IAM/SSO credential discovery or Mantle-only
+models**. Region/model access must be configured in AWS. No SDK dependency is added for Bedrock.
+
+OpenRouter `free_only: true` requires `openrouter/free` or an explicit `:free` ID on the official endpoint,
+and sends zero prompt/completion price ceilings. All backups of a free-only primary must also be free-only.
+Free capacity is limited and never guaranteed. When fallback is configured, CLI calls are stateless with
+James's conversation context, avoiding stale vendor sessions after another model answers; CLI assignments
+without fallback retain their existing sessions. Usage records identify the answering route/model; fallback
+successes are logged. For router IDs, the label identifies the configured router, not its underlying vendor.
+
+Provider references: [Gemini compatibility](https://ai.google.dev/gemini-api/docs/openai),
+[Bedrock API keys](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-use.html),
+[OpenRouter price routing](https://openrouter.ai/docs/guides/routing/provider-selection).
+Automated adapter tests use mocked providers. A live **Test** is still required with your own credentials;
+creating a route or detecting a key does not prove the provider answers.
 
 ## 🔌 Integrations
 
@@ -643,7 +694,7 @@ isn't versioned yet; use it at your own risk.
 | `/api/models/health` [read] | the setup check shown when the console opens |
 | `/api/memory?id=` [admin] | memory entries |
 | `/api/settings` · `/api/project/settings?id=` [admin] | company settings · project settings with the effective value per person |
-| `/api/models/catalog` · `/api/models/team` · `/api/connections` · `/api/opencode/models` [admin] | every model option · per person · connections |
+| `/api/models/catalog` · `/api/models/team` · `/api/models/routes` · `/api/connections` · `/api/opencode/models` [admin] | model options · assignments · purpose routes · connections |
 | `/api/audit` · `/api/audit.csv` · `/api/health` [admin] | the audit log (filters: `kind`, `who`, `q`, `before`) · CSV · system checks |
 | `/api/studio/templates` · `/api/github/status` [admin] | Studio templates and skills · `gh` status |
 | `/api/model_login` [admin] | the state of a running CLI login |
@@ -794,7 +845,8 @@ Release blockers and acceptance evidence live in [DELIVERY.md](docs/DELIVERY.md)
 
 - [ ] Durable background-code outcomes and task holds after executor errors/timeouts/cancellation
 - [ ] Complete side-effect receipts, including ungated actions and rejection-triggered PR closure
-- [ ] Explicit model fallback policy with approved data destinations and spending boundaries
+- [x] Opt-in bounded inference fallback with configured destinations and OpenRouter free-only guard
+- [ ] Currency-denominated reservations and provider billing reconciliation
 - [ ] Executor-enforced per-agent/project connector grants
 - [ ] Source validation and exact-recipient/content approval with outbound delivery reconciliation
 - [ ] Cross-machine recovery and real-account integration acceptance

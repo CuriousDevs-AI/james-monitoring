@@ -9,6 +9,7 @@ from datetime import date
 
 from .fileio import atomic_write, path_lock
 from .llm import LLMError
+from .config import model_settings
 from .project_resources import ProjectResources
 
 
@@ -28,11 +29,10 @@ class ProjectPlan:
         p = self.project
         team = []
         for m in self.members():
-            c = self.rt.cfg.llm_for(m, self.pid)
+            c = self.rt.cfg.llm_for(m, self.pid, 'planning')
             pa = p.agents.get(m.id)
             team.append((m.id, m.role, pa.role if pa else '', pa.instructions if pa else '',
-                         c.provider, c.model, c.base_url, c.api_key_env, c.allow_free,
-                         c.max_tokens, c.temperature))
+                         model_settings(c)))
         snapshot = [p.name, p.description, p.instructions, p.lead, p.status,
                     team, self.resources.fingerprint()]
         return hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
@@ -101,11 +101,12 @@ class ProjectPlan:
                       'Tasks have implicit ids D1,D2,...; depends_on may contain earlier draft ids only. '
                       'No deadline unless supplied. Keep descriptions short. No Markdown fences.')
             try:
-                llm = rt.llm_for(m, self.pid)
+                llm = rt.llm_for(m, self.pid, 'planning')
                 result = await asyncio.to_thread(llm.complete, system, [{'role': 'user', 'content': json.dumps(context)}])
             except LLMError:
                 raise ValueError('Planner model failed. Check its connection; no tasks were created.') from None
-            rt._add_usage(m.id, result.billable_tokens, rt.model_name(m, self.pid))
+            actual_model = result.model or rt.model_name(m, self.pid, 'planning')
+            rt._add_usage(m.id, result.billable_tokens, actual_model)
             try:
                 rows = json.loads(result.text)['tasks']
                 if result.truncated or not isinstance(rows, list) or not 1 <= len(rows) <= 12:
@@ -116,7 +117,7 @@ class ProjectPlan:
             if signature != self.signature():
                 raise ValueError('Project context changed during planning. Generate a fresh draft.')
             plan = dict(id=uuid.uuid4().hex, project=self.pid, signature=signature, planner=m.id,
-                        model=rt.model_name(m, self.pid), tasks=tasks)
+                        model=actual_model, fallback_used=result.fallback_used, tasks=tasks)
             with path_lock(self.path):
                 atomic_write(self.path, json.dumps(plan, ensure_ascii=False, indent=2), mode=0o600)
             return self.read()

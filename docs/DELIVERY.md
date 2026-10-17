@@ -28,8 +28,9 @@ live account, a free provider, or a production deployment works.
       skipped work; interrupted/failed families require owner acknowledgment. See [SCHEDULER.md](SCHEDULER.md)
       for local-filesystem and handler-return limits. Owner recovery UI exists; provider delivery receipts
       remain separate.
-- [ ] Explicit, opt-in model fallback policy with budget/privacy boundaries; never silently send private
-      context to a different provider or treat a free tier as guaranteed capacity.
+- [x] Explicit opt-in inference fallback (two backups max), purpose routes, and OpenRouter free-only guard.
+      Authentication/policy failures stop; configured destinations are shown before planning consent.
+      Live credential/quota tests and currency billing reconciliation remain required; free capacity is not guaranteed.
 - [ ] Per-agent/project connector grants enforced by the executor, not merely by a persona prompt.
 - [ ] Data-source and outbound-connector contracts: collect -> validate -> draft -> approve exact content and
       recipient -> send -> record result. Provider/account access and business scope must be supplied.
@@ -68,10 +69,10 @@ The following are not assumed or enabled by this implementation:
    native credential storage versus a server-side broker and the OS/container boundary for untrusted workers.
 2. **Fallback policy:** approved model destinations, permitted data classes (including private-assistant
    context), and per-provider spending limits. A provider advertising a free tier is not permission to send
-   company data there. Routing and broker/grant enforcement still require implementation after this policy.
+   company data there. Basic opt-in routing exists; fine-grained data-class grants and broker enforcement remain work.
 3. **Pilot connectors:** choose an allowed source and a controlled delivery destination. Start with synthetic
    or owner-provided records and draft-only output unless real source access and outbound testing are approved.
 
 Outstanding engineering also includes final background-code receipts, ungated-effect/outbound reconciliation,
-and an isolated self-improvement pipeline with required tests and human review. Passing the current 369-test
-suite does not close those items. Browser verification is documented in CONSOLE-QA.md.
+and an isolated self-improvement pipeline with required tests and human review. Passing automated tests
+does not close those items. Browser verification is documented in CONSOLE-QA.md.
