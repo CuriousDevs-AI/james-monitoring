@@ -542,7 +542,7 @@ class Runtime:
             raise ValueError("files must stay inside docs/")
         return p, str(p.relative_to(root))
 
-    def _resolve_readable(self, rel: str):
+    def _resolve_readable(self, rel: str, member: Member | None = None):
         """The file an agent may read, or None. Checked on the *resolved* path: `docs/../.git/config` is refused,
         and nothing under .git, .jm or any .env is ever readable."""
         root = self.ws.root.resolve()
@@ -550,8 +550,8 @@ class Runtime:
         m = re.fullmatch(r"(?:tasks/)?(T-\d{3,})(?:[-\w]*)?(?:\.md)?", rel)
         if m:                                              # "T-001", "tasks/T-001.md" → the real task file
             try:
-                return self.tasks.get(m.group(1)).path.resolve()
-            except TaskError:
+                rel = str(self.tasks.get(m.group(1)).path.resolve().relative_to(root))
+            except (TaskError, ValueError):
                 return None
         p = (root / rel).resolve()
         try:
@@ -562,13 +562,27 @@ class Runtime:
             return None
         if any(x in (".git", ".jm") or x.startswith(".env") for x in parts):
             return None
+        owner = ""
+        if parts[0] == "team" and len(parts) > 1:
+            owner = parts[1]
+        elif parts[0] in ("tasks", "asks"):
+            from .mdoc import MDoc
+            try:
+                meta = MDoc.parse(p.read_text()).meta
+                owner = str(meta.get("owner" if parts[0] == "tasks" else "from") or "")
+                if parts[0] == "asks" and meta.get("kind") == "github_change":
+                    return None  # external proposal text is for human review, not agent instructions
+            except (ValueError, OSError):
+                return None
+        if not self.cfg.agent_can_access(owner, member.id if member else ""):
+            return None
         return p
 
-    def _read_files(self, reads: list[dict]) -> str:
+    def _read_files(self, reads: list[dict], member: Member | None = None) -> str:
         out = []
         for a in reads[:5]:
             rel = str(a.get("path", "")).strip().lstrip("/")
-            p = self._resolve_readable(rel)
+            p = self._resolve_readable(rel, member)
             if p:
                 out.append(f"=== {rel} ===\n{p.read_text(errors='replace')[:MAX_FILE_CHARS]}")
             else:
@@ -608,7 +622,8 @@ class Runtime:
         name = (p.name if p and p.name else pid)
         people = ", ".join(f"{x.name} ({x.role})" for x in self.cfg.project_members(pid)) or "nobody yet"
         lead = self.cfg.member(p.lead).name if p and p.lead and self.cfg.member(p.lead) else "-"
-        tasks = [t for t in self.tasks.all() if t.project == pid and t.is_open]
+        tasks = [t for t in self.tasks.all() if t.project == pid and t.is_open
+                 and self.cfg.agent_can_access(t.owner)]
         board = "\n".join(f"  {t.line(self.cfg.timezone)}" for t in tasks) or "  (no open tasks)"
         return (f"the #{name} project room — everyone on project `{pid}` reads it, keep it short and about this project.\n"
                 f"Project brief: {(p.description if p else '') or '-'} · status {(p.status if p else 'active')} · lead {lead}\n"
@@ -637,7 +652,7 @@ class Runtime:
             parts.append("## Board (all tasks)\n" + self.tasks.board(skip_owners={x.id for x in self.cfg.assistants}))
             parts.append("## People\n" + "\n".join(f"- {n}: {st} — {l}"
                                                    for n, st, l in team_status_lines(self.cfg, self.tasks)))
-            pend = self.asks.pending()
+            pend = [a for a in self.asks.pending() if self.cfg.agent_can_access(a.requester, m.id)]
             parts.append("## Pending permission requests\n" + ("\n".join(
                 f"- {a.id} from {a.requester}: {a.summary}" for a in pend) or "- none"))
             od = self.ws.read("decisions/OPEN.md").strip()
@@ -645,7 +660,9 @@ class Runtime:
                 parts.append("## Open decisions waiting on the owner (decisions/OPEN.md)\n" + od)
             if self.cfg.projects:
                 parts.append("## Projects\n" + self.projects_text())
-            parts.append("## Recent team repo commits\n" + (self.ws.git_log(15) or "- none"))
+            # The shared Git history can contain private-assistant commit subjects.
+            if not self.cfg.assistants:
+                parts.append("## Recent team repo commits\n" + (self.ws.git_log(15) or "- none"))
             for pid, p in self.cfg.projects.items():
                 if p.repo:
                     from pathlib import Path
@@ -660,6 +677,7 @@ class Runtime:
             if done:
                 parts.append("## Your recently closed tasks\n" + "\n".join(t.line(tz) for t in done))
             waiting = [t for t in self.tasks.all() if t.is_open and t.status == "blocked"
+                       and self.cfg.agent_can_access(t.owner, m.id)
                        and any(x.id == m.id for x in self.people_in(t.blocked_on))]
             if waiting:
                 parts.append("## Others blocked on you\n" + "\n".join(t.line(tz) for t in waiting))
@@ -679,7 +697,9 @@ class Runtime:
             rems = Reminders(self).all(m.id)
             parts.append("## Reminders you've set\n" + ("\n".join(f"- {r['at'].replace('T', ' ')}: {r['text']}"
                                                                    for r in rems) or "- none"))
-            pend, review = self.asks.pending(), [t for t in self.tasks.all() if t.status == "review"]
+            pend = [a for a in self.asks.pending() if self.cfg.agent_can_access(a.requester, m.id)]
+            review = [t for t in self.tasks.all() if t.status == "review"
+                      and self.cfg.agent_can_access(t.owner, m.id)]
             parts.append("## What the company needs from the founder\n"
                          + "\n".join([f"- approval {a.id}: {a.summary}" for a in pend[:5]]
                                      + [f"- review {t.id}: {t.title}" for t in review[:5]] or ["- nothing"]))
@@ -785,6 +805,12 @@ class Runtime:
         m = self.cfg.member(member_id)
         if not m:
             return f"Unknown team member `{member_id}`."
+        if ev.task:
+            try:
+                if not self.cfg.agent_can_access(self.tasks.get(ev.task).owner, m.id):
+                    return "That task is private to its personal assistant."
+            except TaskError:
+                return "That task is unavailable."
         cap = self.cfg.daily_tokens_per_agent
         why = "paused" if self.paused(m.id) else "over today's budget" if cap and self._usage_today(m.id) >= cap else ""
         pid = self.project_of(ev)
@@ -936,7 +962,7 @@ class Runtime:
                 break
             # Give the model the files it asked for, then let it answer for real.
             messages = [*messages, {"role": "assistant", "content": res.text},
-                        {"role": "user", "content": self._read_files(reads)}]
+                        {"role": "user", "content": self._read_files(reads, m)}]
         reply, actions = parsed.reply, parsed.actions
 
         notes, failed = await self._apply_all(m, actions, ev)
@@ -1029,9 +1055,16 @@ class Runtime:
         return t
 
     async def _apply(self, m: Member, a: dict, ev: Event) -> str:
+        self._check_action_access(m, a)
         t = a["type"]
         level = ("green" if t in NO_GATE or ev.meta.get("approved")
                  else self.cfg.permission(m, t, self.action_project(a, ev)))
+        if m.assistant and not ev.meta.get("approved") and t in {
+                "write_file", "message_agent", "post_group", "post_room", "run_code"}:
+            level = "red"  # publishing private context outside its own records needs explicit review
+        if m.assistant and t == "create_task" and (a.get("owner", m.id) != m.id or a.get("project") or ev.project) \
+                and not ev.meta.get("approved"):
+            level = "red"
         if level == "red":
             ask = self.asks.create(requester=m.id, summary=f"{m.name} wants to {self.describe(m, a)}",
                                    details=str(a.get("why") or a.get("description") or ""), level="red",
@@ -1068,7 +1101,13 @@ class Runtime:
                 pid = ""
         return PROJECT_ROOM + pid if pid and pid in self.cfg.projects else BACKCHANNEL
 
+    def _check_action_access(self, m: Member, a: dict) -> None:
+        tid = a.get("id") if a.get("type") == "update_task" else a.get("task")
+        if tid and not self.cfg.agent_can_access(self.tasks.get(str(tid)).owner, m.id):
+            raise TaskError("That task is private to its personal assistant.")
+
     async def _do(self, m: Member, a: dict, ev: Event) -> str:
+        self._check_action_access(m, a)
         t = a["type"]
         if t == "remind":
             if not m.assistant:
@@ -1084,6 +1123,8 @@ class Runtime:
                 if not om:
                     raise ValueError(f"unknown owner `{owner}` (team: {', '.join(x.id for x in self.cfg.team)})")
                 owner = om.id                              # always the id: "Marcus Chen" → marcus
+            if not self.cfg.agent_can_access(owner, m.id):
+                raise TaskError("Cannot assign work to a private personal assistant.")
             if a.get("project") and a["project"] not in self.cfg.projects:
                 raise ValueError(f"unknown project `{a['project']}` (projects: {', '.join(self.cfg.projects) or 'none'})")
             created_by = self.owner_id if (ev.sender == self.owner_id and ev.source in ("dm", "group")) else m.id
@@ -1239,7 +1280,7 @@ class Runtime:
             await self.bus.send_owner(task.owner if self.cfg.member(task.owner) else self.cfg.monitor.id,
                                       f"🚧 {task.id} is blocked on you: {task.blocked_on}")
         for x in self.people_in(task.blocked_on):
-            if x.id == task.owner or x.id == self.owner_id:
+            if x.id == task.owner or x.id == self.owner_id or not self.cfg.agent_can_access(task.owner, x.id):
                 continue
             key, day = f"{task.id}:{x.id}", today(self.cfg.timezone).isoformat()
             if (self.ws.state().get("blocked_told") or {}).get(key) == day:
@@ -1414,6 +1455,22 @@ class Runtime:
         if pre.status != "pending":
             raise AskError(f"{pre.id} is already {pre.status}")
         merged = ""
+        github_result = ""
+        if pre.kind == "github_change" and decision == "approved":
+            from .github import Change
+            if via != "console" and len(pre.doc.sections.get("Details", "")) > 1500:
+                raise AskError("This proposal exceeds the chat preview. Review the full details in the console.")
+            p = pre.doc.meta.get("payload") or {}
+            c = Change(**p["change"])
+            t = self.tasks.get(c.task)
+            if p.get("scope") != [self.cfg.github.owner, self.cfg.github.repo, self.cfg.github.project] \
+                    or p.get("expected") != self.github.values(t).get(c.field) \
+                    or p.get("task_owner") != t.owner or p.get("task_project") != t.project:
+                raise AskError("The task or GitHub connection changed. Reject this request and review a fresh edit.")
+            try:
+                github_result = await self._apply_github(c, approved=True)
+            except (TaskError, ValueError) as e:
+                raise AskError(f"{pre.id} is still open — GitHub change failed: {e}") from None
         if pre.kind == "merge" and decision == "approved" and pre.status == "pending":
             # Merge first; only a merge that worked makes the request "approved". A failed merge is rolled back
             # and the request stays open.
@@ -1435,7 +1492,7 @@ class Runtime:
                 except TaskError:
                     pass
         ask = self.asks.decide(ask_id, decision, by=by, note=note)
-        result = f"{ask.id} {decision}{merged}"
+        result = f"{ask.id} {decision}{merged}" + (f" — {github_result}" if github_result else "")
         pr = (ask.doc.meta.get("payload") or {}).get("pr")
         if ask.kind == "merge" and decision == "rejected" and pr:
             try:
@@ -1611,7 +1668,12 @@ class Runtime:
             changes = await asyncio.to_thread(self.github.pull)
             applied = []
             for c in changes:
-                applied.append(await self._apply_github(c))
+                note = await self._apply_github(c)
+                if note:
+                    applied.append(note)
+            if applied:
+                await asyncio.to_thread(self.ws.commit, "GitHub proposals saved for review", self.cfg.owner_name)
+            self.github.acknowledge_comments()
             pushed = await asyncio.to_thread(self.github.push)
         except GitHubError as e:
             self.ws.update_state(lambda s: s.setdefault("github", {}).__setitem__("error", str(e)[:300]))
@@ -1619,69 +1681,92 @@ class Runtime:
             return {"error": str(e)}
         self.ws.update_state(lambda s: s.setdefault("github", {}).update(
             error="", last_sync=now(self.cfg.timezone).isoformat(timespec="seconds")))
-        if applied:
-            await asyncio.to_thread(self.ws.commit, "changes from the GitHub board", self.cfg.owner_name)
         return {"pulled": len(applied), "pushed": pushed, "notes": [x for x in applied if x]}
 
-    async def _apply_github(self, c) -> str:
-        """One change you made on GitHub, applied exactly as if you had done it in the console."""
+    async def _apply_github(self, c, *, approved: bool = False) -> str:
+        """Board snapshots carry no actor authority: propose changes for an explicit human decision."""
         from .github import STAGES
         gh = self.github
         try:
             t = self.tasks.get(c.task)
         except TaskError:
+            if approved:
+                raise
             return ""
-        try:
-            if c.field == "comment":
-                return await self.feedback(t.id, c.value)
-            if c.field == "stage":
-                if c.value == t.status or (c.source == "status" and c.value == "doing"
-                                           and t.status in ("doing", "blocked", "review")):
-                    note = ""                              # "In Progress" covers doing/blocked/review
-                elif c.value == "done":
-                    note = await self.accept(t.id, "accepted on GitHub")
-                elif c.value == "cut":
-                    self.tasks.set_status(t.id, "cut", by=self.owner_id, note="cut on GitHub")
-                    note = f"✂️ {t.id} cut"
-                elif c.value == "doing" and t.status == "review":
-                    note = await self.request_changes(t.id, "Moved back to Doing on GitHub — see the issue for what "
-                                                            "to change, or ask me.")
-                elif c.value == "blocked":
-                    t2, _ = self.tasks.set_status(t.id, "blocked", by=self.owner_id,
-                                                  blocked_on=t.blocked_on or f"{self.cfg.owner_name} — see GitHub")
-                    await self.on_blocked(t2, self.owner_id)
-                    note = f"🔄 {t.id} → blocked"
-                else:
-                    self.tasks.set_status(t.id, c.value, by=self.owner_id, note="moved on GitHub")
-                    note = f"🔄 {t.id} → {c.value}"
-                if c.source == "status":
-                    gh.mark_pulled(t.id, "status", c.raw)       # Stage still shows the old value: the next push fixes it
-                else:
-                    gh.mark_pulled(t.id, "stage", STAGES.get(c.value, ""))
-                return note
-            if c.field == "owner":
-                m = self.cfg.member(c.value.strip()) or next(
-                    (x for x in self.cfg.team if x.name.lower() == c.value.strip().lower()), None)
-                if not m:
-                    raise ValueError(f"nobody called {c.value!r} on the team")
-                self.tasks.update_fields(t.id, self.owner_id, owner=m.id)
-            elif c.field == "project":
-                if c.value and c.value not in self.cfg.projects:
-                    raise ValueError(f"no project {c.value!r}")
-                self.tasks.update_fields(t.id, self.owner_id, project=c.value)
-            elif c.field == "blocker":
-                if t.status == "blocked" and c.value:
-                    t2, _ = self.tasks.set_status(t.id, "blocked", by=self.owner_id, blocked_on=c.value)
-                    await self.on_blocked(t2, self.owner_id)
-            elif c.field in ("priority", "due") and c.value:
-                self.tasks.update_fields(t.id, self.owner_id, **{c.field: c.value})
-            gh.mark_pulled(t.id, c.field, c.value)
-            return f"{t.id} {c.field} → {c.value}"
-        except (TaskError, ValueError) as e:
-            shown = c.raw if c.source == "status" else (STAGES.get(c.value, c.value) if c.field == "stage" else c.value)
-            gh.restore(t.id, "status" if c.source == "status" else c.field, shown)   # next push puts it back
-            self.ws.log(self.cfg.monitor.id, f"GitHub change refused on {t.id} ({c.field}={c.value}): {e}")
-            return f"⚠️ {t.id}: {e}"
+        if not self.cfg.agent_can_access(t.owner):
+            if approved:
+                raise TaskError("Private tasks cannot be controlled through the shared GitHub board.")
+            return ""
+        if not approved:
+            from dataclasses import asdict
+            if c.field == "comment" and c.event_id:
+                for prior in self.asks.all():
+                    p = prior.doc.meta.get("payload") or {}
+                    if prior.kind == "github_change" and p.get("scope") == [
+                            self.cfg.github.owner, self.cfg.github.repo, self.cfg.github.project] \
+                            and (p.get("change") or {}).get("event_id") == c.event_id:
+                        return ""  # already recorded, including approved/rejected requests
+            payload = {"change": asdict(c), "expected": gh.values(t).get(c.field),
+                       "task_owner": t.owner, "task_project": t.project,
+                       "scope": [self.cfg.github.owner, self.cfg.github.repo, self.cfg.github.project]}
+            same = next((a for a in self.asks.pending() if a.kind == "github_change"
+                         and a.doc.meta.get("payload") == payload), None)
+            if not same:
+                same = self.asks.create(
+                    requester=self.cfg.monitor.id, kind="github_change", task=t.id, payload=payload,
+                    summary=f"Review GitHub {c.field} change on {t.id}",
+                    details=f"External proposal, not an approval. Author: {c.actor or 'unavailable in board snapshot'}.\n"
+                            f"Current {c.field}: {payload['expected']}\nRequested {c.field}: {c.value}\n"
+                            "Approve this exact change here, or reject it. The local task stays unchanged until approval.")
+                await self.bus.send_owner(self.cfg.monitor.id, same.summary, ask=same, urgent=True)
+            if c.field != "comment":
+                field = "status" if c.source == "status" else c.field
+                shown = c.raw if field == "status" else STAGES.get(c.value, c.value) if field == "stage" else c.value
+                gh.restore(t.id, field, shown)
+            return f"{same.id}: GitHub proposal awaiting human approval"
+        if c.field == "comment":
+            return await self.feedback(t.id, c.value)
+        if c.field == "stage":
+            if c.value == t.status or (c.source == "status" and c.value == "doing"
+                                       and t.status in ("doing", "blocked", "review")):
+                note = ""  # "In Progress" covers doing/blocked/review
+            elif c.value == "done":
+                note = await self.accept(t.id, "GitHub proposal approved in James")
+            elif c.value == "cut":
+                self.tasks.set_status(t.id, "cut", by=self.owner_id, note="GitHub proposal approved in James")
+                note = f"✂️ {t.id} cut"
+            elif c.value == "doing" and t.status == "review":
+                note = await self.request_changes(t.id, "GitHub proposal to return to Doing approved in James.")
+            elif c.value == "blocked":
+                t2, _ = self.tasks.set_status(t.id, "blocked", by=self.owner_id,
+                                              blocked_on=t.blocked_on or f"{self.cfg.owner_name} — see GitHub")
+                await self.on_blocked(t2, self.owner_id)
+                note = f"🔄 {t.id} → blocked"
+            else:
+                self.tasks.set_status(t.id, c.value, by=self.owner_id, note="GitHub proposal approved in James")
+                note = f"🔄 {t.id} → {c.value}"
+            # The board was restored while awaiting approval. Keep its last pushed values
+            # until the next push; otherwise that old projection looks like a new user edit.
+            return note
+        if c.field == "owner":
+            m = self.cfg.member(c.value.strip()) or next(
+                (x for x in self.cfg.team if x.name.lower() == c.value.strip().lower()), None)
+            if not m:
+                raise ValueError(f"nobody called {c.value!r} on the team")
+            if m.assistant:
+                raise ValueError("Cannot move a shared GitHub task into a private assistant's work.")
+            self.tasks.update_fields(t.id, self.owner_id, owner=m.id)
+        elif c.field == "project":
+            if c.value and c.value not in self.cfg.projects:
+                raise ValueError(f"no project {c.value!r}")
+            self.tasks.update_fields(t.id, self.owner_id, project=c.value)
+        elif c.field == "blocker":
+            if t.status == "blocked" and c.value:
+                t2, _ = self.tasks.set_status(t.id, "blocked", by=self.owner_id, blocked_on=c.value)
+                await self.on_blocked(t2, self.owner_id)
+        elif c.field in ("priority", "due") and c.value:
+            self.tasks.update_fields(t.id, self.owner_id, **{c.field: c.value})
+        return f"{t.id} {c.field} → {c.value}"
 
     def backup_runtime(self, keep: int = 14) -> str:
         """.jm/ (chats, conversation memory, state) isn't in git: snapshot it daily (last `keep` days)."""
@@ -1741,8 +1826,8 @@ class Runtime:
         mgr = self.cfg.monitor
         for alert in checks(self.cfg, self.ws, self.tasks, self.asks):
             if alert.owner:
-                await self.bus.send_owner(mgr.id, alert.text, urgent=alert.incident)
-            if alert.incident:
+                await self.bus.send_owner(alert.private_to or mgr.id, alert.text, urgent=alert.incident)
+            if alert.incident and not alert.private_to:
                 await self.bus.post_group(mgr.id, f"🚨 INCIDENT — {alert.text}")
             if alert.nudge and self.cfg.member(alert.nudge) and not self.paused(alert.nudge):
                 # The manager chases it himself — the owner isn't the only one who hears about late work.
@@ -1753,6 +1838,7 @@ class Runtime:
 
     def blocked_on_member(self, m: Member) -> list:
         return [t for t in self.tasks.all() if t.is_open and t.status == "blocked" and t.owner != m.id
+                and self.cfg.agent_can_access(t.owner, m.id)
                 and not self.project_paused(t.project) and any(x.id == m.id for x in self.people_in(t.blocked_on))]
 
     def next_work(self, m: Member) -> tuple[str, object] | None:

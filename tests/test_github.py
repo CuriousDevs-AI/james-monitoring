@@ -55,19 +55,26 @@ async def test_changes_on_github_come_back_through_the_rules(tmp_path, monkeypat
     rt.tasks.set_status(a.id, "review", by="sofia")
     await rt.sync_github()
     s = gh()
-    s["items"]["PVTI_1"]["stage"] = "Done"                       # you dragged it to Done on GitHub = accepted
+    s["items"]["PVTI_1"]["stage"] = "Done"                       # external edits are proposals, not approval
     s["items"]["PVTI_2"].update(owner="Sofia", priority="P2")    # reassigned + re-prioritised on GitHub
     s["comments"] = [{"issue_url": "https://api.github.com/repos/acme/team/issues/2", "body": "Use UUID keys",
+                      "id": 1, "user": {"login": "pankajneema", "type": "User"},
                       "created_at": "2099-01-01T00:00:00Z"}]
     json.dump(s, open(tmp_path / "gh.json", "w"))
     rt.llm.push({"reply": "Switching to UUIDs.", "actions": []})
     r = await rt.sync_github()
+    assert rt.tasks.get(a.id).status == "review" and rt.tasks.get(b.id).owner == "marcus"
+    assert len(rt.asks.pending()) == 4
+    # Reassignment last: other proposals were reviewed for the original task owner.
+    for ask in sorted(rt.asks.pending(), key=lambda x: x.doc.meta["payload"]["change"]["field"] == "owner"):
+        await rt.decide_ask(ask.id, "approved", by="Pankaj", via="console")
     await rt.drain()
     assert rt.tasks.get(a.id).status == "done"
     tb = rt.tasks.get(b.id)
     assert (tb.owner, tb.priority) == ("sofia", "P2") and "Use UUID keys" in tb.doc.sections["Feedback"]
-    assert gh()["issues"]["1"]["state"] == "closed" and r["pulled"] == 4
+    assert r["pulled"] == 4
     assert (await rt.sync_github())["pulled"] == 0                        # applied once, not again
+    assert gh()["issues"]["1"]["state"] == "closed"
 
 
 async def test_owner_is_the_author_of_team_commits(tmp_path):
@@ -135,6 +142,10 @@ async def test_moving_a_card_in_the_status_column_sticks(tmp_path, monkeypatch):
     s = gh()
     s["items"]["PVTI_1"]["status"] = "In Progress"            # dragged on the default board
     json.dump(s, open(tmp_path / "gh.json", "w"))
+    await rt.sync_github()
+    assert rt.tasks.get(t.id).status == "todo"
+    await rt.decide_ask(rt.asks.pending()[0].id, "approved", by="Pankaj", via="console")
+    await rt.drain()
     await rt.sync_github()
     assert rt.tasks.get(t.id).status == "doing" and gh()["items"]["PVTI_1"]["stage"] == "Doing"
     await rt.sync_github()

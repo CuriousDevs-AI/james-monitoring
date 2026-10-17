@@ -19,6 +19,7 @@ class Alert:
     owner: bool = True        # tell the founder
     nudge: str = ""           # member the manager chases directly
     task: str = ""
+    private_to: str = ""  # send only in this assistant's founder DM, never manager/group context
 
 REVIEW_WAIT_DAYS = 2
 INCIDENT_AFTER_FAILS = 3
@@ -94,7 +95,7 @@ def build_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -
     in_review = [t for t in all_tasks if t.status == "review"]
     blocked = [t for t in open_tasks if t.status == "blocked"]
     overdue = [t for t in open_tasks if t.overdue(tz) and t.status != "blocked"]
-    pend = asks.pending()
+    pend = [a for a in asks.pending() if a.requester not in personal]
     owner_blocks = [t for t in blocked if on_owner(cfg, t.blocked_on)]
     p0 = sorted([t for t in open_tasks if t.priority == "P0"], key=lambda t: (t.due(tz) or d + timedelta(days=999)))
 
@@ -156,7 +157,7 @@ def build_report(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -
             pt = [t for t in all_tasks if any(t.project == p.id for p in ps)]
             L.append(f"- {c.name}: {len(ps)} project(s), {sum(1 for t in pt if t.status == 'done')}/{len(pt)} tasks done"
                      + (f", {sum(1 for t in pt if t.status == 'blocked')} blocked" if pt else ""))
-    decided = [a for a in asks.all() if a.status != "pending"
+    decided = [a for a in asks.all() if a.status != "pending" and a.requester not in personal
                and str(a.doc.meta.get("decided_at", ""))[:10] >= since.isoformat()]
     if decided:
         L += ["", "## Decided since last report"]
@@ -205,7 +206,8 @@ def checks(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -> list
         dl = a.deadline()
         if dl and dl <= now(tz) and a.default == "wait":
             alerts.append(Alert(f"ask-wait:{a.id}", f"⏳ {a.id} from {a.requester} is past its deadline and "
-                                                    f"waiting on you: {a.summary}"))
+                                                    f"waiting on you: {a.summary}",
+                                private_to=a.requester if not cfg.agent_can_access(a.requester) else ""))
     all_tasks = tasks.all()
     stale_cut = d - timedelta(days=cfg.stale_days)
     quiet = {pid for pid, p in cfg.projects.items() if p.status in ("paused", "done")}   # no chasing there
@@ -252,7 +254,14 @@ def checks(cfg: Config, ws: Workspace, tasks: TaskStore, asks: AskStore) -> list
             alerts.append(Alert(f"err:{agent}:{'incident' if fails >= INCIDENT_AFTER_FAILS else 'warn'}",
                                 f"🚨 {agent}'s model keeps failing ({fails}×): {hb['error']}"
                                 if fails >= INCIDENT_AFTER_FAILS else f"⚠️ {agent}'s last model call failed: {hb['error']}",
-                                incident=fails >= INCIDENT_AFTER_FAILS))
+                                incident=fails >= INCIDENT_AFTER_FAILS,
+                                private_to=agent if not cfg.agent_can_access(agent) else ""))
+    private_tasks = {t.id: t.owner for t in all_tasks if not cfg.agent_can_access(t.owner)}
+    for alert in alerts:
+        if alert.task in private_tasks:
+            alert.private_to = private_tasks[alert.task]
+            alert.owner = True
+            alert.nudge = ""
     sent = state.get("alerts_sent", {})
     key_day = d.isoformat()
     fresh = [a for a in alerts if sent.get(a.key) != key_day]

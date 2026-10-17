@@ -37,7 +37,7 @@ model all come from `config.yaml` and the workspace.
 | `monitor.py` | Deterministic report and checks (overdue, blocked too long, asks past deadline, failures) |
 | `router.py` | Who answers: `@all`, `@name`, `@bot_username`; project rooms default to the lead, All hands to the manager |
 | `gateway.py` | Telegram transport: one bot per member, the manager reads groups, approval buttons |
-| `github.py` | Task board mirrored into a GitHub Project (issues + fields) both ways through the rules, and PRs for code tasks — via `gh`, as the owner |
+| `github.py` | Shared tasks mirrored into GitHub; inbound edits become human review requests, verified account comments are deduplicated, private tasks excluded; PRs via `gh` |
 | `slack.py` | Slack transport: one app (Socket Mode), everyone posts as themselves, channel ↔ room mapping, approval buttons |
 | `commands.py` | Owner commands, shared by Telegram and `jm chat` |
 | `llm/` | `claude-code` and `codex-cli` (subscriptions, via their CLIs), `anthropic`, `openai` (any OpenAI-compatible API), `fake`. Per person: `team[].llm` |
@@ -84,6 +84,17 @@ they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits
 - **Merges** run before an approval counts. A failed merge is rolled back (`merge --abort`) and the request stays open.
 - **Agents read files** only under docs/tasks/reports/team/asks/decisions, checked on the resolved path. Nothing under
   `.git`, `.jm` or any `.env` is readable.
+  Personal-assistant team files, tasks and asks additionally require the owning assistant's identity. Private
+  task dispatch/mutation is denied to other agents. Private asks are omitted from shared reports and agent context;
+  monitoring alerts go to the assistant's founder DM, not the manager or group. Sharing an assistant's output
+  through documents, code, team messages or shared task creation requires explicit human approval.
+- **GitHub changes** are proposals, not evidence of founder authority. Board snapshots have no editor identity.
+  Comments must originate from the authenticated human `gh` account and still need a separate human decision.
+  Raw GitHub proposal files are not exposed to agent file reads; approved feedback is delivered through the task.
+  Review rejects changes when the relevant field, task owner/project or connection scope no longer matches.
+  Comment cursors advance after proposals are persisted; comment IDs prevent replays after decisions.
+  This is not yet a transactional execution ledger or full cross-project data isolation. Previously exported
+  private issues and historical shared artifacts require separate review; this upgrade does not delete them.
 - **Telegram**: edits never re-trigger work, messages are handled once, 429s are waited out, supergroup upgrades are
   followed (and saved), and a bot that fails to start never leaves others polling.
 - `.jm/` (chats, conversation memory, state) is zipped daily into `.jm/backups/` (last 14).
