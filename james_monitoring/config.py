@@ -127,7 +127,7 @@ CLI_PROVIDERS = ("claude-code", "claude_code", "claude-cli", "subscription", "co
                  "open-code", "fake")
 KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
            "codex": "OPENAI_API_KEY", "openrouter": "OPENROUTER_API_KEY", "gemini": "GEMINI_API_KEY",
-           "bedrock": "AWS_BEARER_TOKEN_BEDROCK"}
+           "bedrock": "AWS_BEARER_TOKEN_BEDROCK", "groq": "GROQ_API_KEY", "mistral": "MISTRAL_API_KEY"}
 
 
 def model_settings(c: LLMConfig) -> dict:
@@ -375,6 +375,10 @@ def parse_llm(llm: dict, base: dict | None = None, *, nested: bool = False) -> L
         merged["base_url"] = "https://openrouter.ai/api/v1"
     if provider == "gemini" and not merged.get("base_url"):
         merged["base_url"] = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    if provider == "groq" and not merged.get("base_url"):
+        merged["base_url"] = "https://api.groq.com/openai/v1"
+    if provider == "mistral" and not merged.get("base_url"):
+        merged["base_url"] = "https://api.mistral.ai/v1"
     fallbacks = merged.get("fallbacks", [])
     if not isinstance(fallbacks, list) or len(fallbacks) > 2 or (nested and fallbacks):
         raise ConfigError("Choose at most two fallback models; nested fallback chains are not allowed.")

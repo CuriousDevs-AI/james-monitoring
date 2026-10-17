@@ -86,7 +86,7 @@ def make_llm(cfg: LLMConfig) -> LLM:
     if p in ("anthropic", "claude"):
         from .anthropic_llm import AnthropicLLM
         return AnthropicLLM(cfg)
-    if p in ("openai", "codex", "ollama", "openrouter", "openai-compatible", "gemini"):
+    if p in ("openai", "codex", "ollama", "openrouter", "openai-compatible", "gemini", "groq", "mistral"):
         from .openai_llm import OpenAILLM
         return OpenAILLM(cfg)
     if p in ("claude-code", "claude_code", "claude-cli", "subscription"):

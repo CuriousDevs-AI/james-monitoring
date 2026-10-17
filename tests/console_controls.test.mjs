@@ -44,6 +44,25 @@ const metadata = {backend: 'env', namespace: '', encrypted_at_rest: false,
 
 test('entire console JavaScript parses', () => { new vm.Script(script); });
 
+for (const provider of ['groq', 'mistral']) test(`${provider} is selectable without enabling a route automatically`, async () => {
+  const calls = [];
+  const context = vm.createContext({h, S: {}, AI_HEALTH: null,
+    api: async (path, body) => { calls.push({path, body}); return {company: {provider: 'claude-code', model: 'sonnet'}}; }});
+  const providers = script.match(/const PROVIDERS = [\s\S]*?;/)[0];
+  new vm.Script(providers + section('function modelRoutingCard(', 'function modelsCard(')).runInContext(context);
+  const card = context.modelRoutingCard(); await new Promise(setImmediate);
+  const field = label => find(card, x => x.attrs['aria-label'] === label);
+  assert.equal(field('Primary provider').value, 'claude-code');
+  assert.ok(find(field('Primary provider'), x => x.tag === 'option' && x.value === provider));
+  field('Primary provider').value = provider; field('Primary provider').onchange();
+  field('Primary model').value = 'test-model';
+  const save = find(card, x => x.tag === 'button' && x.textContent === 'Save routing');
+  await save.onclick(); assert.equal(calls.filter(x => x.body).length, 0);
+  field('Approve model routing').checked = true; await save.onclick();
+  assert.equal(calls.find(x => x.body).body.provider, provider);
+  assert.match(card.textContent, /not enforced free-only/);
+});
+
 test('model routing needs consent, retains fallback settings and changes only the selected purpose', async () => {
   const calls = [], saved = {company: {provider: 'claude-code', model: 'sonnet'},
     planning: {provider: 'gemini', model: 'planner', fallbacks: [{provider: 'openrouter', model: 'openrouter/free', free_only: true}]}};
