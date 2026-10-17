@@ -1931,6 +1931,7 @@ class App:
 # Every route and the permission it needs (see users.py). Anything not listed is refused.
 GET_PERMS = {
     "/api/schedule/runs": "owner",
+    "/api/executions": "owner",
     "/api/secrets": "owner",
     "/api/state": "any", "/api/dashboard": "read", "/api/tasks": "read", "/api/task": "read", "/api/asks": "read",
     "/api/chat": "read", "/api/rooms": "read", "/api/pulse": "read", "/api/thread": "read", "/api/member": "read",
@@ -1945,6 +1946,7 @@ GET_PERMS = {
 }
 POST_PERMS = {
     "/api/schedule/acknowledge": "owner",
+    "/api/ask/reconcile": "owner",
     "/api/secrets": "owner",
     "/api/chat": "chat", "/api/tasks": "task", "/api/task": "task", "/api/ask": "approve", "/api/project/settings": "admin",
     "/api/project/pause": "admin",
@@ -2063,6 +2065,7 @@ def make_handler(app: App, key: str):
                                       {"Content-Disposition": f'attachment; filename="audit-{today(app.rt.cfg.timezone)}.csv"'})
                 routes = {
                     "/api/schedule/runs": lambda: app.schedule_runs(),
+                    "/api/executions": lambda: [app._ask_json(a) for a in app.rt.asks.unresolved_executions()],
                     "/api/secrets": lambda: app.secrets_status(),
                     "/api/dashboard": lambda: app.dashboard(user),
                     "/api/tasks": lambda: [app._task_json(t) for t in app.rt.tasks.all() if app.can_see_task(user, t)],
@@ -2204,6 +2207,7 @@ def make_handler(app: App, key: str):
                 raise PermissionError("That task is private.")
             routes = {
                 "/api/schedule/acknowledge": lambda: app.schedule_acknowledge(b, user),
+                "/api/ask/reconcile": lambda: app.reconcile_ask(b, user),
                 "/api/chat": lambda: app.chat_send(str(b.get("room", TEAM_ROOM)), str(b.get("text", "")), user,
                                                    b.get("reply_to")),
                 "/api/tasks": lambda: app.task_create(b, user),

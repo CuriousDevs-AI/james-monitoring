@@ -9,3 +9,4 @@ dist/
 config.yaml
 !examples/config.yaml
 deploy/data/
+.superdesign/

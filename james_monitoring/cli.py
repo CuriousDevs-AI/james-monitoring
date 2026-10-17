@@ -223,9 +223,13 @@ def cmd_connection(args) -> None:
     name, email = cfg.git_author
     print(f"Git identity\n  {'✅' if email != 'jm@localhost' else '⚠️ '} {name} <{email}>")
     print("Channels")
-    print(f"  {'✅' if cfg.monitor.bot_token else '·'} Telegram {'connected' if cfg.monitor.bot_token else '(optional)'}")
-    print(f"  {'✅' if cfg.slack.configured else '·'} Slack {'connected' if cfg.slack.configured else '(optional)'}")
-    print(f"  {'✅' if cfg.github.enabled else '·'} GitHub {'board mirror on' if cfg.github.enabled else '(optional)'}")
+    for label, status in (("Telegram", cfg.monitor.bot_token_status), ("Slack", cfg.slack.credential_status)):
+        detail = {"configured": "credentials configured; live connection not verified", "missing": "not configured (optional)",
+                  "unavailable": "credential store unavailable; connection not verified"}[status]
+        print(f"  {'⚠️' if status == 'unavailable' else '·'} {label}: {detail}")
+        if status == "unavailable":
+            bad += 1
+    print(f"  · GitHub: {'board mirror enabled; sync not verified' if cfg.github.enabled else 'not configured (optional)'}")
     if args.action != "test":
         print("\nRun `jm connection test` to make one tiny call to each model.")
     sys.exit(1 if bad else 0)
@@ -305,6 +309,31 @@ def cmd_doctor(args) -> None:
     sys.exit(0 if ok else 1)
 
 
+def cmd_backup_runtime(args) -> None:
+    from .backups import snapshot
+    from .util import today
+    if not args.confirm_stopped:
+        sys.exit("Stop all James writers for this company first, then use --confirm-stopped. This is not a live checkpoint.")
+    cfg = _cfg(args)
+    try:
+        path = snapshot(cfg.workspace_path / ".jm", today(cfg.timezone).isoformat(), keep=args.keep)
+    except (ValueError, OSError) as error:
+        sys.exit(f"Backup failed ({type(error).__name__}); inspect the destination before retrying.")
+    print(f"Private runtime snapshot: {path}\nNot encrypted. Config, shared files/history and credentials need separate recovery.")
+
+
+def cmd_restore_runtime(args) -> None:
+    import zipfile
+    from .backups import restore
+    if not args.acknowledge_private_data:
+        sys.exit("Restore contains private chats/state. Use --acknowledge-private-data after choosing a private location.")
+    try:
+        count = restore(Path(args.archive).expanduser(), Path(args.destination).expanduser())
+    except (ValueError, OSError, zipfile.BadZipFile) as error:
+        sys.exit(f"Restore failed ({type(error).__name__}). No existing destination was overwritten; inspect any partial output.")
+    print(f"Restored {count} runtime files into {args.destination}. No services started. Follow docs/RECOVERY.md before use.")
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="jm", description="james-monitoring — run an AI team like a real team")
     p.add_argument("--version", action="version", version=__version__)
@@ -368,6 +397,17 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("doctor", help="check the setup")
     s.add_argument("--ping", action="store_true", help="also call the model and Telegram")
     s.set_defaults(fn=cmd_doctor)
+
+    s = sub.add_parser("backup-runtime", help="snapshot private runtime state after stopping every James writer")
+    s.add_argument("--confirm-stopped", action="store_true")
+    s.add_argument("--keep", type=int, default=14)
+    s.set_defaults(fn=cmd_backup_runtime)
+
+    s = sub.add_parser("restore-runtime", help="restore a private runtime ZIP into a NEW directory, without starting services")
+    s.add_argument("archive")
+    s.add_argument("destination")
+    s.add_argument("--acknowledge-private-data", action="store_true")
+    s.set_defaults(fn=cmd_restore_runtime)
 
     args = p.parse_args(argv)
     args.fn(args)

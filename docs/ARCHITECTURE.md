@@ -126,9 +126,13 @@ they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits
   private issues and historical shared artifacts require separate review; this upgrade does not delete them.
 - **Telegram**: edits never re-trigger work, messages are handled once, 429s are waited out, supergroup upgrades are
   followed (and saved), and a bot that fails to start never leaves others polling.
-- `.jm/` (chats, conversation memory, state) is zipped daily into `.jm/backups/` (last 14).
-- **Model CLIs are sandboxed.** Each call runs in an empty folder with a minimal environment: no API keys, bot
-  tokens or other secrets. Timeouts kill the whole process tree.
+- `.jm/` (chats, conversation memory, state, scheduler receipts) is zipped daily into `.jm/backups/` (last 14).
+  New snapshots are private (0600), atomically replaced, and exclude symlinks/sandbox/locks/env files.
+  Offline extraction only targets a new directory and starts no services; see [RECOVERY.md](RECOVERY.md).
+  ZIP is not encryption, and live daily snapshots are not cross-file transactional checkpoints.
+- **Model CLIs use restricted working directories and environments.** Each call starts in a scratch folder
+  with the configured environment allowlist; timeouts kill its process tree. This is not an OS sandbox:
+  same-user files, CLI logins and native credentials can remain accessible. See [SECRETS.md](SECRETS.md).
   - `claude`: no tools, no MCP servers, no user settings or hooks.
   - `codex`: shell, browser, apps, MCP and user config are off, so it can't read files.
   - `opencode`: empty isolated config (no global MCP servers or plugins); paid models get all tools off and every
