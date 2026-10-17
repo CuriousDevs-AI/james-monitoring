@@ -81,6 +81,7 @@ main{padding:20px 24px 60px;animation:fade .15s ease-out}
 .pmeta>div{display:flex;flex-direction:column;gap:6px;font-size:13px} .pmeta .l{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-top:16px;overflow-x:auto}
 .tab{display:flex;align-items:center;gap:7px;padding:9px 14px;font-size:13px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+button.tab{appearance:none;background:none;border:0;border-bottom:2px solid transparent;font-family:inherit}
 .tab:hover{color:var(--foreground)} .tab.on{color:var(--foreground);border-bottom-color:var(--accent);font-weight:500} .tab.on svg{color:var(--accent)} .tab .n{font-size:10.5px;background:var(--surface-3);padding:0 5px;color:var(--muted)}
 .pchat .conv{border:1px solid var(--border);height:calc(100vh - 330px);min-height:420px}
 .rooms-h{padding:12px 12px 6px;font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border);background:var(--surface-2)}
@@ -607,10 +608,10 @@ async function pulse() {
   }
   const changed = PULSE_VERSION && PULSE.version !== PULSE_VERSION; PULSE_VERSION = PULSE.version;
   const busy = $("#sheet").classList.contains("open") || $("#palette").classList.contains("open") ||
-    document.activeElement?.matches?.("input,textarea,select") || $("#main [data-recovery-dirty]") || (VIEW === "project" && PTAB === "chat");
+    document.activeElement?.matches?.("input,textarea,select") || $("#main [data-recovery-dirty], #main [data-project-dirty]") || (VIEW === "project" && PTAB === "chat");
   if (changed && !busy && LIVE_VIEWS.includes(VIEW)) { const y = scrollY; await render(); scrollTo(0, y); }
   if (PULSE.paused_all !== S.paused_all) {
-    const typing = document.activeElement?.matches?.("input,textarea,select") || $(".dirty")?.textContent || $("#main [data-recovery-dirty]") || $("#sheet").classList.contains("open");
+    const typing = document.activeElement?.matches?.("input,textarea,select") || $(".dirty")?.textContent || $("#main [data-recovery-dirty], #main [data-project-dirty]") || $("#sheet").classList.contains("open");
     if (typing) S.paused_all = PULSE.paused_all; else refresh();
   }
 }
@@ -623,7 +624,7 @@ function hashOf() { const v = VIEW_HASH[VIEW] || VIEW;
   return "#" + (VIEW === "project" ? `project/${PROJECT}/${PTAB}` : VIEW === "chat" && ROOM ? `chat/${ROOM}` : VIEW === "settings" ? `settings/${STAB}` : v); }
 function readHash() { const [v, a, b] = decodeURIComponent(location.hash.slice(1)).split("/"); if (!v) return false;
   const view = HASH_VIEW[v] || v; if (!TITLES[view]) return false;
-  VIEW = view; if (view === "project") { PROJECT = a || ""; PTAB = ["overview", "chat", "board", "team", "settings"].includes(b) ? b : "overview"; } else if (view === "chat" && a) ROOM = a; else if (view === "settings" && a) STAB = a;
+  VIEW = view; if (view === "project") { PROJECT = a || ""; PTAB = ["overview", "chat", "board", "resources", "plan", "team", "settings"].includes(b) ? b : "overview"; } else if (view === "chat" && a) ROOM = a; else if (view === "settings" && a) STAB = a;
   return true; }
 window.addEventListener("hashchange", () => { document.body.classList.remove("nav-open"); $("#side")?.classList.remove("open");
   if (location.hash !== hashOf() && readHash() && S && !S.setup_needed) { closeSheet(); boot(); } });
@@ -721,7 +722,7 @@ async function vOverview() {
     ...d.asks.map(a => h("div", {class: "li"}, h("span", {class: "ico " + (a.level === "red" ? "danger" : "warning")}, icon("approvals")),
       h("div", {class: "grow"}, h("div", {class: "row"}, h("span", {class: "t"}, humanIds(a.summary)), badge(a.level === "red" ? "Needs you" : "FYI", a.level === "red" ? "danger" : "warning")),
         h("div", {class: "xs muted"}, h("span", {class: "mono"}, a.id), " · from ", nameOf(a.from), a.task ? " · " + a.task : "")),
-      can("approve") ? h("div", {class: "row"}, h("button", {class: "btn success sm", onclick: async () => { if (await decide(a.id, "approved", "", a.summary)) render(); }}, icon("check"), "Approve"),
+      a.execution?.status ? h("button", {class: "btn outline sm", onclick: () => go("approvals")}, "Review recovery") : can("approve") ? h("div", {class: "row"}, h("button", {class: "btn success sm", onclick: async () => { if (await decide(a.id, "approved", "", a.summary)) render(); }}, icon("check"), "Approve"),
         h("button", {class: "btn danger sm", onclick: async () => { if (await decide(a.id, "rejected")) render(); }}, "Reject")) : null)),
     ...(d.blocked_on_you || []).map(t => h("div", {class: "li click", onclick: () => taskSheet(t.id)}, h("span", {class: "ico danger"}, icon("alert")),
       h("div", {class: "grow"}, h("div", {class: "row"}, h("span", {class: "t"}, t.title), badge("Blocked on you", "danger")),
@@ -824,6 +825,8 @@ let ASKS = {};
 async function refreshAsks() { try { (await api("/api/asks")).forEach(a => { ASKS[a.id] = a; }); } catch {} }
 function askFooter(id) {
   const a = ASKS[id], pending = PULSE ? PULSE.asks.includes(id) : (!a || a.status === "pending");
+  if (a?.execution?.status && a.execution.status !== 'reconciled') return h('div', {class: 'outcome muted'},
+    'Execution: ' + a.execution.status + ' · Review the record in Approvals. Do not retry.');
   if (pending && !can("approve")) return h("div", {class: "outcome muted"}, "Waiting for a decision");
   if (pending) return h("div", {class: "row", style: "margin-top:8px"},
     h("button", {class: "btn success sm", onclick: () => decide(id, "approved", "", a?.summary)}, icon("check"), "Approve"),
@@ -1012,28 +1015,35 @@ function boardPanel(tasks, opts = {}) {
 }
 function newTaskSheet(pre = {}) {
   const startProject = pre.project ?? (VIEW === "project" ? PROJECT : (FILTER.project !== "-" ? FILTER.project : ""));
-  const f = {title: h("input", {placeholder: "What needs to be done"}), owner: h("select", {}),
-    priority: h("select", {}, S.priorities.map(p => h("option", {value: p, selected: p === "P1"}, p))), due: h("input", {type: "date"}),
+  const f = {title: h("input", {"aria-label": "Task title", placeholder: "What needs to be done", value: pre.title || ""}), owner: h("select", {"aria-label": "Task owner"}),
+    priority: h("select", {"aria-label": "Task priority"}, S.priorities.map(p => h("option", {value: p, selected: p === (pre.priority || "P1")}, p))), due: h("input", {type: "date", "aria-label": "Task due date", value: pre.due || ""}),
     project: h("select", {}, h("option", {value: ""}, "No project"), S.projects.map(p => h("option", {value: p.id, selected: startProject === p.id}, p.name))),
-    description: h("textarea", {placeholder: "Context, links, constraints"}), done: h("textarea", {placeholder: "One check per line — how you'll know it's done (the owner fills this in if blank)"})};
+    description: h("textarea", {"aria-label": "Task description", placeholder: "Context, links, constraints"}, pre.description || ""), done: h("textarea", {"aria-label": "Acceptance checks", placeholder: "One check per line — how you'll know it's done (the owner fills this in if blank)"}, (pre.done_means || []).join("\n"))};
   const hint = h("div", {class: "xs muted", style: "margin-top:4px;min-height:14px"});
   const fillOwners = () => { const p = projOf(f.project.value), keep = f.owner.value || pre.owner || p?.lead;
-    const on = p ? S.members.filter(m => p.members.includes(m.id)) : S.members, off = p ? S.members.filter(m => !p.members.includes(m.id)) : [];
+    const on = p ? S.members.filter(m => p.members.includes(m.id) && (!pre.plan_id || !m.assistant)) : S.members, off = p && !pre.plan_id ? S.members.filter(m => !p.members.includes(m.id)) : [];
     const opt = m => h("option", {value: m.id, selected: m.id === keep}, m.name + (p && m.id === p.lead ? " · lead" : ""));
     f.owner.put(h("option", {value: "", disabled: true, selected: !keep}, "Choose who owns it…"), p ? [h("optgroup", {label: `On ${p.name}`}, on.map(opt)), off.length ? h("optgroup", {label: "Others — joins the project"}, off.map(opt)) : null] : on.map(opt));
     hint.textContent = p && f.owner.value && !p.members.includes(f.owner.value) ? `${nameOf(f.owner.value)} will be added to ${p.name}.` : ""; };
   f.project.onchange = fillOwners; f.owner.onchange = fillOwners; fillOwners();
-  const err = h("div", {class: "err"}), create = h("button", {class: "btn primary"}, icon("check"), "Create and assign");
+  f.project.disabled = !!pre.plan_id;
+  const reviewed = h("input", {type: "checkbox"});
+  const err = h("div", {class: "err", role: "alert"}), create = h("button", {class: "btn primary"}, icon("check"), pre.plan_id ? "Create reviewed task" : "Create and assign");
   create.onclick = async () => { err.textContent = "";
+    if (create.disabled) return;
+    if (pre.plan_id && !reviewed.checked) { err.textContent = "Confirm you reviewed the draft."; return; }
     if (!f.title.value.trim()) { err.textContent = "Give the task a title."; return f.title.focus(); }
     if (!f.owner.value) { err.textContent = "Choose who owns it."; return f.owner.focus(); }
     create.disabled = true;
-    try { const t = await api("/api/tasks", {title: f.title.value, owner: f.owner.value, priority: f.priority.value, due: f.due.value, project: f.project.value, description: f.description.value, done_means: f.done.value.split("\n")});
+    try { const task = {title: f.title.value, owner: f.owner.value, priority: f.priority.value, due: f.due.value, project: f.project.value, description: f.description.value, done_means: f.done.value.split("\n").filter(x => x.trim()), depends_on: pre.depends_on || []};
+      const t = pre.plan_id ? await api("/api/project/plan/accept", {id: startProject, plan_id: pre.plan_id, draft_id: pre.draft_id, reviewed: true, task}) : await api("/api/tasks", task);
       toast(`${t.id} assigned to ${nameOf(t.owner)}`); closeSheet(); S = await api("/api/state"); if (["board", "overview", "projects", "project"].includes(VIEW)) boot(); } catch (e) { err.textContent = e.message; create.disabled = false; } };
   openSheet("New task", h("label", {class: "f req"}, "Title"), f.title, h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Project"), f.project), h("div", {}, h("label", {class: "f req"}, "Owner"), f.owner)), hint,
     h("div", {class: "two"}, h("div", {}, h("label", {class: "f"}, "Priority"), f.priority), h("div", {}, h("label", {class: "f"}, "Due"), f.due)),
     h("label", {class: "f"}, "Description"), f.description, h("label", {class: "f"}, "Done means"), f.done,
-    h("div", {class: "row", style: "margin-top:14px"}, create, err), h("p", {class: "xs muted"}, "The owner gets it in their chat and replies with a plan."));
+    pre.plan_id ? h("label", {class: "row small"}, reviewed, "I reviewed the scope, owner and acceptance checks.") : null,
+    pre.depends_on?.length ? h("p", {class: "small muted"}, "Prerequisite drafts: " + pre.depends_on.join(", ")) : null,
+    h("div", {class: "row", style: "margin-top:14px"}, create, err), h("p", {class: "xs muted"}, pre.plan_id ? "Creates a normal board task, without an immediate agent message. Scheduled work may pick it up." : "The owner gets it in their chat and replies with a plan."));
   f.title.focus(); f.title.addEventListener("keydown", e => { if (e.key === "Enter") create.click(); });
 }
 function changesSheet(t) {
@@ -1126,8 +1136,8 @@ async function vProject() {
   let p;
   try { p = await api("/api/project?id=" + encodeURIComponent(PROJECT)); } catch { toast("That project no longer exists", "warning"); return go("projects"); }
   const lead = S.members.find(m => m.id === p.lead), pct = pctOf(p);
-  const tabs = [["overview", "Overview", "overview"], ["chat", "Room", "hash"], ["board", "Board", "board", p.counts.open], ["team", "Team", "team", p.members.length],
-    ...(can("admin") ? [["settings", "Settings", "settings"]] : [])];
+  const tabs = [["overview", "Overview", "overview"], ["chat", "Room", "hash"], ["board", "Board", "board", p.counts.open], ["resources", "Resources", "file"], ["team", "Team", "team", p.members.length],
+    ...(can("admin") ? [["plan", "AI task drafts", "studio"], ["settings", "Settings", "settings"]] : [])];
   const head = h("div", {class: "phead"},
     h("div", {class: "row", style: "flex-wrap:nowrap;align-items:flex-start;gap:14px"}, projMark(p, "lg"),
       h("div", {class: "grow", style: "min-width:0"}, h("div", {class: "row"}, h("h1", {}, p.name), badge(p.status, P_TONE[p.status]), p.client ? h("span", {class: "badge outline click", onclick: () => go("clients")}, "for " + ((S.clients || []).find(c => c.id === p.client)?.name || p.client)) : null, badge("room on " + (p.home ? p.home[0].toUpperCase() + p.home.slice(1) : "console only"), "outline")),
@@ -1143,7 +1153,7 @@ async function vProject() {
       h("div", {}, h("span", {class: "l"}, "Lead"), lead ? h("span", {class: "row"}, avatar(lead.name, "sm"), lead.name) : h("span", {class: "muted"}, "Not set")),
       h("div", {}, h("span", {class: "l"}, "Team"), p.members.length ? facepile(p.members, 8) : h("span", {class: "muted"}, "Nobody yet")),
       h("div", {class: "grow", style: "min-width:180px"}, h("span", {class: "l"}, "Progress"), h("div", {class: "row", style: "flex-wrap:nowrap"}, progress(pct), h("span", {class: "mono xs"}, `${p.counts.done}/${p.counts.total} · ${pct}%`)))),
-    h("div", {class: "tabs"}, tabs.map(([k, t, ic, n]) => h("div", {class: "tab" + (PTAB === k ? " on" : ""), onclick: () => { PTAB = k; render(); }}, icon(ic), t, n ? h("span", {class: "mono n"}, n) : null))));
+    h("div", {class: "tabs", role: "tablist", "aria-label": "Project sections", style: "flex-wrap:wrap"}, tabs.map(([k, t, ic, n]) => h("button", {class: "tab" + (PTAB === k ? " on" : ""), role: "tab", "aria-selected": PTAB === k ? "true" : "false", onclick: () => { PTAB = k; render(); }}, icon(ic), t, n ? h("span", {class: "mono n"}, n) : null))));
   $("#main").style.padding = "";
   const body = h("div", {class: "pbody"});
   $("#main").put(head, body);
@@ -1154,6 +1164,8 @@ async function vProject() {
       boardPanel(p.tasks.filter(t => !FILTER.powner || t.owner === FILTER.powner)));
   }
   if (PTAB === "settings" && can("admin")) return projectSettings(p, body);
+  if (PTAB === "resources") return projectResources(p, body);
+  if (PTAB === "plan" && can("admin")) return projectTaskDrafts(p, body);
   if (PTAB === "team") return body.put(can("admin") ? projectTeam(p) : h("div", {class: "card list"}, p.people.map(x => h("div", {class: "li"}, avatar(x.name), h("div", {class: "grow"}, h("span", {class: "t"}, x.name), h("div", {class: "xs muted"}, x.role)), x.lead ? badge("Lead", "info") : null))));
   // overview
   const attention = p.tasks.filter(t => t.status === "blocked" || t.overdue || t.status === "review");
@@ -1180,6 +1192,102 @@ async function vProject() {
             h("div", {class: "grow", style: "min-width:0"}, h("div", {class: "xs muted"}, (m.who === S.owner_key ? "You" : nameOf(m.who)) + " · " + new Date(m.ts * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"})),
               h("div", {class: "small clamp"}, m.text))))) : h("div", {class: "card-b muted small"}, "No messages yet."),
           h("button", {class: "btn ghost sm", onclick: () => { PTAB = "chat"; render(); }}, "Open room", icon("arrow"))))));
+}
+
+async function projectResources(p, body) {
+  const d = await api('/api/project/resources?id=' + encodeURIComponent(p.id));
+  const download = async r => {
+    try { const file = await api('/api/project/resources?id=' + encodeURIComponent(p.id) + '&resource_id=' + r.id);
+      const bytes = Uint8Array.from(atob(file.data), c => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], {type: 'application/octet-stream'}));
+      const a = h('a', {href: url, download: file.filename}); a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) { toast(e.message, 'danger'); }
+  };
+  body.put(h('div', {class: 'row', style: 'margin-bottom:12px'}, h('div', {class: 'grow'}, h('h2', {}, 'Project resources'),
+    h('p', {class: 'small muted'}, 'Briefs, documents, datasets, designs, artifacts and tool references in one place.')),
+    can('admin') ? h('button', {class: 'btn primary', onclick: () => projectResourceSheet(p)}, icon('plus'), 'Add resource') : null),
+    h('div', {class: 'card card-b small', style: 'margin-bottom:14px'},
+      'Included notes and text-file excerpts are provided to assigned agents when working on this project. Links are not fetched. ',
+      'Office/PDF/image files are download-only attachments; add notes or a text export for AI. ',
+      'Resources are shared with console readers and stored in workspace git. Do not upload secrets or private-assistant material.'),
+    d.resources.length ? h('div', {class: 'grid'}, d.resources.map(r => h('div', {class: 'card'},
+      h('div', {class: 'card-b'}, h('div', {class: 'row'}, h('b', {class: 'grow'}, r.title), badge(r.kind),
+        r.archived ? badge('Archived') : badge(r.include ? 'AI context' : 'Reference only', r.include ? 'info' : '')),
+        r.notes ? h('p', {class: 'small', style: 'white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:auto'}, r.notes) : null,
+        r.url ? h('a', {href: r.url, target: '_blank', rel: 'noopener noreferrer', class: 'small', style: 'overflow-wrap:anywhere'}, r.url) : null,
+        r.filename ? h('p', {class: 'small muted'}, r.filename) : null,
+        h('p', {class: 'xs muted'}, 'Revision ' + r.revision + ' · ' + r.updated_at.slice(0, 10))),
+      h('div', {class: 'card-f'}, r.filename ? h('button', {class: 'btn outline sm', onclick: () => download(r)}, 'Download file') : null,
+        can('admin') ? h('button', {class: 'btn outline sm', onclick: () => projectResourceSheet(p, r)}, 'Edit') : null,
+        can('admin') ? h('button', {class: 'btn ghost sm', onclick: async () => {
+          try { await api('/api/project/resources', {id: p.id, resource_id: r.id, revision: r.revision, archived: !r.archived}); await projectResources(p, body); }
+          catch (e) { toast(e.message, 'danger'); }
+        }}, r.archived ? 'Restore' : 'Archive') : null)))) : empty('file', 'No resources yet', 'Add a brief, upload a file or attach a Sheets, Claude, repository or design link.'));
+}
+
+function projectResourceSheet(p, r = {}) {
+  const title = h('input', {'aria-label': 'Resource title', value: r.title || '', maxlength: 160});
+  const kind = h('select', {'aria-label': 'Resource type'}, ['brief','document','dataset','design','artifact','tool','link'].map(k => h('option', {value: k, selected: k === (r.kind || 'document')}, k)));
+  const url = h('input', {type: 'url', 'aria-label': 'Resource link', value: r.url || '', placeholder: 'https://docs.google.com/... (reference only)'});
+  const notes = h('textarea', {'aria-label': 'Resource notes', maxlength: 20000, placeholder: 'Purpose, constraints, approved use and useful context. No secrets.'}, r.notes || '');
+  const file = h('input', {type: 'file', 'aria-label': 'Resource file', accept: '.txt,.md,.csv,.tsv,.json,.yaml,.yml,.pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg,.webp'});
+  const include = h('input', {type: 'checkbox', checked: r.include !== false});
+  const removeFile = h('input', {type: 'checkbox'});
+  const status = h('div', {role: 'status', class: 'small muted'}), error = h('div', {role: 'alert', class: 'err'});
+  const save = h('button', {class: 'btn primary'}, 'Save resource');
+  save.onclick = async () => {
+    if (save.disabled) return;
+    save.disabled = true; error.textContent = ''; status.textContent = 'Saving…';
+    try {
+      const b = {id: p.id, resource_id: r.id, revision: r.revision, title: title.value, kind: kind.value, url: url.value, notes: notes.value, include: include.checked, remove_file: removeFile.checked};
+      if (file.files[0]) {
+        const f = file.files[0]; if (f.size > 2000000) throw Error('Choose a file up to 2 MB.');
+        b.filename = f.name; b.data = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = () => reject(Error('Could not read the file.')); reader.readAsDataURL(f); });
+      }
+      await api('/api/project/resources', b); closeSheet(); toast('Resource saved'); render();
+    } catch (e) { error.textContent = e.message; status.textContent = ''; save.disabled = false; }
+  };
+  openSheet(r.id ? 'Edit resource' : 'Add project resource',
+    h('label', {class: 'f'}, 'Title'), title, h('label', {class: 'f'}, 'Type'), kind,
+    h('label', {class: 'f'}, 'Link (optional)'), url, h('label', {class: 'f'}, 'Notes / context'), notes,
+    h('label', {class: 'f'}, 'File (optional, up to 2 MB)'), file,
+    r.filename ? h('p', {class: 'xs muted'}, 'Existing file: ' + r.filename + '. Selecting a file replaces it in the next revision.') : null,
+    r.filename ? h('label', {class: 'row small'}, removeFile, 'Detach existing file (earlier revisions remain in git history)') : null,
+    h('label', {class: 'row small'}, include, 'Include notes and readable excerpts in assigned agents’ context'),
+    h('p', {class: 'xs muted'}, 'A link does not grant access. Put API keys in Settings → Secrets. Select the project model in Settings.'),
+    h('div', {class: 'row', style: 'margin-top:14px'}, save, status), error);
+}
+
+async function projectTaskDrafts(p, body) {
+  const d = await api('/api/project/plan?id=' + encodeURIComponent(p.id));
+  const instructions = h('textarea', {'aria-label': 'Planning instructions', maxlength: 2000, placeholder: 'Optional: scope, constraints, timeline or focus for this plan'});
+  const consent = h('input', {type: 'checkbox'}), error = h('div', {class: 'err', role: 'alert'});
+  const generate = h('button', {class: 'btn primary', disabled: !d.planner}, d.plan ? 'Generate new draft' : 'Draft tasks with AI');
+  generate.onclick = async () => {
+    if (generate.disabled) return;
+    if (!consent.checked) { error.textContent = 'Confirm the selected model may read the included project context.'; return; }
+    generate.disabled = true; error.textContent = ''; generate.textContent = 'Drafting…';
+    body.setAttribute('data-project-dirty', '1');
+    try { await api('/api/project/plan/generate', {id: p.id, instructions: instructions.value, consent: true, signature: d.signature}); await projectTaskDrafts(p, body); }
+    catch (e) { error.textContent = e.message; generate.disabled = false; generate.textContent = 'Try drafting again'; }
+  };
+  instructions.oninput = () => body.setAttribute('data-project-dirty', '1');
+  consent.onchange = () => body.setAttribute('data-project-dirty', '1');
+  body.removeAttribute('data-project-dirty');
+  body.put(h('div', {class: 'card card-b'}, h('h2', {}, 'Plan first. Create after review.'),
+    h('p', {class: 'small muted'}, 'Reads the project brief, instructions, assigned team, existing task summaries and included resource excerpts. Produces up to 12 concise drafts; no tasks, messages or coding runs are started.'),
+    h('p', {class: 'small'}, 'Planner: ' + (d.planner ? nameOf(d.planner) : 'Not assigned') + ' · Model: ' + d.model),
+    instructions, h('label', {class: 'row small', style: 'margin:12px 0'}, consent, 'Allow this model to read the included project context (may use paid quota).'),
+    h('div', {class: 'row'}, generate, h('button', {class: 'btn outline', onclick: () => newTaskSheet({project: p.id})}, 'Add task manually')), error),
+    d.plan ? h('div', {style: 'margin-top:16px'},
+      d.plan.stale ? h('p', {class: 'err'}, 'Project context changed. Generate a fresh plan before creating more tasks.') : null,
+      h('p', {class: 'small muted'}, 'Drafts are saved locally. Review in dependency order. A new generation replaces uncreated drafts; existing tasks stay on the board.'),
+      d.plan.tasks.map(t => h('div', {class: 'card card-b', style: 'margin-bottom:10px'},
+        h('div', {class: 'row'}, badge(t.draft_id), h('b', {class: 'grow'}, t.title), badge(t.priority), badge(nameOf(t.owner))),
+        h('p', {class: 'small'}, t.description), h('ul', {class: 'small'}, t.done_means.map(x => h('li', {}, x))),
+        t.depends_on.length ? h('p', {class: 'xs muted'}, 'Requires: ' + t.depends_on.join(', ')) : null,
+        t.created_task ? h('button', {class: 'btn outline sm', onclick: () => taskSheet(t.created_task)}, t.created_task + ' · View created task') :
+          h('button', {class: 'btn primary sm', disabled: d.plan.stale, onclick: () => newTaskSheet({...t, project: p.id, plan_id: d.plan.id})}, 'Review & create')))) : null);
 }
 
 // Project settings: this project's own model, rules and instructions — for everyone on it, or per person.
