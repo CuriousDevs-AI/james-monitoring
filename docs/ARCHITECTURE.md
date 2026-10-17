@@ -77,6 +77,11 @@ they're logged to `team/<id>/log.md`, visible with `/log`, and capped by `limits
 
 ## Reliability
 
+- **Credential storage**: legacy `.env` or explicit opt-in macOS Keychain, selected per configuration. Native
+  reads never fall back to environment values and native writes never export values into the environment.
+  Model probes keep temporary credentials local to that probe; coding executors use the CLI environment
+  allowlist. See [SECRETS.md](SECRETS.md) for setup, the owner-only metadata/save API, migration limitations,
+  same-OS-user exposure and the remaining credential-broker work.
 - **Task dependencies** are validated on creation and editing (missing references, self-dependencies and new
   cycles are rejected). Only `done` satisfies a prerequisite; `review`, `cut` and missing task files do not.
   Work sessions skip tasks with unfinished prerequisites and skip paused/completed projects. Status changes

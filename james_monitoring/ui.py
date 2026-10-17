@@ -47,11 +47,12 @@ class TeamAdmin:
         ws = cfg.workspace_path
         members = []
         for m in cfg.team:
+            token_status = m.bot_token_status
             persona = ws / "team" / m.id / "persona.md"
             skill_dir = ws / "team" / m.id / "skill"
             members.append({
                 "id": m.id, "name": m.name, "role": m.role, "projects": m.projects, "manager": m.monitor,
-                "has_token": bool(m.bot_token), "token_env": m.bot_token_env,
+                "has_token": token_status == "configured", "token_env": m.bot_token_env, "token_status": token_status,
                 "username": self.usernames.get(m.id, ""),
                 "persona_lines": len(persona.read_text().splitlines()) if persona.exists() else 0,
                 "skill_files": sum(1 for p in skill_dir.rglob("*") if p.is_file()) if skill_dir.exists() else 0,
@@ -113,7 +114,9 @@ class TeamAdmin:
     def member_status(self, member_id: str) -> dict:
         cfg = self.cfg()
         m = cfg.member(member_id)
-        if not m or not m.bot_token:
+        if m and m.bot_token_status == "unavailable":
+            return {"ok": False, "in_group": False, "username": "", "error": "Credential store unavailable."}
+        if not m or m.bot_token_status != "configured":
             return {"ok": False, "in_group": False, "username": ""}
 
         async def go():

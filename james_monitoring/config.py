@@ -1,4 +1,4 @@
-"""Configuration: config.yaml (non-secret) + environment / .env (secrets)."""
+"""Configuration: config.yaml (references) + environment/.env or opt-in native Keychain credentials."""
 from __future__ import annotations
 
 import os
@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+from .secret_store import SecretStore, SecretStoreError
 
 
 class ConfigError(Exception):
@@ -27,10 +29,18 @@ class Member:
     permissions: dict[str, str] = field(default_factory=dict)   # per-person overrides of Config.permissions
     department: str = ""           # department id (optional)
     assistant: bool = False        # the founder's personal assistant: private 1:1, personal tasks, reminders
+    secret_store: SecretStore | None = field(default=None, repr=False, compare=False)
 
     @property
     def bot_token(self) -> str:
+        if self.secret_store is not None:
+            return self.secret_store.get(self.bot_token_env)
         return os.environ.get(self.bot_token_env, "") if self.bot_token_env else ""
+
+    @property
+    def bot_token_status(self) -> str:
+        return self.secret_store.status(self.bot_token_env) if self.secret_store else (
+            "configured" if self.bot_token else "missing")
 
 
 @dataclass
@@ -98,9 +108,15 @@ class LLMConfig:
     max_tokens: int = 8000
     temperature: float = 0.3
     allow_free: bool = False       # OpenCode free models (opencode/…): opt-in, they run OpenCode's own agent
+    secret_store: SecretStore | None = field(default=None, repr=False, compare=False)
+    api_key_override: str | None = field(default=None, repr=False, compare=False)
 
     @property
     def api_key(self) -> str:
+        if self.api_key_override is not None:
+            return self.api_key_override
+        if self.secret_store is not None:
+            return self.secret_store.get(self.api_key_env)
         return os.environ.get(self.api_key_env, "") if self.api_key_env else ""
 
 
@@ -125,18 +141,31 @@ class SlackConfig:
     app_token_env: str = "SLACK_APP_TOKEN"     # xapp-… (Socket Mode: no public URL needed)
     owner_user_ids: list[str] = field(default_factory=list)   # Slack member ids allowed to command the team
     channels: dict[str, str] = field(default_factory=dict)    # console room → Slack channel id
+    secret_store: SecretStore | None = field(default=None, repr=False, compare=False)
 
     @property
     def bot_token(self) -> str:
+        if self.secret_store is not None:
+            return self.secret_store.get(self.bot_token_env)
         return os.environ.get(self.bot_token_env, "") if self.bot_token_env else ""
 
     @property
     def app_token(self) -> str:
+        if self.secret_store is not None:
+            return self.secret_store.get(self.app_token_env)
         return os.environ.get(self.app_token_env, "") if self.app_token_env else ""
 
     @property
     def configured(self) -> bool:
         return bool(self.bot_token and self.app_token)
+
+    @property
+    def credential_status(self) -> str:
+        if self.secret_store is None:
+            return "configured" if self.configured else "missing"
+        statuses = [self.secret_store.status(name) for name in (self.bot_token_env, self.app_token_env)]
+        return "unavailable" if "unavailable" in statuses else "configured" if all(
+            s == "configured" for s in statuses) else "missing"
 
 
 @dataclass
@@ -191,6 +220,7 @@ class Config:
     clients: dict[str, Client] = field(default_factory=dict)
     users: list[User] = field(default_factory=list)
     daily_brief: str = "08:30"     # the personal assistant's morning brief (if there is an assistant)
+    secret_store: SecretStore | None = field(default=None, repr=False, compare=False)
 
     @property
     def assistants(self) -> list[Member]:
@@ -300,9 +330,11 @@ def load_config(path: str | Path = "config.yaml") -> Config:
     if not path.exists():
         raise ConfigError(f"No team here yet ({path} not found). Run `jm run` in this folder to set one up in the "
                           f"browser (or `jm init` for the terminal wizard), or pass -c path/to/config.yaml.")
-    load_dotenv(path.parent / ".env")
     raw = yaml.safe_load(path.read_text()) or {}
-    return parse_config(raw, base_dir=path.parent, path=path)
+    cfg = parse_config(raw, base_dir=path.parent, path=path)
+    if cfg.secret_store.backend == "env":
+        load_dotenv(path.parent / ".env")
+    return cfg
 
 
 def _levels(d: Any, where: str) -> dict[str, str]:
@@ -346,6 +378,10 @@ def parse_llm(llm: dict, base: dict | None = None) -> LLMConfig:
 
 def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = None) -> Config:
     base_dir = base_dir or Path.cwd()
+    try:
+        secret_store = SecretStore(base_dir, raw.get("secrets"))
+    except SecretStoreError as e:
+        raise ConfigError(str(e)) from None
     llm_raw = raw.get("llm") or {}
     team_raw = raw.get("team") or []
     if not team_raw:
@@ -471,7 +507,7 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         users.append(User(id=uid, name=str(u.get("name") or uid), role=role,
                           key_sha256=str(u.get("key_sha256") or ""), client=client))
     brief = hhmm(_get(raw, "monitor.daily_brief", "08:30"), "monitor.daily_brief")
-    return Config(
+    cfg = Config(
         company=str(raw.get("company") or "My Company"),
         timezone=tz,
         owner_name=str(_get(raw, "owner.name", "Owner")),
@@ -510,4 +546,17 @@ def parse_config(raw: dict, base_dir: Path | None = None, path: Path | None = No
         clients=clients,
         users=users,
         daily_brief=brief,
+        secret_store=secret_store,
     )
+    cfg.slack.secret_store = secret_store
+    models = [cfg.llm]
+    for member in cfg.team:
+        member.secret_store = secret_store
+        models.append(member.llm)
+    for project in cfg.projects.values():
+        models.append(project.llm)
+        models.extend(agent.llm for agent in project.agents.values())
+    for model in models:
+        if model is not None:
+            model.secret_store = secret_store
+    return cfg

@@ -88,9 +88,10 @@ class Executor:
         cmd = [c.replace("{prompt}", prompt) for c in self.cfg.executor_command]
         if not any("{prompt}" in c for c in self.cfg.executor_command):
             cmd.append(prompt)
+        from .llm._proc import safe_env
         proc = await asyncio.create_subprocess_exec(*cmd, cwd=wt, stdout=asyncio.subprocess.PIPE,
                                                     stderr=asyncio.subprocess.STDOUT, stdin=asyncio.subprocess.DEVNULL,
-                                                    start_new_session=True)
+                                                    start_new_session=True, env=safe_env())
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=self.cfg.executor_timeout_minutes * 60)
         except asyncio.TimeoutError:

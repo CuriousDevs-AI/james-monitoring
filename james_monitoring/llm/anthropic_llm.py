@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..config import LLMConfig
+from ..secret_store import SecretStoreError
 from . import LLMError, LLMResult
 
 
@@ -29,7 +30,16 @@ class AnthropicLLM:
             raise LLMError("pip install 'james-monitoring[anthropic]'") from e
         if not cfg.model:
             raise LLMError("llm.model is empty — set a current Claude model id in config.yaml")
-        kwargs = {"api_key": cfg.api_key or None}
+        try:
+            key = cfg.api_key
+        except SecretStoreError as e:
+            raise LLMError(str(e)) from None
+        kwargs = {"api_key": key or None}
+        if cfg.secret_store and cfg.secret_store.backend == "keychain":
+            if not key:
+                raise LLMError("API credential is missing from Keychain; environment fallback is disabled.")
+        if (cfg.secret_store and cfg.secret_store.backend == "keychain") or cfg.api_key_override is not None:
+            kwargs["auth_token"] = ""  # the SDK must not pick up a different account's environment token
         if cfg.base_url:
             kwargs["base_url"] = cfg.base_url
         self.client = anthropic.Anthropic(**kwargs)

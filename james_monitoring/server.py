@@ -28,7 +28,8 @@ from .asks import AskError
 from .chat import BACKCHANNEL, PROJECT_ROOM, TEAM_ROOM
 from .commands import ack_assignment
 from .config import ACTION_TYPES, LEVELS, ConfigError, load_config
-from .fileio import path_lock, read_config, set_env, write_config
+from .fileio import path_lock, read_config, write_config
+from .secret_store import SecretStoreError, save_secrets, store_for
 from .hub import Hub
 from .llm import LLMError, LLMResult, make_llm
 from .monitor import open_decisions, team_status_lines
@@ -120,17 +121,21 @@ class App:
                 llm, llm_error = make_llm(cfg.llm), ""
             except LLMError as e:
                 llm, llm_error = _BrokenLLM(str(e)), str(e)
-            gw, tg_error, slack = None, "", None
-            if self.telegram_enabled and any(m.bot_token for m in cfg.team) and cfg.monitor.bot_token:
-                from .gateway import TelegramGateway
+            gw, tg_error, slack, slack_error = None, "", None, ""
+            if self.telegram_enabled:
                 try:
-                    gw = TelegramGateway(cfg)
-                    gw.build()
+                    if any(m.bot_token for m in cfg.team) and cfg.monitor.bot_token:
+                        from .gateway import TelegramGateway
+                        gw = TelegramGateway(cfg)
+                        gw.build()
                 except Exception as e:  # noqa: BLE001
                     gw, tg_error = None, str(e)
-            if self.telegram_enabled and cfg.slack.configured:
-                from .slack import SlackTransport
-                slack = SlackTransport(cfg)
+                try:
+                    if cfg.slack.configured:
+                        from .slack import SlackTransport
+                        slack = SlackTransport(cfg)
+                except Exception as e:  # noqa: BLE001 - keep the console available to repair the connection
+                    slack_error = str(e)
             hub = Hub()
             rt = Runtime(cfg, llm, bus=hub, shared=self.rt)
             hub.attach(rt)
@@ -142,7 +147,7 @@ class App:
             if old_hub:
                 old_hub.successor = hub
             (self.hub, self.rt, self.gw, self.slack, self.admin, self.llm_error, self.telegram_error,
-             self.slack_error, self.sched) = (hub, rt, gw, slack, admin, llm_error, tg_error, "", None)
+             self.slack_error, self.sched) = (hub, rt, gw, slack, admin, llm_error, tg_error, slack_error, None)
             self.submit(self._start_services(), timeout=120)
 
     async def _start_services(self) -> None:
@@ -346,23 +351,29 @@ class App:
                     "git_name": gn, "git_email": ge}
         cfg = self.rt.cfg
         s = self.rt.ws.state()
+        token_status = {m.id: m.bot_token_status for m in cfg.team}
+        slack_status = cfg.slack.credential_status
         out = {
             "setup_needed": False, "company": cfg.company, "owner": cfg.owner_name, "owner_key": cfg.owner_key,
             "me": user,
             "timezone": cfg.timezone, "manager": cfg.monitor.id, "model": f"{cfg.llm.provider}"
             f"{('/' + cfg.llm.model) if cfg.llm.model else ''}", "llm_error": self.llm_error,
-            "telegram": {"connected": bool(self.gw), "error": self.telegram_error,
+            "telegram": {"connected": bool(self.gw), "error": self.telegram_error or (
+                         "Credential store unavailable." if token_status[cfg.monitor.id] == "unavailable" else ""),
                          "health": {k: v for k, v in (s.get("telegram_health") or {}).items() if v},
                          "owner_id": cfg.owner_user_id, "group_id": cfg.group_chat_id,
-                         "manager_token": bool(cfg.monitor.bot_token)},
-            "slack": {"connected": bool(self.slack), "error": self.slack_error or (self.slack.error if self.slack else ""),
-                      "tokens": bool(cfg.slack.bot_token and cfg.slack.app_token),
+                         "manager_token": token_status[cfg.monitor.id] == "configured",
+                         "credential_status": token_status[cfg.monitor.id]},
+            "slack": {"connected": bool(self.slack), "error": self.slack_error or (self.slack.error if self.slack else "")
+                      or ("Credential store unavailable." if slack_status == "unavailable" else ""),
+                      "tokens": slack_status == "configured", "credential_status": slack_status,
                       "owner_ids": cfg.slack.owner_user_ids, "channels": cfg.slack.channels,
                       "workspace": self.slack.team_name if self.slack else ""},
             "paused_all": bool(s.get("paused_all")), "paused": s.get("paused", []),
             "members": [{"id": m.id, "name": m.name, "role": m.role, "manager": m.monitor,
                          "projects": m.projects, "paused": m.id in s.get("paused", []),
-                         "telegram": bool(m.bot_token), "model": self.rt.model_name(m),
+                         "telegram": token_status[m.id] == "configured", "telegram_credential_status": token_status[m.id],
+                         "model": self.rt.model_name(m),
                          "own_model": bool(m.llm), "department": m.department, "assistant": m.assistant}
                         for m in cfg.team],
             "departments": [{"id": d.id, "name": d.name, "head": d.head} for d in cfg.departments.values()],
@@ -666,6 +677,7 @@ class App:
     def connections(self) -> dict:
         from . import connections as cx
         cfg, st = self.rt.cfg, self.rt.ws.state()
+        tg_status, slack_status = cfg.monitor.bot_token_status, cfg.slack.credential_status
         hb = st.get("heartbeat", {})
         models = []
         for g in cx.providers_in_use(cfg):
@@ -677,11 +689,14 @@ class App:
         return {"models": models,
                 "git": {"name": gname, "email": gemail, "ok": gemail != "jm@localhost",
                         "fix": "" if gemail != "jm@localhost" else "Set your git name and email (Company) so commits are yours."},
-                "telegram": {"on": bool(self.gw), "error": self.telegram_error,
+                "telegram": {"on": bool(self.gw), "error": self.telegram_error or (
+                             "Credential store unavailable." if tg_status == "unavailable" else ""),
                              "health": {k: v for k, v in (st.get("telegram_health") or {}).items() if v},
-                             "configured": bool(cfg.monitor.bot_token)},
-                "slack": {"on": bool(self.slack), "configured": cfg.slack.configured,
-                          "error": self.slack_error or (self.slack.error if self.slack else "")},
+                             "configured": tg_status == "configured", "credential_status": tg_status},
+                "slack": {"on": bool(self.slack), "configured": slack_status == "configured",
+                          "credential_status": slack_status,
+                          "error": self.slack_error or (self.slack.error if self.slack else "") or (
+                          "Credential store unavailable." if slack_status == "unavailable" else "")},
                 "github": {"enabled": cfg.github.enabled, "error": (st.get("github") or {}).get("error", ""),
                            "last_sync": (st.get("github") or {}).get("last_sync", "")}}
 
@@ -697,6 +712,7 @@ class App:
             conf = parse_llm({k: v for k, v in b.items() if k in ("provider", "model", "base_url") and v},
                              {"provider": self.rt.cfg.llm.provider, "model": self.rt.cfg.llm.model,
                               "base_url": self.rt.cfg.llm.base_url, "api_key_env": self.rt.cfg.llm.api_key_env})
+            conf.secret_store = self.rt.cfg.secret_store
         r = cx.test(conf)
         if r["ok"]:                                            # working again: clear the old failures
             people = [x.id for x in self.rt.cfg.team if self.rt.cfg.llm_for(x) == conf]
@@ -810,14 +826,48 @@ class App:
         """Setup/Settings: does this provider answer? (One tiny call.)"""
         from .config import parse_llm
         conf = parse_llm({k: v for k, v in b.items() if k in ("provider", "model", "base_url", "allow_free") and v})
+        conf.secret_store = store_for(self.base)
         if b.get("api_key") and conf.api_key_env:
-            os.environ[conf.api_key_env] = str(b["api_key"])       # the key you just typed, not an older one
+            conf.api_key_override = str(b["api_key"])  # isolated probe, never process-global or persisted
+        probe_key = ""
         try:
+            probe_key = conf.api_key
             r = make_llm(conf).complete('Reply with exactly: {"reply": "pong", "actions": []}',
                                         [{"role": "user", "content": "ping"}])
-        except LLMError as e:
-            return {"ok": False, "error": str(e)[:300]}
-        return {"ok": "pong" in r.text.lower(), "reply": r.text[:120], "tokens": r.total_tokens}
+        except (LLMError, SecretStoreError) as e:
+            error = str(e).replace(probe_key, "[redacted]") if probe_key else str(e)
+            return {"ok": False, "error": error[:300]}
+        reply = r.text.replace(probe_key, "[redacted]") if probe_key else r.text
+        return {"ok": "pong" in r.text.lower(), "reply": reply[:120], "tokens": r.total_tokens}
+
+    def credential_names(self, models_only: bool = False) -> set[str]:
+        from .config import KEY_ENV
+        names = set(KEY_ENV.values())
+        if self.rt:
+            cfg = self.rt.cfg
+            models = [cfg.llm, *(m.llm for m in cfg.team)]
+            for project in cfg.projects.values():
+                models.append(project.llm)
+                models.extend(a.llm for a in project.agents.values())
+            names.update(m.api_key_env for m in models if m and m.api_key_env)
+            if not models_only:
+                names.update(m.bot_token_env for m in cfg.team if m.bot_token_env)
+                names.update((cfg.slack.bot_token_env, cfg.slack.app_token_env))
+        return names - {""}
+
+    def secrets_status(self) -> dict:
+        store = store_for(self.base)
+        entries = []
+        for name in sorted(self.credential_names()):
+            entries.append({"name": name, "status": store.status(name)})
+        return {"backend": store.backend, "namespace": store.namespace, "entries": entries,
+                "encrypted_at_rest": store.backend == "keychain"}
+
+    def secret_save(self, name: str, value: str) -> dict:
+        if name not in self.credential_names():
+            raise ValueError("Pick a configured credential reference, not an arbitrary environment variable.")
+        save_secrets(self.base, {name: value})
+        return {"saved": name, "restart_required": self.ready}
 
     def _task_json(self, t) -> dict:
         m = t.doc.meta
@@ -1092,13 +1142,17 @@ class App:
         free = shutil.disk_usage(rt.ws.root).free
         ok("Disk space", free > 1_000_000_000, f"{free / 1e9:.1f} GB free", "Free some disk space — git and chat need it.")
         failing = {mid: v for mid, v in (st.get("heartbeat") or {}).items() if v.get("error") and cfg.member(mid)}
-        ok("AI models", not failing, "all answering" if not failing else
-           "; ".join(f"{rt.name_of(k)}: {v['error'][:80]}" for k, v in failing.items()), "Settings → Models.")
-        ok("Telegram", bool(self.gw) or not cfg.monitor.bot_token,
-           "connected" if self.gw else ("not set up" if not cfg.monitor.bot_token else self.telegram_error or "off"),
+        ok("AI models", not failing and not self.llm_error, self.llm_error or (
+           "; ".join(f"{rt.name_of(k)}: {v['error'][:80]}" for k, v in failing.items()) if failing else
+           "No recorded model errors; availability is not verified by this check."), "Settings → Models.")
+        tg_status, slack_status = cfg.monitor.bot_token_status, cfg.slack.credential_status
+        ok("Telegram", tg_status != "unavailable" and (bool(self.gw) or tg_status == "missing"),
+           "credential store unavailable" if tg_status == "unavailable" else
+           "connected" if self.gw else ("not set up" if tg_status == "missing" else self.telegram_error or "off"),
            "Settings → Telegram.")
-        ok("Slack", bool(self.slack) or not cfg.slack.configured,
-           "connected" if self.slack else ("not set up" if not cfg.slack.configured else self.slack_error or "off"),
+        ok("Slack", slack_status != "unavailable" and (bool(self.slack) or slack_status == "missing"),
+           "credential store unavailable" if slack_status == "unavailable" else
+           "connected" if self.slack else ("not set up" if slack_status == "missing" else self.slack_error or "off"),
            "Settings → Slack.")
         gh = st.get("github") or {}
         if cfg.github.enabled:
@@ -1137,6 +1191,7 @@ class App:
         conf = parse_llm({k: v for k, v in (b.get("llm") or {}).items() if v}, {
             "provider": cfg.llm.provider, "model": cfg.llm.model, "base_url": cfg.llm.base_url,
             "api_key_env": cfg.llm.api_key_env, "allow_free": cfg.llm.allow_free}) if (b.get("llm") or {}).get("provider") else cfg.llm
+        conf.secret_store = cfg.secret_store
         system = build_system(company=cfg.company, today=today(cfg.timezone).isoformat(), charter=rt.ws.charter(),
                               persona=persona, memory="", member_name=name, member_role=role, roster=rt.roster(),
                               context="(This is a trial conversation before hiring — nothing you do is saved. "
@@ -1650,7 +1705,7 @@ class App:
         if "base_url" in b:
             llm["base_url"] = str(b["base_url"] or "")
         if b.get("api_key") and llm.get("api_key_env"):
-            set_env(self.base / ".env", {llm["api_key_env"]: str(b["api_key"])})
+            save_secrets(self.base, {llm["api_key_env"]: str(b["api_key"])})
         if "coding_tool" in b and b["coding_tool"] not in ("custom", "keep"):   # "custom": leave your own command
             raw.setdefault("executor", {})["command"] = {
                 "claude": ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits"],
@@ -1689,8 +1744,7 @@ class App:
         if not r.get("ok"):
             return r
         sc = self.rt.cfg.slack
-        set_env(self.base / ".env", {sc.bot_token_env: bot_token.strip(), sc.app_token_env: app_token.strip()})
-        os.environ[sc.bot_token_env], os.environ[sc.app_token_env] = bot_token.strip(), app_token.strip()
+        save_secrets(self.base, {sc.bot_token_env: bot_token.strip(), sc.app_token_env: app_token.strip()})
         self.load()
         return r
 
@@ -1755,8 +1809,7 @@ class App:
         if not check.get("ok"):
             return check
         mgr = self.rt.cfg.monitor
-        set_env(self.base / ".env", {mgr.bot_token_env: token})
-        os.environ[mgr.bot_token_env] = token
+        save_secrets(self.base, {mgr.bot_token_env: token})
         return check
 
     def telegram_code(self) -> dict:
@@ -1797,6 +1850,7 @@ class App:
 # -- HTTP -----------------------------------------------------------------------------------
 # Every route and the permission it needs (see users.py). Anything not listed is refused.
 GET_PERMS = {
+    "/api/secrets": "owner",
     "/api/state": "any", "/api/dashboard": "read", "/api/tasks": "read", "/api/task": "read", "/api/asks": "read",
     "/api/chat": "read", "/api/rooms": "read", "/api/pulse": "read", "/api/thread": "read", "/api/member": "read",
     "/api/project": "read", "/api/team": "read", "/api/decisions": "read", "/api/reports": "read",
@@ -1809,6 +1863,7 @@ GET_PERMS = {
     "/api/model_login": "admin", "/api/connections/login": "admin",
 }
 POST_PERMS = {
+    "/api/secrets": "owner",
     "/api/chat": "chat", "/api/tasks": "task", "/api/task": "task", "/api/ask": "approve", "/api/project/settings": "admin",
     "/api/project/pause": "admin",
     "/api/notifications/read": "read", "/api/projects": "admin", "/api/project/members": "admin",
@@ -1834,6 +1889,7 @@ NO_AUDIT = {"/api/chat", "/api/ask", "/api/token", "/api/links", "/api/member_st
             "/api/telegram/code", "/api/notifications/read", "/api/studio/try", "/api/upload", "/api/upload_folder",
             "/api/telegram/detect", "/api/slack/detect"}
 AUDIT_LABEL = {"/api/tasks": "create task", "/api/task": "task", "/api/projects": "save project",
+               "/api/secrets": "save credential",
                "/api/project/members": "project team", "/api/project/settings": "project settings",
                "/api/project/pause": "pause/resume project", "/api/member": "edit profile", "/api/decisions": "edit decisions",
                "/api/settings": "change settings", "/api/add": "add person", "/api/remove": "remove person",
@@ -1924,6 +1980,7 @@ def make_handler(app: App, key: str):
                     return self._send(200, body, "text/csv; charset=utf-8",
                                       {"Content-Disposition": f'attachment; filename="audit-{today(app.rt.cfg.timezone)}.csv"'})
                 routes = {
+                    "/api/secrets": lambda: app.secrets_status(),
                     "/api/dashboard": lambda: app.dashboard(user),
                     "/api/tasks": lambda: [app._task_json(t) for t in app.rt.tasks.all() if app.can_see_task(user, t)],
                     "/api/task": lambda: app.task_detail(q.get("id", "")),
@@ -2001,7 +2058,8 @@ def make_handler(app: App, key: str):
                     label = AUDIT_LABEL.get(path, path)
                     if path == "/api/task":
                         label = f"task {b.get('action', '')}".strip()
-                    app.rt._audit("console", user["name"], label, target, b, via="console")
+                    detail = {"name": b.get("name", "")} if path == "/api/secrets" else b
+                    app.rt._audit("console", user["name"], label, target, detail, via="console")
                 return self._json(200, out)
             except PermissionError as e:
                 return self._json(403, {"error": str(e)})
@@ -2017,6 +2075,8 @@ def make_handler(app: App, key: str):
                 return self._json(500, {"error": f"{type(e).__name__}: {e}"})
 
         def _post(self, path: str, b: dict, user: dict):
+            if path == "/api/secrets":
+                return app.secret_save(str(b.get("name", "")), str(b.get("secret", "")))
             if path == "/api/setup":
                 return app.setup(b)
             if path == "/api/test_model":
@@ -2024,7 +2084,9 @@ def make_handler(app: App, key: str):
             if path == "/api/model_check":                 # setup too: is this model ready? (no model call)
                 from . import connections as cx
                 from .config import parse_llm
-                return cx.check(parse_llm({k: v for k, v in b.items() if k in ("provider", "model", "base_url", "allow_free")}))
+                conf = parse_llm({k: v for k, v in b.items() if k in ("provider", "model", "base_url", "allow_free")})
+                conf.secret_store = store_for(app.base)
+                return cx.check(conf)
             if path in ("/api/model_login", "/api/connections/login"):    # sign in (setup and Settings)
                 from . import connections as cx
                 return cx.login(str(b.get("provider", "")), app.base / ".jm-login",
@@ -2035,11 +2097,13 @@ def make_handler(app: App, key: str):
             if path == "/api/model_login/cancel":
                 from . import connections as cx
                 return cx.login_cancel(str(b.get("provider", "")))
-            if path == "/api/model_key":                          # an API key, straight into .env
+            if path == "/api/model_key":                          # existing UI; honour the selected storage backend
                 env, k = str(b.get("env", "")).strip(), str(b.get("key", "")).strip()
                 if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}", env) or not k:
                     raise ValueError("Paste the key (and pick which variable it's for).")
-                set_env(app.base / ".env", {env: k})
+                if env not in app.credential_names(models_only=True):
+                    raise ValueError("Pick a configured model credential reference.")
+                app.secret_save(env, k)
                 return {"saved": env}
             if not app.ready:
                 self._json(409, {"error": "setup needed"})
